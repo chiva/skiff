@@ -210,17 +210,18 @@ mode), so Skiff needs no kernel module of its own. `src/platform/psp/kirk_entrop
 the health test in `src/net/entropy.c`: the SP 800-90B repetition count test, which turns TLS off
 for the session if the generator repeats a word.
 
-There is no fallback. Without ARK, or after a health failure, the hook refuses and TLS initialisation
-fails. `skiff_psp_entropy_status()` tells the two apart, so the player sees what to do:
-`SKIFF_ERR_NET_NEEDS_ARK` (install ARK) or `SKIFF_ERR_NET_ENTROPY` (generator failure, report a bug).
-The KIRK probe checks the no-ARK path in CI, where PPSSPP has no ARK. Skiff does not fall back to the toolchain's default source, which derives its
-output from the clock ([TLS](tls.md#what-pspdev-provides)). The refusal covers plain HTTP too: since
-curl 7.57, `curl_global_init()` always initialises TLS, so without entropy no connection of any kind
-can be made.
+There is no fallback. Without ARK, or after a health failure, the hook refuses and TLS
+initialisation fails. `skiff_psp_entropy_status()` tells the two apart, so the player sees what to
+do: `SKIFF_ERR_NET_NEEDS_ARK` (install ARK) or `SKIFF_ERR_NET_ENTROPY` (generator failure, report a
+bug). The KIRK probe checks the no-ARK path in CI, where PPSSPP has no ARK. Skiff does not fall back
+to the toolchain's default source, which derives its output from the clock
+([TLS](tls.md#what-pspdev-provides)). The refusal covers plain HTTP too: since curl 7.57,
+`curl_global_init()` always initialises TLS, so without entropy no connection of any kind can be
+made.
 
 Whether KIRK alone is enough depends on one measurement: that its sequence differs after every power
-cycle. The [KIRK probe](testing.md#kirk-probe) records it on hardware. If it does not, Skiff adds what
-the data calls for (a seed file, or timer and input samples mixed in), not before.
+cycle. The [KIRK probe](testing.md#kirk-probe) records it on hardware. If it does not, Skiff adds
+what the data calls for (a seed file, or timer and input samples mixed in), not before.
 
 ### The PSP's clock
 

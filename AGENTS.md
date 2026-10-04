@@ -21,6 +21,7 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
+| Test RomM behind TLS/mTLS (Docker Compose) | `scripts/dev.sh romm-up` (or `romm-lan` for a PSP), `romm-check`, `romm-down` → `build/integration/` |
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Icon PNGs from `assets/brand/` SVGs | `scripts/dev.sh icons` → `assets/{psp,github}/` (commit them) |
 | Hardware tier without PSPLINK | `scripts/memstick.sh install\|results\|uninstall <mount>` (host only, no Docker) |

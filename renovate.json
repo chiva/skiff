@@ -6,6 +6,7 @@
   "enabledManagers": [
     "github-actions",
     "dockerfile",
+    "docker-compose",
     "pre-commit",
     "custom.regex"
   ],
@@ -96,6 +97,13 @@
         "Mbed-TLS/mbedtls"
       ],
       "allowedVersions": "<4.2.0"
+    },
+    {
+      "description": "RomM bumps get their own PR: the integration server (tests/integration/) pins the RomM version Skiff is tested against, and its API can change between releases.",
+      "matchPackageNames": [
+        "rommapp/romm"
+      ],
+      "groupName": "test RomM"
     },
     {
       "description": "PPSSPP bumps get their own PR: a rebuilt emulator can change self-test behaviour independently of our code, and the 15-minute image rebuild should be attributable.",

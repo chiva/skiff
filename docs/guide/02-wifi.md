@@ -55,4 +55,4 @@ home network only, "Internet Connection: Failed" is fine as long as you get an I
 | Worked yesterday, not today | Router firmware update reset the mode | Re-check the three settings above |
 | Phone hotspot not working | Most phones offer WPA2/WPA3 only | Use a router guest network instead |
 
-Next: [Install Skiff](04-install-skiff.md)
+Next: [Install Skiff](03-install-skiff.md)

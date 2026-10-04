@@ -36,9 +36,10 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 
 ## What you need
 
-- A PSP (any model) running **custom firmware**. We recommend ARK-5 on firmware 6.61.
+- A PSP (any model) already running **custom firmware**. Skiff is tested on ARK-5 with firmware
+  6.61; installing custom firmware is up to you and not covered here.
 - A Wi-Fi network the PSP can join. The PSP is old: it needs 2.4 GHz, 802.11b and WPA (not
-  WPA2-only or WPA3). The [Wi-Fi guide](docs/guide/03-wifi.md) shows how to set up a safe one.
+  WPA2-only or WPA3). The [Wi-Fi guide](docs/guide/02-wifi.md) shows how to set up a safe one.
 - A [RomM](https://github.com/rommapp/romm) server, version 5.3 or newer.
 - Games you own. Skiff does not provide games.
 

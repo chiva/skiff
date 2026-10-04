@@ -43,4 +43,4 @@ downloaded games are kept.
 
 Delete the `PSP/GAME/Skiff` folder. Games you downloaded stay in `ISO/` until you delete them.
 
-Next: [Connect to RomM](05-connect-to-romm.md)
+Next: [Connect to RomM](04-connect-to-romm.md)

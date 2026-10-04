@@ -219,9 +219,11 @@ to the toolchain's default source, which derives its output from the clock
 `curl_global_init()` always initialises TLS, so without entropy no connection of any kind can be
 made.
 
-Whether KIRK alone is enough depends on one measurement: that its sequence differs after every power
-cycle. The [KIRK probe](testing.md#kirk-probe) records it on hardware. If it does not, Skiff adds
-what the data calls for (a seed file, or timer and input samples mixed in), not before.
+KIRK alone is enough because its sequence does not restart: on a PSP-1000 with ARK-5 the
+[KIRK probe](testing.md#kirk-probe) saw different output on each of 8 launches, power cycles
+included. A 128-byte request (what Mbed TLS asks for) takes about 5 ms, and `psa_crypto_init()`
+about 11 ms, once per session. The system timer, by contrast, restarts at every launch (each run
+started at 5.92–5.95 s), so clock-derived seeds would repeat; nothing is mixed in from it.
 
 ### The PSP's clock
 

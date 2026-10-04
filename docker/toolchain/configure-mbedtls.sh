@@ -73,22 +73,26 @@ turn_off MBEDTLS_SELF_TEST
 turn_off MBEDTLS_DEBUG_C
 
 # Settings the security of Skiff depends on but this script does not edit: fail if an mbedtls update
-# changes their upstream defaults.
-is_enabled() { cat "$TLS_CONFIG" "$CRYPTO_CONFIG" | grep -qE "^#define $1([[:space:]]|\$)"; }
-require_enabled() {
-  is_enabled "$1" || {
-    echo "error: $1 must be enabled" >&2
-    exit 1
-  }
-}
-require_disabled() {
-  if is_enabled "$1"; then
-    echo "error: $1 must be disabled" >&2
+# changes their upstream defaults, and also if it renames or removes them, so a missing option can
+# never pass as "disabled".
+count_lines() { cat "$TLS_CONFIG" "$CRYPTO_CONFIG" | grep -cE "$1" || true; }
+require_state() {
+  name="$1"
+  state="$2"
+  enabled="$(count_lines "^#define ${name}([[:space:]]|\$)")"
+  disabled="$(count_lines "^//[[:space:]]*#define ${name}([[:space:]]|\$)")"
+  case "$state" in
+  on) expected_enabled=1 expected_disabled=0 ;;
+  off) expected_enabled=0 expected_disabled=1 ;;
+  esac
+  if [ "$enabled" -ne "$expected_enabled" ] || [ "$disabled" -ne "$expected_disabled" ]; then
+    echo "error: $name must be present once and $state" \
+      "(found $enabled enabled and $disabled disabled lines)" >&2
     exit 1
   fi
 }
-require_disabled MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG
-require_enabled MBEDTLS_SSL_PROTO_TLS1_3
-require_enabled MBEDTLS_SSL_PROTO_TLS1_2
-require_enabled MBEDTLS_HAVE_TIME_DATE
+require_state MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG off
+require_state MBEDTLS_SSL_PROTO_TLS1_3 on
+require_state MBEDTLS_SSL_PROTO_TLS1_2 on
+require_state MBEDTLS_HAVE_TIME_DATE on
 echo "mbedtls: Skiff profile applied"

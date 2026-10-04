@@ -9,17 +9,19 @@
  *     the render loop and close cleanly, with the network modules loaded only for the picker;
  *   - HOME -> Quit ends the loop through the exit callback, like START.
  *
- * It reports, through report.h: heap used by the fonts, system memory left before and after the
- * network modules load (under the app's own PSP_HEAP_SIZE_KB, since it links the same module
- * info), font load times, and the frame times. On the first frame it reads the rendered pixels
- * back and checks that the Latin and the Japanese line both put glyphs on screen.
+ * It reports, through report.h: heap used by the fonts, system memory before the network modules
+ * load, after they load and after they unload (under the app's own PSP_HEAP_SIZE_KB, since it links
+ * the same module info), font load times, and the frame times. On the first frame it reads the
+ * rendered pixels back and checks that the Latin and the Japanese line both put glyphs on screen.
+ * Each dialog step is logged to result.txt as it happens, so a failure names the step.
  *
- * Pass (SKIFF UI PROTO OK): both fonts render, and the keyboard and the network picker each opened
- * and closed. A tester presses START or HOME -> Quit after trying both.
+ * Pass (SKIFF UI PROTO OK): both fonts render; the keyboard was shown, text was typed and
+ * confirmed; the network picker was shown and connected (an IP address was obtained); the
+ * connection was dropped and the network modules unloaded; no dialog call failed or timed out and
+ * no controller read failed. A tester presses START or HOME -> Quit after trying both.
  *
- * Without any button press for HEADLESS_EXIT_FRAMES frames (PPSSPPHeadless in CI, which cannot
- * press buttons) it exits on its own, checking only the fonts and the frames: SKIFF UI PROTO
- * HEADLESS OK.
+ * Without a button press for HEADLESS_EXIT_US (PPSSPPHeadless in CI, which cannot press buttons)
+ * it exits on its own, checking only the fonts and the frames: SKIFF UI PROTO HEADLESS OK.
  */
 #include <intraFont.h>
 #include <malloc.h>
@@ -102,12 +104,10 @@ enum {
     /* Held d-pad: first repeat after 20 frames, then every 4 (at 60 frames per second). */
     REPEAT_DELAY_FRAMES = 20,
     REPEAT_INTERVAL_FRAMES = 4,
-    /* Ten seconds at 60 Hz without a button press: nobody is holding the PSP. */
-    HEADLESS_EXIT_FRAMES = 600,
-    FRAMES_PER_SECOND = 60,
     /* A 60 Hz frame. */
     FRAME_BUDGET_US = 16667,
     US_PER_MS = 1000,
+    US_PER_S = 1000000,
     BYTES_PER_KB = 1024,
 
     OSK_TEXT_MAX = 64,
@@ -118,6 +118,8 @@ enum {
     DIALOG_FONT_PRIORITY = 0x12,
     DIALOG_SOUND_PRIORITY = 0x10,
     DIALOG_UPDATE_SPEED = 1,
+    /* pspUtilityDialogCommon.result: 0 when the player confirmed, 1 when they cancelled. */
+    DIALOG_RESULT_CONFIRMED = 0,
 
     /* sceNet pool and threads, as pspsdk's net samples size them. */
     NET_POOL_BYTES = 128 * 1024,
@@ -127,10 +129,28 @@ enum {
     NET_INTERRUPT_STACK_BYTES = 4 * 1024,
     APCTL_STACK_BYTES = 0x8000,
     APCTL_PRIORITY = 48,
-    NETCONF_RESULT_CONNECTED = 0,
     /* SceNetApctlInfo.ip: a dotted IPv4 address. */
     NET_IP_MAX = 16,
+    DISCONNECT_POLL_US = 50 * 1000,
 };
+
+/*
+ * Wall-clock limits, from the system timer. Nobody touching the PSP for 10 s means no tester:
+ * tests/emulator/run_eboot.sh gives PPSSPPHeadless 30 s of real time, and PPSSPP runs at least as
+ * fast as a PSP, so 10 s of PSP time leaves room for start-up and font loading.
+ */
+#define HEADLESS_EXIT_US (10LL * US_PER_S)
+/* Time to type, or to pick a network and connect, before a dialog is closed for the tester. */
+#define DIALOG_TIMEOUT_US (300LL * US_PER_S)
+/* Time a dialog gets to close once asked, before the run gives up on it. */
+#define DIALOG_CLOSE_GRACE_US (10LL * US_PER_S)
+#define DISCONNECT_TIMEOUT_US (10LL * US_PER_S)
+
+/* Buttons a tester presses on purpose; switches (HOLD, Wi-Fi) and HOME never count as input. */
+#define TESTER_BUTTONS                                                                             \
+    (PSP_CTRL_SELECT | PSP_CTRL_START | PSP_CTRL_UP | PSP_CTRL_RIGHT | PSP_CTRL_DOWN |             \
+     PSP_CTRL_LEFT | PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_TRIANGLE | PSP_CTRL_CIRCLE | \
+     PSP_CTRL_CROSS | PSP_CTRL_SQUARE)
 
 static unsigned int __attribute__((aligned(16))) display_list[DISPLAY_LIST_WORDS];
 
@@ -154,6 +174,19 @@ typedef struct frame_stats {
     int over_budget;
 } frame_stats;
 
+/* How one system dialog went, from InitStart until the system reported it gone. */
+typedef struct dialog_outcome {
+    int started;
+    int reached_visible;
+    int closed;
+    int timed_out;
+    /* First failing sceUtility*Update / *ShutdownStart return, 0 if none failed. */
+    int update_error;
+    int shutdown_error;
+    /* pspUtilityDialogCommon.result once closed. */
+    int result;
+} dialog_outcome;
+
 /* What the run found; summarised on screen and in result.txt once the GU loop is over. */
 typedef struct proto_results {
     long long latin_load_us;
@@ -164,17 +197,18 @@ typedef struct proto_results {
     long japanese_glyph_pixels;
     frame_stats frames;
     int headless;
-    int osk_opened;
-    int osk_closed;
-    int osk_result;
+    int controller_read_errors;
+    dialog_outcome osk;
+    int osk_field_result;
     int osk_typed_length;
-    int netconf_opened;
-    int netconf_closed;
-    int netconf_result;
-    int net_teardown_ok;
-    memory_snapshot before_net;
-    memory_snapshot after_net;
+    int net_attempted;
+    dialog_outcome netconf;
     char net_ip[NET_IP_MAX];
+    int net_disconnect_ok;
+    int net_unload_ok;
+    memory_snapshot net_before_load;
+    memory_snapshot net_after_load;
+    memory_snapshot net_after_unload;
 } proto_results;
 
 typedef struct ui_state {
@@ -191,6 +225,7 @@ typedef struct ui_state {
 
 /* The calls each system dialog offers, so one loop can run either. */
 typedef struct dialog_ops {
+    const char *name;
     int (*get_status)(void);
     int (*update)(int speed);
     int (*shutdown_start)(void);
@@ -390,45 +425,99 @@ static void fill_dialog_common(pspUtilityDialogCommon *base, unsigned int size) 
     base->soundThread = DIALOG_SOUND_PRIORITY;
 }
 
+static void log_dialog_error(const ui_state *ui, const dialog_ops *ops, const char *call,
+                             int result) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(line, sizeof line, "FAIL %s: %s 0x%08X", ops->name, call, (unsigned)result);
+    log_step(ui, line);
+}
+
+/* Asks the dialog to close; returns when the run gives up waiting for it. */
+static long long request_close(const ui_state *ui, const dialog_ops *ops, dialog_outcome *outcome) {
+    const int result = ops->shutdown_start();
+    if (result < 0 && outcome->shutdown_error == 0) {
+        outcome->shutdown_error = result;
+        log_dialog_error(ui, ops, "ShutdownStart", result);
+    }
+    return now_us() + DIALOG_CLOSE_GRACE_US;
+}
+
 /*
- * Runs a started dialog over the list until the system reports it gone (NONE). HOME -> Quit while
- * it is visible asks it to close rather than leaving it running. Returns 1 once it is gone.
+ * Runs a started dialog over the list until the system reports it gone (NONE). It is closed for
+ * the tester after DIALOG_TIMEOUT_US, or when HOME -> Quit is chosen while it is visible; if it is
+ * still there DIALOG_CLOSE_GRACE_US later, the run gives up on it (closed stays 0).
  */
-static int run_dialog(ui_state *ui, const proto_results *results, const dialog_ops *ops) {
-    int shutdown_requested = 0;
+static void run_dialog(ui_state *ui, const proto_results *results, const dialog_ops *ops,
+                       dialog_outcome *outcome) {
+    const long long deadline = now_us() + DIALOG_TIMEOUT_US;
+    long long give_up_at = 0; /* set once the dialog has been asked to close */
     for (;;) {
         begin_frame();
         draw_list(ui, results);
         end_frame();
         const int status = ops->get_status();
-        switch (status) {
-        case PSP_UTILITY_DIALOG_VISIBLE:
-            if (skiff_psp_exit_requested() && !shutdown_requested) {
-                ops->shutdown_start();
-                shutdown_requested = 1;
-            } else {
-                ops->update(DIALOG_UPDATE_SPEED);
-            }
-            break;
-        case PSP_UTILITY_DIALOG_QUIT:
-            if (!shutdown_requested) {
-                ops->shutdown_start();
-                shutdown_requested = 1;
-            }
-            break;
-        case PSP_UTILITY_DIALOG_NONE:
+        const long long now = now_us();
+        if (status == PSP_UTILITY_DIALOG_NONE) {
+            outcome->closed = 1;
             present_frame(ui);
-            return 1;
-        default:
-            /* INIT and FINISHED: the system is still bringing it up or tearing it down. */
-            break;
+            return;
+        }
+        if (status == PSP_UTILITY_DIALOG_VISIBLE) {
+            outcome->reached_visible = 1;
+            if (give_up_at == 0 && (now >= deadline || skiff_psp_exit_requested())) {
+                outcome->timed_out = now >= deadline;
+                log_step(ui, outcome->timed_out ? "dialog: timed out, closing it"
+                                                : "dialog: HOME -> Quit, closing it");
+                give_up_at = request_close(ui, ops, outcome);
+            } else if (give_up_at == 0) {
+                const int result = ops->update(DIALOG_UPDATE_SPEED);
+                if (result < 0 && outcome->update_error == 0) {
+                    outcome->update_error = result;
+                    log_dialog_error(ui, ops, "Update", result);
+                }
+            }
+        } else if (status == PSP_UTILITY_DIALOG_QUIT && give_up_at == 0) {
+            give_up_at = request_close(ui, ops, outcome);
+        }
+        /* INIT and FINISHED: the system is still bringing it up or tearing it down. */
+        const long long limit = give_up_at != 0 ? give_up_at : deadline + DIALOG_CLOSE_GRACE_US;
+        if (now >= limit) {
+            outcome->timed_out = 1;
+            char line[SKIFF_SELFTEST_LINE_MAX];
+            snprintf(line, sizeof line, "FAIL %s: still open (status %d), giving up", ops->name,
+                     status);
+            log_step(ui, line);
+            present_frame(ui);
+            return;
         }
         present_frame(ui);
     }
 }
 
+static int dialog_ok(const dialog_outcome *outcome) {
+    return outcome->started && outcome->reached_visible && outcome->closed && !outcome->timed_out &&
+           outcome->update_error == 0 && outcome->shutdown_error == 0 &&
+           outcome->result == DIALOG_RESULT_CONFIRMED;
+}
+
+static void format_dialog(char *line, size_t size, const char *verdict, const char *name,
+                          const dialog_outcome *outcome) {
+    snprintf(line, size,
+             "%s%s: started %d, shown %d, closed %d, timed out %d, update 0x%08X, shutdown "
+             "0x%08X, result %d (0 confirmed)",
+             verdict, name, outcome->started, outcome->reached_visible, outcome->closed,
+             outcome->timed_out, (unsigned)outcome->update_error, (unsigned)outcome->shutdown_error,
+             outcome->result);
+}
+
+static void log_dialog(const ui_state *ui, const char *name, const dialog_outcome *outcome) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    format_dialog(line, sizeof line, "", name, outcome);
+    log_step(ui, line);
+}
+
 static void open_keyboard(ui_state *ui, proto_results *results) {
-    static const dialog_ops osk_ops = {sceUtilityOskGetStatus, sceUtilityOskUpdate,
+    static const dialog_ops osk_ops = {"keyboard", sceUtilityOskGetStatus, sceUtilityOskUpdate,
                                        sceUtilityOskShutdownStart};
     /* "Type anything" and an empty start text, as UCS-2. */
     static unsigned short description[] = {'T', 'y', 'p', 'e', ' ', 'a', 'n',
@@ -452,25 +541,36 @@ static void open_keyboard(ui_state *ui, proto_results *results) {
     params.datacount = 1;
     params.data = &field;
 
+    memset(&results->osk, 0, sizeof results->osk);
+    memset(ui->osk_text, 0, sizeof ui->osk_text);
     log_step(ui, "keyboard: opening");
     const int started = sceUtilityOskInitStart(&params);
     if (started < 0) {
-        snprintf(line, sizeof line, "FAIL keyboard: sceUtilityOskInitStart 0x%08X",
-                 (unsigned)started);
-        log_step(ui, line);
+        log_dialog_error(ui, &osk_ops, "InitStart", started);
         return;
     }
-    results->osk_opened = 1;
-    results->osk_closed = run_dialog(ui, results, &osk_ops);
-    results->osk_result = field.result;
+    results->osk.started = 1;
+    run_dialog(ui, results, &osk_ops, &results->osk);
+    results->osk.result = params.base.result;
+    results->osk_field_result = field.result;
     int length = 0;
     while (length < OSK_TEXT_MAX && ui->osk_text[length] != 0) {
         length++;
     }
     results->osk_typed_length = field.result == PSP_UTILITY_OSK_RESULT_CHANGED ? length : 0;
-    snprintf(line, sizeof line, "keyboard: closed, result %d, typed %d chars", results->osk_result,
+    log_dialog(ui, "keyboard", &results->osk);
+    snprintf(line, sizeof line, "keyboard: text %s, %d chars typed",
+             field.result == PSP_UTILITY_OSK_RESULT_CHANGED     ? "changed"
+             : field.result == PSP_UTILITY_OSK_RESULT_CANCELLED ? "cancelled"
+                                                                : "unchanged",
              results->osk_typed_length);
     log_step(ui, line);
+}
+
+static int keyboard_ok(const proto_results *results) {
+    return dialog_ok(&results->osk) &&
+           results->osk_field_result == PSP_UTILITY_OSK_RESULT_CHANGED &&
+           results->osk_typed_length > 0;
 }
 
 /* How far load_net_modules() got, so teardown undoes exactly that. */
@@ -535,63 +635,123 @@ static int unload_net_modules(net_stage stage) {
     return ok;
 }
 
-static void open_network_picker(ui_state *ui, proto_results *results) {
-    static const dialog_ops netconf_ops = {sceUtilityNetconfGetStatus, sceUtilityNetconfUpdate,
-                                           sceUtilityNetconfShutdownStart};
-    pspUtilityNetconfData params;
+/*
+ * Drops the connection the picker made, if any, and waits until APCTL reports it gone: tearing the
+ * modules down under a live connection is what the app must never do.
+ */
+static int disconnect(const ui_state *ui) {
     char line[SKIFF_SELFTEST_LINE_MAX];
-
-    results->before_net = take_memory_snapshot();
-    const net_stage stage = load_net_modules(ui);
-    results->after_net = take_memory_snapshot();
-    if (stage != NET_STAGE_APCTL) {
-        results->net_teardown_ok = unload_net_modules(stage);
-        return;
-    }
-
-    memset(&params, 0, sizeof params);
-    fill_dialog_common(&params.base, sizeof params);
-    params.action = PSP_NETCONF_ACTION_CONNECTAP;
-    const int started = sceUtilityNetconfInitStart(&params);
-    if (started < 0) {
-        snprintf(line, sizeof line, "FAIL network: sceUtilityNetconfInitStart 0x%08X",
-                 (unsigned)started);
+    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+    int result = sceNetApctlGetState(&state);
+    if (result < 0) {
+        snprintf(line, sizeof line, "FAIL network: sceNetApctlGetState 0x%08X", (unsigned)result);
         log_step(ui, line);
-    } else {
-        log_step(ui, "network: picker open");
-        results->netconf_opened = 1;
-        results->netconf_closed = run_dialog(ui, results, &netconf_ops);
-        results->netconf_result = params.base.result;
-        SceNetApctlInfo info;
-        if (params.base.result == NETCONF_RESULT_CONNECTED &&
-            sceNetApctlGetInfo(PSP_NET_APCTL_INFO_IP, &info) >= 0) {
-            snprintf(results->net_ip, sizeof results->net_ip, "%s", info.ip);
+        return 0;
+    }
+    if (state == PSP_NET_APCTL_STATE_DISCONNECTED) {
+        log_step(ui, "network: not connected, nothing to disconnect");
+        return 1;
+    }
+    result = sceNetApctlDisconnect();
+    if (!net_step(ui, "sceNetApctlDisconnect", result)) {
+        return 0;
+    }
+    const long long start_us = now_us();
+    while (now_us() - start_us < DISCONNECT_TIMEOUT_US) {
+        result = sceNetApctlGetState(&state);
+        if (result >= 0 && state == PSP_NET_APCTL_STATE_DISCONNECTED) {
+            snprintf(line, sizeof line, "network: disconnected in %lld ms",
+                     (now_us() - start_us) / US_PER_MS);
+            log_step(ui, line);
+            return 1;
         }
-        snprintf(line, sizeof line, "network: picker closed, result %d", results->netconf_result);
-        log_step(ui, line);
-        sceNetApctlDisconnect();
+        sceKernelDelayThread(DISCONNECT_POLL_US);
     }
-    results->net_teardown_ok = unload_net_modules(stage);
-    log_step(ui, results->net_teardown_ok ? "network: modules unloaded"
-                                          : "FAIL network: modules not unloaded cleanly");
+    snprintf(line, sizeof line, "FAIL network: still in APCTL state %d (0x%08X) after %lld s",
+             state, (unsigned)result, DISCONNECT_TIMEOUT_US / US_PER_S);
+    log_step(ui, line);
+    return 0;
 }
 
-/* Pressed this frame, or held long enough to repeat. */
-static unsigned int read_buttons(ui_state *ui) {
+static void open_network_picker(ui_state *ui, proto_results *results) {
+    static const dialog_ops netconf_ops = {"network picker", sceUtilityNetconfGetStatus,
+                                           sceUtilityNetconfUpdate, sceUtilityNetconfShutdownStart};
+    pspUtilityNetconfData params;
+
+    results->net_attempted = 1;
+    memset(&results->netconf, 0, sizeof results->netconf);
+    results->net_ip[0] = '\0';
+    results->net_disconnect_ok = 0;
+    results->net_before_load = take_memory_snapshot();
+    const net_stage stage = load_net_modules(ui);
+    results->net_after_load = take_memory_snapshot();
+
+    if (stage == NET_STAGE_APCTL) {
+        memset(&params, 0, sizeof params);
+        fill_dialog_common(&params.base, sizeof params);
+        params.action = PSP_NETCONF_ACTION_CONNECTAP;
+        log_step(ui, "network picker: opening");
+        const int started = sceUtilityNetconfInitStart(&params);
+        if (started < 0) {
+            log_dialog_error(ui, &netconf_ops, "InitStart", started);
+        } else {
+            results->netconf.started = 1;
+            run_dialog(ui, results, &netconf_ops, &results->netconf);
+            results->netconf.result = params.base.result;
+            log_dialog(ui, "network picker", &results->netconf);
+            SceNetApctlInfo info;
+            const int got_ip = params.base.result == DIALOG_RESULT_CONFIRMED
+                                   ? sceNetApctlGetInfo(PSP_NET_APCTL_INFO_IP, &info)
+                                   : -1;
+            if (got_ip >= 0) {
+                snprintf(results->net_ip, sizeof results->net_ip, "%s", info.ip);
+            }
+            log_step(ui, results->net_ip[0] != '\0' ? "network: connected, IP obtained"
+                                                    : "network: no IP address");
+        }
+        results->net_disconnect_ok = disconnect(ui);
+    }
+    results->net_unload_ok = unload_net_modules(stage);
+    results->net_after_unload = take_memory_snapshot();
+    log_step(ui, results->net_unload_ok ? "network: modules unloaded"
+                                        : "FAIL network: modules not unloaded cleanly");
+}
+
+static int network_ok(const proto_results *results) {
+    return dialog_ok(&results->netconf) && results->net_ip[0] != '\0' &&
+           results->net_disconnect_ok && results->net_unload_ok;
+}
+
+/*
+ * Tester buttons pressed this frame, or a d-pad direction held long enough to repeat. A failed read
+ * counts as no input (and is reported), so it can neither move the list nor end headless mode.
+ */
+static unsigned int read_buttons(ui_state *ui, proto_results *results) {
     SceCtrlData pad;
-    sceCtrlReadBufferPositive(&pad, 1);
-    const unsigned int pressed = pad.Buttons & ~ui->held_buttons;
+    const int read = sceCtrlReadBufferPositive(&pad, 1);
+    if (read <= 0) {
+        if (results->controller_read_errors == 0) {
+            char line[SKIFF_SELFTEST_LINE_MAX];
+            snprintf(line, sizeof line, "FAIL controller: sceCtrlReadBufferPositive 0x%08X",
+                     (unsigned)read);
+            log_step(ui, line);
+        }
+        results->controller_read_errors++;
+        return 0;
+    }
+    const unsigned int buttons = pad.Buttons & TESTER_BUTTONS;
+    const unsigned int pressed = buttons & ~ui->held_buttons;
     unsigned int repeated = 0;
-    if (pad.Buttons != 0 && pad.Buttons == ui->held_buttons) {
+    if (buttons != 0 && buttons == ui->held_buttons) {
         ui->held_frames++;
         if (ui->held_frames >= REPEAT_DELAY_FRAMES &&
             (ui->held_frames - REPEAT_DELAY_FRAMES) % REPEAT_INTERVAL_FRAMES == 0) {
-            repeated = pad.Buttons & (PSP_CTRL_UP | PSP_CTRL_DOWN);
+            repeated = buttons & (PSP_CTRL_UP | PSP_CTRL_DOWN);
         }
     } else {
         ui->held_frames = 0;
     }
-    ui->held_buttons = pad.Buttons;
+    ui->held_buttons = buttons;
     return pressed | repeated;
 }
 
@@ -607,11 +767,16 @@ static void record_frame(frame_stats *stats, long long elapsed_us) {
 }
 
 static void run_list(ui_state *ui, proto_results *results) {
+    const long long headless_deadline = now_us() + HEADLESS_EXIT_US;
     int any_input = 0;
-    for (int frame = 0; !skiff_psp_exit_requested(); frame++) {
-        const unsigned int buttons = read_buttons(ui);
-        any_input |= ui->held_buttons != 0;
-        if (!any_input && frame >= HEADLESS_EXIT_FRAMES) {
+    while (!skiff_psp_exit_requested()) {
+        const unsigned int buttons = read_buttons(ui, results);
+        if (buttons != 0 && !any_input) {
+            any_input = 1;
+            log_step(ui, "input: a tester is here, headless exit cancelled");
+        }
+        const long long headless_left_us = headless_deadline - now_us();
+        if (!any_input && headless_left_us <= 0) {
             results->headless = 1;
             return;
         }
@@ -638,8 +803,8 @@ static void run_list(ui_state *ui, proto_results *results) {
         draw_list(ui, results);
         if (!any_input) {
             char countdown[SKIFF_SELFTEST_LINE_MAX];
-            snprintf(countdown, sizeof countdown, "No input: exits in %d s",
-                     (HEADLESS_EXIT_FRAMES - frame) / FRAMES_PER_SECOND + 1);
+            snprintf(countdown, sizeof countdown, "No input: exits in %lld s",
+                     headless_left_us / US_PER_S + 1);
             print_text(ui->latin, STATUS_LEFT, TITLE_BASELINE, ITEM_SIZE, COLOUR_DIM_TEXT,
                        countdown);
         }
@@ -669,38 +834,53 @@ static void report_results(skiff_psp_report *report, const proto_results *result
         snprintf(line, sizeof line, "FAIL frame: no list frame rendered");
     }
     skiff_psp_report_line(report, line);
+    if (results->controller_read_errors != 0) {
+        snprintf(line, sizeof line, "FAIL controller: %d reads failed",
+                 results->controller_read_errors);
+        skiff_psp_report_line(report, line);
+    }
     if (results->headless) {
         skiff_psp_report_line(report, "no input: headless run, keyboard and network not tried");
         return;
     }
-    snprintf(line, sizeof line, "%s keyboard: opened %d, closed %d, result %d, typed %d chars",
-             results->osk_opened && results->osk_closed ? "OK" : "FAIL", results->osk_opened,
-             results->osk_closed, results->osk_result, results->osk_typed_length);
+    format_dialog(line, sizeof line, keyboard_ok(results) ? "OK " : "FAIL ", "keyboard",
+                  &results->osk);
     skiff_psp_report_line(report, line);
-    if (results->before_net.system_free != 0) {
-        report_memory(report, "before network modules", &results->before_net);
-        report_memory(report, "after network modules", &results->after_net);
+    snprintf(line, sizeof line, "keyboard text: %d chars typed and confirmed (needs at least 1)",
+             results->osk_typed_length);
+    skiff_psp_report_line(report, line);
+    if (!results->net_attempted) {
+        skiff_psp_report_line(report, "FAIL network picker: not opened (Square)");
+        return;
     }
-    snprintf(line, sizeof line,
-             "%s network picker: opened %d, closed %d, result %d (0 connected), IP %s, "
-             "teardown %s",
-             results->netconf_opened && results->netconf_closed && results->net_teardown_ok
-                 ? "OK"
-                 : "FAIL",
-             results->netconf_opened, results->netconf_closed, results->netconf_result,
+    format_dialog(line, sizeof line, network_ok(results) ? "OK " : "FAIL ", "network picker",
+                  &results->netconf);
+    skiff_psp_report_line(report, line);
+    snprintf(line, sizeof line, "network: IP %s, disconnect %s, modules unloaded %s",
              results->net_ip[0] != '\0' ? results->net_ip : "none",
-             results->net_teardown_ok ? "ok" : "failed");
+             results->net_disconnect_ok ? "ok" : "failed",
+             results->net_unload_ok ? "ok" : "failed");
+    skiff_psp_report_line(report, line);
+    report_memory(report, "before network modules", &results->net_before_load);
+    report_memory(report, "after network modules load", &results->net_after_load);
+    report_memory(report, "after network modules unload", &results->net_after_unload);
+    snprintf(
+        line, sizeof line,
+        "network modules: took %d KB of system memory, %d KB back after unloading",
+        ((int)results->net_before_load.system_free - (int)results->net_after_load.system_free) /
+            BYTES_PER_KB,
+        ((int)results->net_after_unload.system_free - (int)results->net_after_load.system_free) /
+            BYTES_PER_KB);
     skiff_psp_report_line(report, line);
 }
 
 static int passed(const proto_results *results) {
     const int rendered = results->latin_glyph_pixels > 0 && results->japanese_glyph_pixels > 0 &&
-                         results->frames.frames > 0;
+                         results->frames.frames > 0 && results->controller_read_errors == 0;
     if (results->headless) {
         return rendered;
     }
-    return rendered && results->osk_opened && results->osk_closed && results->netconf_opened &&
-           results->netconf_closed && results->net_teardown_ok;
+    return rendered && keyboard_ok(results) && network_ok(results);
 }
 
 static const char *result_marker(const proto_results *results) {

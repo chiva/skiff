@@ -125,23 +125,35 @@ so its memory figures are the app's.
 
 On a PSP:
 
-1. Run **Skiff UI prototype**. Check that the title, the Japanese line and the first row (accented
+1. Run **Skiff UI prototype** and press a button within 10 seconds (otherwise it exits on its
+   own, as described below). Check that the title, the Japanese line and the first row (accented
    Latin: `café, señor`) render, and that Up/Down move the highlight.
-2. Triangle opens the keyboard: type a few characters, confirm; the text appears top right.
-3. Square loads the network modules and opens the network picker: pick a connection (or cancel);
-   once connected, the IP address appears top right. The modules are unloaded when it closes.
-4. HOME → Quit (or START) ends the run. Within the first 10 seconds press any button, or it exits
-   on its own as described below.
+2. Triangle opens the keyboard: type at least one character and confirm (cancelling fails the
+   run). The text appears top right.
+3. Square loads the network modules and opens the network picker: pick a connection that works
+   and let it connect (cancelling or a failed connection fails the run). The IP address appears top
+   right. When the picker closes, the prototype drops the connection, waits until it is gone, and
+   unloads the modules.
+4. HOME → Quit (or START) ends the run.
 
-`result.txt` then has: font load times; heap used by the fonts; the first frame read back (drawn
-pixels in a Latin and a Japanese-only line, both must be above zero); list frame time (mean, max,
-frames over the 16.7 ms budget); system memory before and after the network modules load; and the
-keyboard and picker results. It ends with `SKIFF UI PROTO OK` only if both fonts rendered and the
-keyboard and the picker each opened and closed (and the network modules unloaded); otherwise
+Each step is written to `result.txt` as it happens (dialog opened, shown, closed; any failing
+`sceUtility*` call with its code; connection, disconnection and unloading), so a failed run says
+where it stopped. The summary at the end has: font load times; heap used by the fonts; the first
+frame read back (drawn pixels in a Latin and a Japanese-only line, both must be above zero); list
+frame time (mean, max, frames over the 16.7 ms budget); each dialog's outcome; and system memory
+before the network modules load, after they load and after they unload, with how much the
+unloading gave back (reported, not judged).
+
+It ends with `SKIFF UI PROTO OK` only if: both fonts rendered; the keyboard was shown, and text
+was typed and confirmed; the picker was shown and connected (an IP address was obtained); the
+connection was dropped and the modules unloaded; and no dialog call failed or timed out (a dialog
+left open for 5 minutes is closed and fails) and no controller read failed. Otherwise it ends with
 `SKIFF UI PROTO FAIL`.
 
-With no button pressed for 10 seconds it exits on its own, checking only the fonts and the frames,
-and ends with `SKIFF UI PROTO HEADLESS OK`/`FAIL`. That is what CI runs (`scripts/dev.sh ui-proto`).
+With no button pressed for 10 seconds of system time it exits on its own, checking only the fonts
+and the frames, and ends with `SKIFF UI PROTO HEADLESS OK`/`FAIL`. That is what CI runs
+(`scripts/dev.sh ui-proto`); the 10 seconds stay well inside the emulator script's 30-second limit.
+Switches (HOLD, Wi-Fi) and HOME do not count as a button press.
 
 ## Test data rules
 

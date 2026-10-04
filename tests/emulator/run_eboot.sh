@@ -24,12 +24,13 @@ if [[ ! -f "$EBOOT" ]]; then
   exit 1
 fi
 
-# Retries only an emulator that died before loading the EBOOT. An EBOOT that started and then
-# crashed or reported FAIL is never retried, so a flaky bug in our code cannot hide behind this.
+# Retries only an emulator that died before loading the EBOOT: no kernel line AND no EBOOT output at
+# all. An EBOOT that printed anything, crashed or reported FAIL is never retried, so a flaky bug in
+# our code cannot hide behind this, even if a PPSSPP update renames or drops the kernel line.
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
   status=0
   log="$(PPSSPPHeadless -l --graphics=software --timeout="$TIMEOUT_SECONDS" "$EBOOT" 2>&1)" || status=$?
-  if grep -qF "$KERNEL_READY_LINE" <<<"$log"; then
+  if grep -qF "$KERNEL_READY_LINE" <<<"$log" || grep -qE "$STDOUT_PREFIX_PATTERN" <<<"$log"; then
     break
   fi
   echo "emulator $NAME: PPSSPPHeadless exited ($status) before its kernel started, attempt" \

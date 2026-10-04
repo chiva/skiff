@@ -1,8 +1,33 @@
 # PPSSPPHeadless built from source at a pinned commit. PPSSPP ships no headless binary, so CI caches
 # this image (keyed on this file's hash) and rebuilds it only when the pin changes.
-FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60 AS build
+#
+# Every input is pinned: the Debian base by digest, PPSSPP (and through it, its submodules) by
+# commit, and every Debian package by installing from a dated snapshot.debian.org archive, so the
+# same commit always builds the same emulator. Packages arrive over plain HTTP because the base image
+# has no CA certificates; apt verifies them against Debian's signing keys, as on any Debian mirror.
+# Bump SNAPSHOT alongside PPSSPP_COMMIT (any timestamp from snapshot.debian.org).
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG SNAPSHOT=20261001T000000Z
+# A snapshot's Release files are past their validity date by design.
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+ && printf '%s\n' \
+      'Types: deb' \
+      "URIs: http://snapshot.debian.org/archive/debian/${SNAPSHOT}" \
+      'Suites: trixie trixie-updates' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+      '' \
+      'Types: deb' \
+      "URIs: http://snapshot.debian.org/archive/debian-security/${SNAPSHOT}" \
+      'Suites: trixie-security' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+      > /etc/apt/sources.list.d/snapshot.sources \
+ && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99snapshot
+
+FROM base AS build
 ARG PPSSPP_COMMIT=fa50bb1976065c4f8b1b47af227d367fe9771555 # v1.20.4
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -21,8 +46,7 @@ RUN cmake -S /ppsspp -B /ppsspp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHEAD
       -DUNITTEST=OFF -DUSING_QT_UI=OFF -DUSE_FFMPEG=OFF -DUSE_DISCORD=OFF \
  && cmake --build /ppsspp/build --target PPSSPPHeadless
 
-FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60
-ARG DEBIAN_FRONTEND=noninteractive
+FROM base
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgl1 libglu1-mesa libsdl2-2.0-0 \
  && rm -rf /var/lib/apt/lists/*

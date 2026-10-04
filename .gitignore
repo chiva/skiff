@@ -1,0 +1,22 @@
+/build/
+/dist/
+.cache/
+compile_commands.json
+*.gcda
+*.gcno
+coverage*.xml
+coverage*.html
+
+# PSP build outputs written next to sources by older Makefile flows
+*.elf
+*.prx
+PARAM.SFO
+EBOOT.PBP
+
+# Local secrets used for manual testing against a real RomM; never commit them
+config.local.ini
+*.key
+*.pem
+!tests/fixtures/**/*.pem
+
+.DS_Store

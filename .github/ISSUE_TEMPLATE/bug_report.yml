@@ -1,0 +1,88 @@
+name: Bug report
+description: Something on the PSP did not work as expected
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please check [Troubleshooting](https://github.com/chiva/skiff/blob/main/docs/guide/troubleshooting.md)
+        first: Wi-Fi security modes and certificates cause most problems.
+
+        **Never paste your RomM token, client key, or password into an issue.**
+  - type: input
+    id: version
+    attributes:
+      label: Skiff version
+      description: Shown on the Skiff title screen.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: PSP model
+      options:
+        - PSP-1000 (Fat)
+        - PSP-2000 (Slim)
+        - PSP-3000 (Brite)
+        - PSP Go (N1000)
+        - PSP Street (E1000)
+        - PPSSPP (emulator)
+        - PS Vita (Adrenaline)
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware and custom firmware
+      description: From Settings → System Information, plus the CFW name and version.
+      placeholder: 6.61 ARK-5 (CustomIPL)
+    validations:
+      required: true
+  - type: input
+    id: romm
+    attributes:
+      label: RomM version
+      description: Shown in RomM under your profile → About.
+      placeholder: 5.3.1
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How Skiff reaches RomM
+      options:
+        - Plain HTTP on my home network
+        - HTTPS with a public certificate (e.g. Let's Encrypt)
+        - HTTPS with my own certificate authority
+        - HTTPS with a client certificate (mTLS)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Skiff
+        2. Choose PSP → ...
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error shown on screen
+      description: The message and the code in brackets, e.g. "Secure connection failed (TLS handshake) [104]".
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: Contents of ms0:/PSP/GAME/Skiff/skiff.log, if present. Check it for anything private first.
+      render: text

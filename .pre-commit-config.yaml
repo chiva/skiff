@@ -1,0 +1,63 @@
+# Local hooks mirror the CI "Hygiene" job exactly (CI runs `pre-commit run --all-files`), so a
+# green commit locally means a green hygiene job. clang-tidy is not here: it needs a configured
+# build tree and runs in its own CI job (scripts/lint.sh runs it locally).
+#
+# pre-commit installs into .git/hooks/pre-commit and commit-msg only, never taking over
+# core.hooksPath or pre-push, so it coexists with any local pre-push hook you may have. Install
+# with: pre-commit install --hook-type pre-commit --hook-type commit-msg
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+        exclude: ^tests/fixtures/
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: a9a8a861f30ed207ead7d5a3b7e8032283ba5da7 # frozen: v23.1.2
+    hooks:
+      - id: clang-format
+        types_or: [c]
+
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker.python
+    rev: e8b4e28241a9ae8296ba6e4a491b5da4eda73283 # frozen: 3.11.1
+    hooks:
+      - id: editorconfig-checker
+        alias: ec
+        # Exclusions and disabled checks live in .editorconfig-checker.json.
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: 745eface02aef23e168a8afb6b5737818efbea95 # frozen: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: local
+    hooks:
+      - id: error-codes-documented
+        name: every player-facing error code is in the troubleshooting guide
+        entry: scripts/check-error-docs.sh
+        language: script
+        files: ^(include/skiff/error\.h|docs/guide/troubleshooting\.md)$
+        pass_filenames: false
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 91ab4bf57e58b32adf1a122681f6ebe164d081c8 # frozen: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices"
+  ],
+  "enabledManagers": [
+    "github-actions",
+    "dockerfile",
+    "pre-commit",
+    "custom.regex"
+  ],
+  "pre-commit": {
+    "enabled": true
+  },
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "minimumReleaseAge": "3 days",
+  "customManagers": [
+    {
+      "description": "The pspdev toolchain image is referenced as a plain string in scripts and workflows, where the docker managers cannot see it. One regex keeps every occurrence on the same monthly release.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/dev\\.sh$/",
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "pspdev/pspdev:(?<currentValue>v\\d{8})"
+      ],
+      "depNameTemplate": "pspdev/pspdev",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^v(?<major>\\d{8})$"
+    },
+    {
+      "description": "Unity, pinned by commit with its tag in a trailing comment in tests/CMakeLists.txt. Renovate bumps the tag and the commit together.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^tests/CMakeLists\\.txt$/"
+      ],
+      "matchStrings": [
+        "GIT_REPOSITORY https://github\\.com/(?<depName>[^\\s]+?)\\.git\\s+GIT_TAG (?<currentDigest>[0-9a-f]{40}) # (?<currentValue>v[\\d.]+)"
+      ],
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "description": "PPSSPP, pinned by commit with its tag in a trailing comment in docker/ppsspp.Dockerfile.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^docker/ppsspp\\.Dockerfile$/"
+      ],
+      "matchStrings": [
+        "PPSSPP_COMMIT=(?<currentDigest>[0-9a-f]{40}) # (?<currentValue>v[\\d.]+)"
+      ],
+      "depNameTemplate": "hrydgard/ppsspp",
+      "datasourceTemplate": "github-tags"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Group all non-major bumps into one PR.",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "Toolchain bumps get their own PR: a new GCC or newlib can change codegen on real hardware, so the hardware test tier (docs/development/testing.md) must be run before merging.",
+      "matchPackageNames": [
+        "pspdev/pspdev"
+      ],
+      "groupName": "pspdev toolchain"
+    },
+    {
+      "description": "PPSSPP bumps get their own PR: a rebuilt emulator can change self-test behaviour independently of our code, and the 15-minute image rebuild should be attributable.",
+      "matchPackageNames": [
+        "hrydgard/ppsspp"
+      ],
+      "groupName": "ppsspp emulator"
+    }
+  ]
+}

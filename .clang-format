@@ -1,0 +1,19 @@
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+InsertBraces: true
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # System and SDK headers first, then Skiff headers, then test framework.
+  - Regex: '^<.*>'
+    Priority: 1
+  - Regex: '^"skiff/'
+    Priority: 2
+  - Regex: '.*'
+    Priority: 3

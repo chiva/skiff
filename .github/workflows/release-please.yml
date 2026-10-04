@@ -1,0 +1,73 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      # "true" only on the push that actually publishes a release; gates the package job.
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # Config and manifest files rather than inline inputs, so version bumps of extra files
+      # (CMakeLists.txt) are declared in one reviewed place: release-please-config.json.
+      # RELEASE_PLEASE_TOKEN is an optional PAT: release PRs opened with the default GITHUB_TOKEN do
+      # not trigger CI, so without it the release PR must be re-run manually before merging.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Builds the release zip in the SAME run: events from the default GITHUB_TOKEN cannot trigger a
+  # separate release-triggered workflow, but this token can upload assets to the release it created.
+  package:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # Keyless Sigstore signing for the build-provenance attestation.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      # Licences are collected inside the toolchain image: psp-create-license-directory reads the
+      # licence files installed alongside each pspdev package.
+      - name: Build the release EBOOT and collect licences
+        run: >-
+          docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src pspdev/pspdev:v20261001
+          bash -c 'cmake --preset psp-release && cmake --build --preset psp-release
+          && scripts/collect-licenses.sh build/psp-release/licenses'
+      - name: Package
+        id: package
+        run: >-
+          echo "archive=$(scripts/package.sh build/psp-release/pbp/skiff/EBOOT.PBP
+          build/psp-release/licenses/third-party-licenses)" >> "$GITHUB_OUTPUT"
+      # Verify with: gh attestation verify skiff-<version>.zip --repo chiva/skiff
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber

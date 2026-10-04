@@ -57,7 +57,7 @@ the PSP's network checks:
 | Command | What it does |
 |---|---|
 | `scripts/dev.sh romm-up` | Starts a fresh server on `127.0.0.1` (new secrets, empty volumes, about a minute) |
-| `scripts/dev.sh romm-lan` | The same on every interface, for a PSP on the LAN; the address is detected, or set `SKIFF_LAN_IP` |
+| `scripts/dev.sh romm-lan` | The same with the TLS ports on the LAN, for a PSP; the address is detected, or set `SKIFF_LAN_IP`. Plain HTTP stays local unless `SKIFF_LAN_PLAIN_HTTP=1` |
 | `scripts/dev.sh romm-check` | Checks what the client relies on (below); ends with `SKIFF INTEGRATION SERVER OK` |
 | `scripts/dev.sh romm-down` | Stops it and deletes its volumes |
 
@@ -81,8 +81,9 @@ Everything generated lives in `build/integration/` (git-ignored):
 - `romm.json`: the seeded file's ID, size and hashes, and the API token.
 
 The keys and the token are test material for a server that only lives on your machine: never
-commit them, and do not reuse them anywhere else. With `romm-lan` the server is reachable by
-anyone on your network until `romm-down`.
+commit them, and do not reuse them anywhere else. The proxy container only gets the server's key
+and the CA certificate. With `romm-lan` the server is reachable by anyone on your network until
+`romm-down`.
 
 ## Hardware tier
 

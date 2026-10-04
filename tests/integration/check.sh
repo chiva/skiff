@@ -14,6 +14,9 @@ EXPECTED_ROMM_VERSION="$(sed -n 's|.*image: rommapp/romm:\([^@]*\)@.*|\1|p' \
   "$(dirname "$0")/compose.yaml")"
 readonly EXPECTED_ROMM_VERSION
 readonly RANGE_START=1000
+# Bounds for every network call, so a stalled proxy fails the run instead of hanging it.
+readonly CONNECT_TIMEOUT_SECONDS=5
+readonly REQUEST_TIMEOUT_SECONDS=30
 readonly CURL_TLS_VERIFY_FAILED=60
 readonly HTTP_OK=200
 readonly HTTP_PARTIAL=206
@@ -29,6 +32,10 @@ readonly TOKEN ROM_ID FILE_NAME SIZE SHA1
 WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
+
+curl() {
+  command curl --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$REQUEST_TIMEOUT_SECONDS" "$@"
+}
 
 fail() {
   echo "FAIL: $*" >&2
@@ -68,7 +75,7 @@ for version in 1.2 1.3; do
 done
 
 # A PSP connecting by IP address sends no SNI; the proxy must still present the test certificate.
-openssl s_client -connect "$PROXY:8443" -noservername -CAfile "$CERTS/ca.crt" -verify_return_error \
+timeout "$REQUEST_TIMEOUT_SECONDS" openssl s_client -connect "$PROXY:8443" -noservername -CAfile "$CERTS/ca.crt" -verify_return_error \
   </dev/null >/dev/null 2>&1 || fail "a TLS client that sends no SNI must get the test certificate"
 ok "a TLS client that sends no SNI (a PSP connecting by IP) gets the test certificate"
 
@@ -129,8 +136,10 @@ range=(-H "Range: bytes=$RANGE_START-")
 cmp -s "$WORK/body" <(tail -c +"$((RANGE_START + 1))" "$WORK/full") ||
   fail "the ranged bytes do not match"
 ok "Range from byte $RANGE_START with If-Range (current ETag) resumes ($HTTP_PARTIAL)"
-[[ "$(tls_status "$content" "${auth[@]}" "${range[@]}" -H 'If-Range: "stale"')" == "$HTTP_OK" ]] ||
-  fail "a Range request with a stale ETag must return the whole file ($HTTP_OK)"
+[[ "$(tls_status "$content" "${auth[@]}" "${range[@]}" -H 'If-Range: "stale"' -D "$WORK/headers")" == \
+  "$HTTP_OK" ]] || fail "a Range request with a stale ETag must return the whole file ($HTTP_OK)"
+cmp -s "$WORK/body" "$WORK/full" || fail "the restarted download is not the whole file"
+! grep -qi '^content-range:' "$WORK/headers" || fail "the restarted download is marked partial"
 ok "Range with a stale If-Range ETag restarts with the whole file ($HTTP_OK)"
 
 echo "SKIFF INTEGRATION SERVER OK"

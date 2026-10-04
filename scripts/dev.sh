@@ -116,16 +116,21 @@ lan_ip() {
 }
 
 # romm_up <bind-address> [<lan-ip>]: always a fresh server (empty volumes, new secrets), so every run
-# starts from the same state.
+# starts from the same state. Plain HTTP is published on the LAN only with SKIFF_LAN_PLAIN_HTTP=1.
 romm_up() {
   local bind_address="$1" lan_ip="${2:-}" dir="$REPO_ROOT/$INTEGRATION_DIR" admin_password host
+  local plain_bind_address="127.0.0.1" plain_host
+  if [[ -n "$lan_ip" && "${SKIFF_LAN_PLAIN_HTTP:-0}" == 1 ]]; then
+    plain_bind_address="$bind_address"
+  fi
   mkdir -p "$dir"
   run_host "tests/integration/gen-certs.sh $INTEGRATION_DIR/certs $lan_ip"
   admin_password="$(random_hex)"
   (
     umask 077
     printf '%s\n' "ROMM_DB_PASSWORD=$(random_hex)" "ROMM_AUTH_SECRET_KEY=$(random_hex)" \
-      "ROMM_BIND_ADDRESS=$bind_address" "SKIFF_CERTS_DIR=$dir/certs" \
+      "ROMM_BIND_ADDRESS=$bind_address" "ROMM_PLAIN_BIND_ADDRESS=$plain_bind_address" \
+      "SKIFF_CERTS_DIR=$dir/certs" \
       "SKIFF_ADMIN_USER=$ROMM_ADMIN_USER" "SKIFF_ADMIN_PASSWORD=$admin_password" >"$dir/romm.env"
   )
   echo "test RomM: starting from empty volumes (about a minute)..." >&2
@@ -137,9 +142,13 @@ romm_up() {
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
+  plain_host="localhost"
+  if [[ "$plain_bind_address" != 127.0.0.1 ]]; then
+    plain_host="$host"
+  fi
   cat <<EOF
 Test RomM is up (web UI login: $ROMM_ADMIN_USER, password in $INTEGRATION_DIR/romm.env):
-  http://$host:8080   plain HTTP, for comparison only
+  http://$plain_host:8080   plain HTTP, for comparison only
   https://$host:8443  TLS, trusted through $INTEGRATION_DIR/certs/ca.crt
   https://$host:8444  TLS + client certificate ($INTEGRATION_DIR/certs/client-{ecdsa,rsa}.{crt,key})
 Seeded file, its hashes and an API token: $INTEGRATION_DIR/romm.json

@@ -1,0 +1,8 @@
+# Default owner for everything.
+*                       @chiva
+
+# Security-sensitive: TLS, entropy, credentials and release signing.
+/src/net/               @chiva
+/src/config/            @chiva
+/.github/workflows/     @chiva
+/SECURITY.md            @chiva

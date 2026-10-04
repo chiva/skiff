@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR makes the older run meaningless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Hygiene (pre-commit)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # The same hook set developers run locally (.pre-commit-config.yaml), so a commit that passed
+      # its hooks cannot fail here. commit-msg hooks do not run on --all-files; PR titles are
+      # checked by the commit-lint job instead.
+      - run: pipx run pre-commit==4.6.2 run --all-files --show-diff-on-failure
+
+  # The same scripts/dev.sh commands developers run, in the same docker/host.Dockerfile image, so a
+  # green local run means a green job. The compiler matrix (gcc, clang) and the coverage floor live
+  # in scripts/dev.sh; the compiler check in scripts/host-tests.sh fails a run whose CMake picked
+  # the wrong compiler.
+  host:
+    name: Host ${{ matrix.check.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - { command: test, name: "tests (gcc, clang)" }
+          - { command: asan, name: "tests under ASan + UBSan (gcc, clang)" }
+          - { command: coverage, name: "coverage (≥85% lines)" }
+          - { command: lint, name: "static analysis (clang-tidy, cppcheck)" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: scripts/dev.sh ${{ matrix.check.command }}
+      - if: matrix.check.command == 'coverage'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: build/host-coverage/coverage.xml
+
+  psp-build:
+    name: PSP build (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    container: pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [psp, psp-release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Guards against the image tag drifting from the toolchain the docs and AGENTS.md promise.
+      - name: Verify the toolchain version
+        run: psp-gcc --version | head -1 | grep -q ' 15\.' || { psp-gcc --version; exit 1; }
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: eboot-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/pbp/
+          if-no-files-found: error
+
+  emulator:
+    name: Emulator self-test (PPSSPPHeadless)
+    needs: psp-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: eboot-psp
+          path: build/psp/pbp/
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      # Compiling PPSSPP takes ~15 minutes; the GHA layer cache makes every run after the first
+      # (until docker/ppsspp.Dockerfile changes) a cache hit.
+      - name: Build PPSSPPHeadless image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: docker
+          file: docker/ppsspp.Dockerfile
+          load: true
+          tags: skiff-ppsspp:ci
+          cache-from: type=gha,scope=ppsspp
+          cache-to: type=gha,mode=max,scope=ppsspp
+      - name: Run the self-test EBOOT
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
+          tests/emulator/run_selftest.sh build/psp/pbp/skiff_selftest/EBOOT.PBP
+
+  commit-lint:
+    name: Conventional commit PR title
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    # The top-level permissions grant only contents:read; this action reads the PR to check its title.
+    permissions:
+      pull-requests: read
+    # Squash merge is the only merge method, so the PR title becomes the commit release-please reads.
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

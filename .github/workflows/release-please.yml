@@ -1,0 +1,93 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      # "true" only on the push that actually publishes a release; gates the package job.
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # Config and manifest files rather than inline inputs, so version bumps of extra files
+      # (CMakeLists.txt) are declared in one reviewed place: release-please-config.json.
+      # RELEASE_PLEASE_TOKEN is an optional PAT: release PRs opened with the default GITHUB_TOKEN do
+      # not trigger CI, so without it the release PR must be re-run manually before merging.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Builds the release zip in the SAME run: events from the default GITHUB_TOKEN cannot trigger a
+  # separate release-triggered workflow, but this token can upload assets to the release it created.
+  # Building and publishing are separate jobs so the toolchain image, which gets a writable mount of
+  # the checkout, never shares a job with the release-write and signing credentials.
+  package:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-24.04
+    outputs:
+      archive_name: ${{ steps.package.outputs.archive_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      # Licences are collected inside the toolchain image: psp-create-license-directory reads the
+      # licence files installed alongside each pspdev package.
+      - name: Build the release EBOOT and collect licences
+        run: >-
+          docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src
+          pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
+          bash -c 'cmake --preset psp-release && cmake --build --preset psp-release
+          && scripts/collect-licenses.sh build/psp-release/licenses'
+      - name: Package
+        id: package
+        run: |
+          archive="$(scripts/package.sh build/psp-release/pbp/skiff/EBOOT.PBP \
+            build/psp-release/licenses/third-party-licenses)"
+          echo "archive_name=$(basename "$archive")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-archive
+          path: dist/${{ steps.package.outputs.archive_name }}
+          if-no-files-found: error
+
+  # Runs no repository code: it only signs and uploads the archive the package job produced.
+  publish:
+    needs: [release-please, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # Keyless Sigstore signing for the build-provenance attestation.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-archive
+      # Verify with: gh attestation verify skiff-<version>.zip --repo chiva/skiff
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: ${{ needs.package.outputs.archive_name }}
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          ARCHIVE: ${{ needs.package.outputs.archive_name }}
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber --repo "$GITHUB_REPOSITORY"

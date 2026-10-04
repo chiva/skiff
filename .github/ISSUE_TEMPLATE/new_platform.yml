@@ -1,0 +1,43 @@
+name: New platform or emulator
+description: Ask Skiff to install games for another system (e.g. NES via an emulator)
+labels: [platform, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Skiff installs a game by downloading it from RomM and placing it where the PSP app that
+        plays it expects to find it. To add a platform we need to know exactly where that is.
+        See [Adding a platform](https://github.com/chiva/skiff/blob/main/docs/development/adding-a-platform.md).
+  - type: input
+    id: romm_slug
+    attributes:
+      label: RomM platform
+      description: The platform name or slug as RomM shows it.
+      placeholder: nes
+    validations:
+      required: true
+  - type: input
+    id: emulator
+    attributes:
+      label: PSP emulator or app, with a link
+      placeholder: NesterJ 1.20 — https://...
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Folder the emulator reads games from
+      placeholder: ms0:/PSP/GAME/NesterJ/ROMS/
+    validations:
+      required: true
+  - type: input
+    id: extensions
+    attributes:
+      label: File types it accepts
+      placeholder: .nes, .zip
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else (saves location, BIOS files, quirks)

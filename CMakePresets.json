@@ -1,0 +1,102 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "SKIFF_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "host",
+      "displayName": "Host: unit tests",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "host-asan",
+      "displayName": "Host: unit tests under ASan + UBSan",
+      "inherits": "host",
+      "cacheVariables": {
+        "SKIFF_SANITIZE": "ON"
+      }
+    },
+    {
+      "name": "host-coverage",
+      "displayName": "Host: unit tests with gcov coverage",
+      "inherits": "host",
+      "cacheVariables": {
+        "SKIFF_COVERAGE": "ON"
+      }
+    },
+    {
+      "name": "psp",
+      "displayName": "PSP: debug EBOOT",
+      "inherits": "base",
+      "toolchainFile": "$env{PSPDEV}/psp/share/pspdev.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_PRX": "ON"
+      }
+    },
+    {
+      "name": "psp-release",
+      "displayName": "PSP: release EBOOT",
+      "inherits": "psp",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "host",
+      "configurePreset": "host"
+    },
+    {
+      "name": "host-asan",
+      "configurePreset": "host-asan"
+    },
+    {
+      "name": "host-coverage",
+      "configurePreset": "host-coverage"
+    },
+    {
+      "name": "psp",
+      "configurePreset": "psp"
+    },
+    {
+      "name": "psp-release",
+      "configurePreset": "psp-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "host",
+      "configurePreset": "host",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "verbose"
+      }
+    },
+    {
+      "name": "host-asan",
+      "inherits": "host",
+      "configurePreset": "host-asan"
+    },
+    {
+      "name": "host-coverage",
+      "inherits": "host",
+      "configurePreset": "host-coverage"
+    }
+  ]
+}

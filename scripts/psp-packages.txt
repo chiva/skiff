@@ -1,0 +1,3 @@
+# psp-pacman packages linked into the EBOOT, one per line. scripts/collect-licenses.sh ships their
+# licences (and their dependencies') in the release zip; pspsdk, newlib and pthread-embedded are
+# always included. Add a package here in the same change that links it.

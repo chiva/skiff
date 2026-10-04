@@ -1,0 +1,25 @@
+---
+# bugprone/cert/misc/performance/portability catch real defects; readability is limited to the
+# checks that do not fight the C idioms used here (X-macros, sizeof-based array lengths).
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-macro-parentheses,
+  cert-*,
+  -cert-err33-c,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  misc-*,
+  -misc-include-cleaner,
+  performance-*,
+  portability-*,
+  readability-braces-around-statements,
+  readability-else-after-return,
+  readability-inconsistent-declaration-parameter-name,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-redundant-declaration
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(include|src)/.*'
+FormatStyle: file

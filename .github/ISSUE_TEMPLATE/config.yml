@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/chiva/skiff/security/advisories/new
+    about: Report privately. Never open a public issue for security problems.
+  - name: RomM itself
+    url: https://github.com/rommapp/romm/issues
+    about: Problems with the RomM server, its scanner or its web UI belong upstream.

@@ -53,10 +53,11 @@ jobs:
           name: coverage
           path: build/host-coverage/coverage.xml
 
+  # Builds in the Skiff toolchain image (docker/toolchain.Dockerfile) through scripts/dev.sh, like
+  # local builds. The image compiles mbedtls and curl natively here in about two minutes.
   psp-build:
     name: PSP build (${{ matrix.preset }})
     runs-on: ubuntu-24.04
-    container: pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
     strategy:
       fail-fast: false
       matrix:
@@ -65,17 +66,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Guards against the image tag drifting from the toolchain the docs and AGENTS.md promise.
-      - name: Verify the toolchain version
-        run: psp-gcc --version | head -1 | grep -q ' 15\.' || { psp-gcc --version; exit 1; }
-      - run: cmake --preset ${{ matrix.preset }}
-      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: scripts/dev.sh ${{ matrix.preset }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: eboot-${{ matrix.preset }}
           path: build/${{ matrix.preset }}/pbp/
           if-no-files-found: error
 
+  # The job name is a required status check in the main ruleset; add steps rather than renaming it.
   emulator:
     name: Emulator self-test (PPSSPPHeadless)
     needs: psp-build
@@ -103,7 +101,11 @@ jobs:
       - name: Run the self-test EBOOT
         run: >-
           docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
-          tests/emulator/run_selftest.sh build/psp/pbp/skiff_selftest/EBOOT.PBP
+          tests/emulator/run_eboot.sh build/psp/pbp/skiff_selftest/EBOOT.PBP SELFTEST
+      - name: Run the TLS toolchain probe EBOOT
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
+          tests/emulator/run_eboot.sh build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
 
   commit-lint:
     name: Conventional commit PR title

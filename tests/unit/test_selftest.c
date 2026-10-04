@@ -57,11 +57,71 @@ static void test_null_logger_is_allowed(void) {
     TEST_ASSERT_EQUAL_INT(0, result.failed);
 }
 
+enum { RESULT_PATH_MAX = 128 };
+
+static void assert_result_path(const char *program_path, const char *expected) {
+    char out[RESULT_PATH_MAX];
+    const skiff_err err = skiff_selftest_result_path(program_path, out, sizeof out);
+    TEST_PRINTF("%s -> %s (%s)", program_path, out, skiff_err_name(err));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_ASSERT_EQUAL_STRING(expected, out);
+}
+
+static void test_result_path_sits_next_to_an_eboot_on_the_memory_stick(void) {
+    assert_result_path("ms0:/PSP/GAME/SkiffSelftest/EBOOT.PBP",
+                       "ms0:/PSP/GAME/SkiffSelftest/result.txt");
+}
+
+static void test_result_path_sits_next_to_a_prx_run_over_psplink(void) {
+    assert_result_path("host0:/build/psp/skiff_selftest.prx", "host0:/build/psp/result.txt");
+}
+
+static void test_result_path_keeps_the_root_separator(void) {
+    assert_result_path("ms0:/EBOOT.PBP", "ms0:/result.txt");
+}
+
+static void test_result_path_rejects_a_path_without_a_directory(void) {
+    char out[RESULT_PATH_MAX] = "stale";
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_selftest_result_path("EBOOT.PBP", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+}
+
+static void test_result_path_rejects_null_arguments(void) {
+    char out[RESULT_PATH_MAX] = "stale";
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_selftest_result_path(NULL, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_selftest_result_path("ms0:/EBOOT.PBP", NULL, RESULT_PATH_MAX));
+}
+
+/* "ms0:/" + "result.txt" + NUL is exactly 16 bytes: 16 fits, 15 does not. */
+static void test_result_path_needs_room_for_the_terminator(void) {
+    char out[RESULT_PATH_MAX];
+    const size_t exact = strlen("ms0:/result.txt") + 1;
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_selftest_result_path("ms0:/EBOOT.PBP", out, exact));
+    TEST_ASSERT_EQUAL_STRING("ms0:/result.txt", out);
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_selftest_result_path("ms0:/EBOOT.PBP", out, exact - 1));
+    TEST_ASSERT_EQUAL_STRING("", out);
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_selftest_result_path("ms0:/EBOOT.PBP", out, 0));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_all_checks_pass_on_host);
     RUN_TEST(test_emits_banner_then_one_line_per_check_then_marker);
     RUN_TEST(test_final_line_carries_ok_marker_for_ci_grep);
     RUN_TEST(test_null_logger_is_allowed);
+    RUN_TEST(test_result_path_sits_next_to_an_eboot_on_the_memory_stick);
+    RUN_TEST(test_result_path_sits_next_to_a_prx_run_over_psplink);
+    RUN_TEST(test_result_path_keeps_the_root_separator);
+    RUN_TEST(test_result_path_rejects_a_path_without_a_directory);
+    RUN_TEST(test_result_path_rejects_null_arguments);
+    RUN_TEST(test_result_path_needs_room_for_the_terminator);
     return UNITY_END();
 }

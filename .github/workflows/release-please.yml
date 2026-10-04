@@ -48,20 +48,19 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
-      # Licences are collected inside the toolchain image: psp-create-license-directory reads the
-      # licence files installed alongside each pspdev package.
-      - name: Build the release EBOOT and collect licences
-        run: >-
-          docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src
-          pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
-          bash -c 'cmake --preset psp-release && cmake --build --preset psp-release
-          && scripts/collect-licenses.sh build/psp-release/licenses'
-      - name: Package
+      # The same command as a local release build: the Skiff toolchain image builds the EBOOT and
+      # collects the licences, then scripts/package.sh zips them into dist/.
+      - name: Build and package the release
         id: package
         run: |
-          archive="$(scripts/package.sh build/psp-release/pbp/skiff/EBOOT.PBP \
-            build/psp-release/licenses/third-party-licenses)"
-          echo "archive_name=$(basename "$archive")" >> "$GITHUB_OUTPUT"
+          scripts/dev.sh package
+          shopt -s nullglob
+          archives=(dist/skiff-*.zip)
+          if [[ ${#archives[@]} -ne 1 ]]; then
+            echo "::error::expected exactly one archive in dist/, found ${#archives[@]}"
+            exit 1
+          fi
+          echo "archive_name=$(basename "${archives[0]}")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-archive

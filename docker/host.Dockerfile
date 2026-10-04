@@ -1,6 +1,6 @@
 # Host toolchain for unit tests (gcc and clang), sanitizers, coverage and static analysis. The CI
 # host jobs run scripts/dev.sh, which runs this image, so local and CI results come from the same
-# environment. Not used for PSP builds: those run in the pspdev/pspdev image.
+# environment. Not used for PSP builds: those run in the skiff-toolchain image (toolchain.Dockerfile).
 FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60
 
 ARG DEBIAN_FRONTEND=noninteractive

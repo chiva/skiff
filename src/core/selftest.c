@@ -124,3 +124,25 @@ skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx) {
     emit(log, ctx, line);
     return result;
 }
+
+skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t out_size) {
+    if (out != NULL && out_size > 0) {
+        out[0] = '\0';
+    }
+    if (program_path == NULL || out == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const char *last_separator = strrchr(program_path, '/');
+    if (last_separator == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    /* Keeps the trailing '/', so "ms0:/EBOOT.PBP" becomes "ms0:/result.txt". */
+    const size_t directory_length = (size_t)(last_separator - program_path) + 1;
+    const size_t needed = directory_length + strlen(SKIFF_SELFTEST_RESULT_FILE) + 1;
+    if (needed > out_size) {
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    memcpy(out, program_path, directory_length);
+    memcpy(out + directory_length, SKIFF_SELFTEST_RESULT_FILE, sizeof SKIFF_SELFTEST_RESULT_FILE);
+    return SKIFF_OK;
+}

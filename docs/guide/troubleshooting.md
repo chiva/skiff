@@ -19,12 +19,12 @@ with your PSP model and firmware.
 
 | Code | Meaning | What to try |
 |---|---|---|
-| 100 | Wi-Fi off or no network profile | Flip the Wi-Fi switch on; set up a connection in Network Settings ([guide](03-wifi.md)) |
+| 100 | Wi-Fi off or no network profile | Flip the Wi-Fi switch on; set up a connection in Network Settings ([guide](02-wifi.md)) |
 | 101 | The server name could not be found | Check the address in Settings; try the server's IP address instead of its name |
 | 102 | The server did not answer | Is RomM running? Can the PSP's network reach it? Open the same address on a phone on the same Wi-Fi |
 | 103 | The server took too long | Weak Wi-Fi signal; move closer to the router |
 | 104 | Secure connection failed | The server may require TLS settings the PSP cannot do (TLS 1.3 only). Allow TLS 1.2 on the proxy |
-| 105 | Server certificate not trusted | Self-signed or private CA: set `ca_file` ([guide](06-secure-connections.md#https-with-your-own-certificate-authority)) |
+| 105 | Server certificate not trusted | Self-signed or private CA: set `ca_file` ([guide](05-secure-connections.md#https-with-your-own-certificate-authority)) |
 | 106 | Client certificate rejected | Check `cert_file`/`key_file` names, that the certificate is signed by the CA the proxy trusts, and that it has not expired |
 | 107 | Not enough randomness for a secure connection | Press a few buttons and move the analog stick, then retry. If it persists, report a bug |
 | 108 | The PSP's date and time are wrong | Certificates are only valid between two dates, so the PSP needs the right date to check them. Set it in Settings → System Settings → Date & Time Settings. The date often resets after the battery runs completely flat |
@@ -58,5 +58,5 @@ resort; you will need to pair again.
 | Code | Meaning | What to try |
 |---|---|---|
 | 400 | The file is damaged | Open it on a computer; look for a line without `=` or a missing `]`, or delete it |
-| 401 | A required setting is missing | Add the setting Skiff names (see [Connect to RomM](05-connect-to-romm.md)) |
+| 401 | A required setting is missing | Add the setting Skiff names (see [Connect to RomM](04-connect-to-romm.md)) |
 | 402 | A setting has an invalid value | Fix the value Skiff names, e.g. an address must start with `http://` or `https://` |

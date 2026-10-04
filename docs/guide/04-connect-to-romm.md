@@ -8,7 +8,7 @@
 
 - RomM **5.3 or newer** (shown under your profile → About in the RomM web UI).
 - The PSP must be able to reach the server's address. If RomM is only on your home network, the PSP
-  must be on a network that can reach it (see [Wi-Fi](03-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
+  must be on a network that can reach it (see [Wi-Fi](02-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
 - A RomM user that can see your PSP games. A dedicated user with read access only (plus save
   uploads, once save sync arrives) is the safest choice.
 
@@ -62,6 +62,6 @@ CF-Access-Client-Secret = <secret>
 - **Plain HTTP on your home network** works, but anyone on that Wi-Fi network can see the token.
   Acceptable on a dedicated, isolated network; not recommended otherwise.
 - **HTTPS** is recommended, especially if RomM is reachable from the internet. See
-  [Secure connections](06-secure-connections.md).
+  [Secure connections](05-secure-connections.md).
 
-Next: [Secure connections and mTLS](06-secure-connections.md)
+Next: [Secure connections and mTLS](05-secure-connections.md)

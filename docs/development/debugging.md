@@ -6,7 +6,9 @@ attach `psp-gdb`.
 
 ## What you need
 
-- A PSP running custom firmware (ARK-5) and a USB data cable.
+- A PSP running custom firmware (ARK-5 recommended; PSPLINK works on any CFW) and a USB data cable.
+- pspdev installed natively: Docker cannot pass USB devices through on macOS. To run the hardware
+  tier without installing anything, use the XMB route in [Testing](testing.md#from-the-xmb-no-psplink-nothing-to-install).
 - **Native** pspdev on the computer. Docker on macOS cannot reach USB devices, so the host-side
   tools (`usbhostfs_pc`, `pspsh`, `psp-gdb`) must run outside containers. Download the archive for
   your OS from [pspdev releases](https://github.com/pspdev/pspdev/releases), unpack it, and set:

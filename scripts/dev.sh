@@ -87,11 +87,30 @@ run_host() {
   docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
 }
 
+# The ports are global, so there is one test RomM per Docker host. Its containers record the
+# checkout that started it; empty when none is running.
+romm_owner() {
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1
+}
+
+# Refuses to act on a test RomM another checkout (a parallel worktree) started.
+require_own_romm() {
+  local owner
+  owner="$(romm_owner)"
+  if [[ -n "$owner" && "$owner" != "$(dirname "$COMPOSE_FILE")" ]]; then
+    echo "error: the test RomM running now was started from ${owner%/tests/integration};" \
+      "run scripts/dev.sh romm-down there first" >&2
+    exit 1
+  fi
+}
+
 run_host_in_romm_network() {
-  if ! docker network inspect "$COMPOSE_NETWORK" >/dev/null 2>&1; then
+  if [[ -z "$(romm_owner)" ]]; then
     echo "error: the test RomM is not running; start it with scripts/dev.sh romm-up" >&2
     exit 1
   fi
+  require_own_romm
   ensure_host_image
   docker run --rm --network "$COMPOSE_NETWORK" "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
 }
@@ -124,6 +143,7 @@ romm_up() {
   if [[ -n "$lan_ip" && "${SKIFF_LAN_PLAIN_HTTP:-0}" == 1 ]]; then
     plain_bind_address="$bind_address"
   fi
+  require_own_romm
   mkdir -p "$dir"
   # As the invoking user, so on a Linux host the keys to copy to a PSP are readable by that user.
   ensure_host_image
@@ -161,6 +181,7 @@ EOF
 
 # By project name, so it works even when build/integration/ is gone.
 romm_down() {
+  require_own_romm
   docker compose --progress quiet -p "$COMPOSE_PROJECT" down --volumes --remove-orphans
 }
 
@@ -229,8 +250,10 @@ run_command() {
     run_host scripts/render-icons.sh
     ;;
   clean)
-    # Stop the test RomM first: its secrets live in build/.
-    romm_down
+    # Stop this checkout's test RomM first: its secrets live in build/.
+    if [[ "$(romm_owner)" == "$(dirname "$COMPOSE_FILE")" ]]; then
+      romm_down
+    fi
     rm -rf "$REPO_ROOT/build" "$REPO_ROOT/dist"
     ;;
   help | -h | --help)

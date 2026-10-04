@@ -61,6 +61,9 @@ the PSP's network checks:
 | `scripts/dev.sh romm-check` | Checks what the client relies on (below); ends with `SKIFF INTEGRATION SERVER OK` |
 | `scripts/dev.sh romm-down` | Stops it and deletes its volumes |
 
+There is one test RomM per machine, since the ports are fixed. The commands refuse to touch one
+that another checkout (a parallel worktree) started.
+
 `romm-check` (CI runs it on every PR) checks:
 
 - plain HTTP and HTTPS reach RomM, at the version pinned in `compose.yaml`;

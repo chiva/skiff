@@ -171,7 +171,8 @@ A game and Skiff never run at the same time, so a save is never synced while it 
 ### Transport
 
 The PSP's built-in HTTPS stops at TLS 1.0 and cannot present client certificates, so Skiff
-brings its own TLS stack: libcurl over mbedtls, behind the `transport` interface.
+brings its own TLS stack: libcurl over mbedtls, behind the `transport` interface. Why it differs
+from pspdev's packages is explained in [TLS on the PSP](tls.md).
 
 pspdev's packages are too old to ship: curl 7.64.1 (2019) and mbedtls 2.28, out of support since
 the end of 2024 and TLS 1.2 only. Skiff's toolchain image (`docker/toolchain.Dockerfile`, see
@@ -210,12 +211,14 @@ Sources:
   available at boot, so it is **required**;
 - the microsecond system timer sampled at unpredictable moments (button presses, network events);
 - analog stick noise;
-- a seed file on the Memory Stick, replaced after every successful connection.
+- a seed file on the Memory Stick, read at startup and replaced (from a one-way hash of the pool)
+  before the pool's first use, so a crash can never make the next run reuse it.
 
 The last three are mixed in for later reseeds and as defence in depth; they are not credited enough
 to start TLS on their own. If the pool cannot answer, TLS initialisation fails and the connection
-reports `SKIFF_ERR_NET_ENTROPY`. This is a release blocker for the first networking release. Plain
-HTTP needs no entropy and is unaffected.
+reports `SKIFF_ERR_NET_ENTROPY`. This is a release blocker for the first networking release, and it
+covers plain HTTP too: since curl 7.57, `curl_global_init()` always initialises TLS, so without
+entropy no connection of any kind can be made.
 
 ### The PSP's clock
 

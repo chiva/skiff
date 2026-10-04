@@ -32,7 +32,7 @@ Building natively, without Docker, works too: install pspdev from its
 
 `docker/toolchain.Dockerfile` (`skiff-toolchain`) is pspdev with its TLS libraries replaced. Every PSP
 build uses it: `scripts/dev.sh psp`, CI and the release job. It is built from source each time it
-changes, not pulled from a registry.
+changes, not pulled from a registry. Why it replaces pspdev's TLS packages: [TLS on the PSP](tls.md).
 
 | Library | Version | Why |
 |---|---|---|

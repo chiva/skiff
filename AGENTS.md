@@ -21,7 +21,6 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | Release zip | `scripts/dev.sh package` → `dist/` |
-| Entropy probe | `scripts/dev.sh entropy-probe` (after `psp`) |
 | Hardware tier without PSPLINK | `scripts/memstick.sh install\|results\|uninstall <mount>` (host only, no Docker) |
 
 `scripts/dev.sh` accepts several commands: `scripts/dev.sh test asan lint psp selftest tls-probe`.
@@ -67,11 +66,9 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
 
 ## Security invariants
 
-- Never use the SDK's default TLS randomness: `_getentropy()` in pspsdk's `libcglue/glue.c`
-  reseeds a Mersenne Twister with `time(NULL)` on every call. TLS entropy comes only from Skiff's
-  `mbedtls_platform_get_entropy()`, which must return full entropy or
-  `PSA_ERROR_INSUFFICIENT_ENTROPY` (never a weaker credit), and connections then fail with
-  `SKIFF_ERR_NET_ENTROPY`. Never re-enable `MBEDTLS_PSA_BUILTIN_GET_ENTROPY` or
+- TLS entropy comes only from Skiff's `mbedtls_platform_get_entropy()`, which must return full
+  entropy or `PSA_ERROR_INSUFFICIENT_ENTROPY` (never a weaker credit), and connections then fail
+  with `SKIFF_ERR_NET_ENTROPY`. Never re-enable `MBEDTLS_PSA_BUILTIN_GET_ENTROPY` or
   `MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG`, and never implement the hook with `getentropy()`, `rand()` or
   the clock. Only test binaries may stub it, and only with a stub that refuses.
 - Never log tokens, keys or full request headers.

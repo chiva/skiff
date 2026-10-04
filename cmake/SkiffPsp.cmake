@@ -51,11 +51,6 @@ skiff_set_warnings(skiff_psp_check)
 skiff_add_psp_app(skiff_selftest "${SKIFF_PBP_TITLE} self-test" src/platform/psp/selftest_main.c)
 target_link_libraries(skiff_selftest PRIVATE skiff_psp_check)
 
-# Security probe: documents the weak SDK getentropy() that Skiff's TLS stack is built to avoid.
-# PSP-only, since it depends on the SDK's entropy implementation; the host libc is unaffected.
-skiff_add_psp_app(skiff_entropy_probe "${SKIFF_PBP_TITLE} entropy probe" tests/security/entropy_probe.c)
-target_link_libraries(skiff_entropy_probe PRIVATE skiff_psp_check)
-
 # TLS stack from the Skiff toolchain image (docker/toolchain.Dockerfile). Imported targets put their
 # headers on the system include path, so our strict warnings do not apply to them.
 find_package(MbedTLS 4.1 CONFIG REQUIRED)

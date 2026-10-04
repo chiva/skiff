@@ -34,8 +34,8 @@ Out of scope:
 
 ## Known limitation: randomness on the PSP
 
-The PSP SDK's default random source for TLS is predictable: it reseeds a Mersenne Twister with the
-current second on every call. Networking is not released yet; when it is, Skiff must supply its own entropy
-source before any connection is made and refuse to connect if it cannot gather enough
-(`SKIFF_ERR_NET_ENTROPY`). This is a release blocker, not an option, and any finding that bypasses it
-is a high-severity report. See [architecture](docs/development/architecture.md#randomness-for-tls).
+The PSP has no entropy source Mbed TLS can use, so Skiff supplies its own and is built so TLS cannot
+take randomness from anywhere else. Networking is not released yet; when it is, Skiff must refuse to
+connect if it cannot gather enough entropy (`SKIFF_ERR_NET_ENTROPY`). This is a release blocker, not
+an option, and any finding that bypasses it is a high-severity report. See
+[architecture](docs/development/architecture.md#randomness-for-tls).

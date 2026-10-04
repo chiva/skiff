@@ -4,7 +4,7 @@
  *
  *   1. libcurl is built against Mbed TLS 4.1 and speaks HTTP and HTTPS only;
  *   2. every random byte TLS needs comes from mbedtls_platform_get_entropy(), the hook Skiff
- *      implements, and from nothing else (in particular not the SDK's time-seeded getentropy()).
+ *      implements, and from nothing else.
  *
  * For (2) this probe supplies an entropy callback that REFUSES every request and counts the calls.
  * If anything other than Skiff's hook could seed TLS, PSA and curl would initialise anyway. They

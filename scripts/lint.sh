@@ -8,13 +8,22 @@ set -euo pipefail
 
 readonly BUILD_DIR="${1:?usage: scripts/lint.sh <build-dir>}"
 
+# A command substitution rather than a process substitution, so a failing git aborts under set -e
+# instead of silently yielding an empty list.
+tracked="$(git ls-files 'src/*.c' 'tests/*.c')"
+
 sources=()
 while IFS= read -r file; do
   if grep -qE '^\s*#\s*include\s*<psp' "$file"; then
     continue
   fi
   sources+=("$file")
-done < <(git ls-files 'src/*.c' 'tests/*.c')
+done <<<"$tracked"
+
+if [[ ${#sources[@]} -eq 0 || -z "${sources[0]}" ]]; then
+  echo "error: no first-party C sources found to lint" >&2
+  exit 1
+fi
 
 echo "clang-tidy: ${#sources[@]} files"
 clang-tidy --quiet -p "$BUILD_DIR" "${sources[@]}"

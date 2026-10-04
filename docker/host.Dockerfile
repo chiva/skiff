@@ -10,4 +10,8 @@ RUN apt-get update \
       ninja-build \
  && rm -rf /var/lib/apt/lists/*
 
+# The checkout is bind-mounted and owned by the host user, not the container's root. On Linux hosts
+# (CI) git then refuses to read it ("dubious ownership"); Docker Desktop hides this by remapping.
+RUN git config --system --add safe.directory /src
+
 WORKDIR /src

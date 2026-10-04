@@ -9,6 +9,12 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(unity)
 # Enables TEST_PRINTF, which the tests use to narrate what they are checking.
 target_compile_definitions(unity PUBLIC UNITY_INCLUDE_PRINT_FORMATTED)
+# Consume Unity's header as a system include so our -Wpedantic -Werror does not fail on its use of
+# GNU extensions (e.g. clang's -Wgnu-zero-variadic-macro-arguments in UNITY_PRINT_EOL). Only our own
+# code is held to the strict warning set.
+get_target_property(unity_include_dirs unity INTERFACE_INCLUDE_DIRECTORIES)
+set_target_properties(unity PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                                       "${unity_include_dirs}")
 
 function(skiff_add_unit_test name)
   add_executable(${name} unit/${name}.c)

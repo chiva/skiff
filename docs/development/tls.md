@@ -71,11 +71,11 @@ declares and **Skiff implements**:
 
 ```mermaid
 flowchart LR
-    kirk["KIRK hardware RNG<br/>(required)"] --> pool
-    extra["timer jitter, input timing,<br/>seed file<br/>(mixed in, not counted)"] --> pool
-    pool["mbedtls_platform_get_entropy()<br/>Skiff's entropy pool"] -->|"seeds at psa_crypto_init(),<br/>reseeds periodically"| drbg["PSA random generator"]
+    kirk["KIRK hardware RNG<br/>via ARK's sctrlKernelRand()"] --> health["health test<br/>(repetition count)"]
+    health --> hook["mbedtls_platform_get_entropy()<br/>Skiff's hook"]
+    hook -->|"seeds at psa_crypto_init(),<br/>reseeds periodically"| drbg["PSA random generator"]
     drbg -->|"psa_generate_random()"| curl["libcurl 8.22"]
-    pool -. "cannot answer" .-> fail["TLS refuses to start<br/>SKIFF_ERR_NET_ENTROPY"]
+    hook -. "no ARK, or health failure" .-> fail["TLS refuses to start<br/>SKIFF_ERR_NET_ENTROPY"]
 ```
 
 - There is no fallback: nothing in Skiff's mbedtls calls `getentropy()` or reads a clock for
@@ -84,10 +84,9 @@ flowchart LR
 - `tests/security/tls_probe.c` checks the routing in CI and on hardware: with a hook that refuses
   every request, both `psa_crypto_init()` and `curl_global_init()` must fail after calling it.
 
-Behind that function, Skiff's pool requires the KIRK crypto engine's hardware random generator,
-mixes in weaker sources without counting them, and refuses rather than over-claims. See
-[Architecture](architecture.md#randomness-for-tls) for the pool's design and constraints. The pool
-is the next part of Phase 1 ([Roadmap](roadmap.md)); until it exists, Skiff's TLS refuses to start.
+Behind that function, Skiff reads the KIRK crypto engine's hardware random generator through ARK,
+checks it with a health test, and refuses rather than over-claims or falls back. See
+[Architecture](architecture.md#randomness-for-tls) for the design and its constraints.
 
 ### A smaller library
 
@@ -109,9 +108,9 @@ its maintainer's signature whenever a version changes. The pspdev base image is 
 
 - **An extra image build.** The first local build compiles mbedtls and curl (minutes under
   emulation on Apple Silicon); CI builds it natively in about two minutes.
-- **Networking needs the entropy pool, even for plain HTTP.** Since curl 7.57,
+- **Networking needs the entropy source, even for plain HTTP.** Since curl 7.57,
   `curl_global_init()` always initialises TLS, which in Mbed TLS 4 means `psa_crypto_init()`. If the
-  pool cannot answer, no connection of any kind can be made.
-- **Custom firmware with ARK's kernel bridge is required.** Reading KIRK needs kernel mode; Skiff
-  loads its own small kernel module through ARK, with nothing for the player to install. Skiff needs
-  custom firmware to run at all, so this adds no step for players.
+  source cannot answer, no connection of any kind can be made.
+- **ARK custom firmware is required for networking.** Reading KIRK needs kernel mode, which ARK-4
+  and ARK-5 provide through `sctrlKernelRand()`, with nothing for the player to install. On other
+  custom firmware Skiff runs, but its networking refuses to start.

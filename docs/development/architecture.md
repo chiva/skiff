@@ -23,14 +23,14 @@
   │ jobs/    download/sync worker thread, job queue, persistence │
   │ romm/    typed RomM API client      saves/  SAVEDATA archives│
   ├──────────────────────────────────────────────────────────────┤
-  │ net/     transport interface, TLS config, entropy pool       │
+  │ net/     transport interface, TLS config, entropy source     │
   │ storage/ logical roots, atomic writes, free space, manifest  │
   │ config/  config.ini, schema migrations                       │
   │ i18n/    message catalogues        log/  redacted log file   │
   ├──────────────────────────────────────────────────────────────┤
   │ core/    errors, version, self-test                          │
   ├──────────────────────────────────────────────────────────────┤
-  │ platform/psp  sce* calls, kprx/ │ platform/host  test doubles │
+  │ platform/psp  sce*, ARK calls   │ platform/host  test doubles │
   └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,29 +196,30 @@ seeded from one function Skiff supplies, `mbedtls_platform_get_entropy()`. An EB
 mbedtls without it fails to link, so TLS cannot end up seeded from anything else.
 `tests/security/tls_probe.c` verifies the routing on every PR.
 
-Two constraints from Mbed TLS shape Skiff's pool:
+Two constraints from Mbed TLS shape Skiff's source:
 
 - **Full entropy per call.** TF-PSA-Crypto 1.x only accepts output credited at 8 bits per byte; less
-  counts as failure. The pool conditions its inputs (hashes them) and credits sources conservatively,
-  and returns `PSA_ERROR_INSUFFICIENT_ENTROPY` rather than over-claiming.
+  counts as failure. Skiff returns `PSA_ERROR_INSUFFICIENT_ENTROPY` rather than over-claiming.
 - **Ready at startup.** libcurl calls `psa_crypto_init()` inside `curl_global_init()`, which seeds
-  the DRBG there and then. The pool must be able to answer before the user has touched anything.
+  the DRBG there and then. The source must be able to answer before the user has touched anything.
 
-Sources:
+The source is the KIRK crypto engine's hardware random generator. Only kernel mode can reach it, but
+ARK-4 and ARK-5 export `sctrlKernelRand()` to applications (it runs KIRK's random command in kernel
+mode), so Skiff needs no kernel module of its own. `src/platform/psp/kirk_entropy.c` passes KIRK's
+32-bit words to Mbed TLS unmodified (Mbed TLS's random generator conditions its seed itself), behind
+the health test in `src/net/entropy.c`: the SP 800-90B repetition count test, which turns TLS off
+for the session if the generator repeats a word.
 
-- the KIRK crypto engine's hardware random generator, read by a small kernel-mode module
-  (`platform/psp/kprx/`) that the app loads through ARK's kernel bridge. It is the only source
-  available at boot, so it is **required**;
-- the microsecond system timer sampled at unpredictable moments (button presses, network events);
-- analog stick noise;
-- a seed file on the Memory Stick, read at startup and replaced (from a one-way hash of the pool)
-  before the pool's first use, so a crash can never make the next run reuse it.
+There is no fallback. Without ARK, or after a health failure, the hook refuses, TLS initialisation
+fails and the connection reports `SKIFF_ERR_NET_ENTROPY`; the KIRK probe checks this in CI, where
+PPSSPP has no ARK. Skiff does not fall back to the toolchain's default source, which derives its
+output from the clock ([TLS](tls.md#what-pspdev-provides)). The refusal covers plain HTTP too: since
+curl 7.57, `curl_global_init()` always initialises TLS, so without entropy no connection of any kind
+can be made.
 
-The last three are mixed in for later reseeds and as defence in depth; they are not credited enough
-to start TLS on their own. If the pool cannot answer, TLS initialisation fails and the connection
-reports `SKIFF_ERR_NET_ENTROPY`. This is a release blocker for the first networking release, and it
-covers plain HTTP too: since curl 7.57, `curl_global_init()` always initialises TLS, so without
-entropy no connection of any kind can be made.
+Whether KIRK alone is enough depends on one measurement: that its sequence differs after every power
+cycle. The [KIRK probe](testing.md#kirk-probe) records it on hardware. If it does not, Skiff adds what
+the data calls for (a seed file, or timer and input samples mixed in), not before.
 
 ### The PSP's clock
 

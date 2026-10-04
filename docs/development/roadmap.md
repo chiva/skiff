@@ -16,9 +16,10 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
 - **Toolchain image** ✅: `pspdev/pspdev` plus curl 8.22 and Mbed TLS 4.1 LTS, built from verified
   archives (`docker/toolchain.Dockerfile`); TLS entropy routed only through Skiff's hook, checked by
   the TLS probe in CI.
-- **Entropy**: kernel module reading the KIRK hardware generator, loaded through ARK; the pool
-  behind `mbedtls_platform_get_entropy()` (release blocker). Must answer at startup with full
-  entropy, see [Architecture](architecture.md#randomness-for-tls).
+- **Entropy**: the KIRK hardware generator through ARK's `sctrlKernelRand()`, behind
+  `mbedtls_platform_get_entropy()` with a health test (release blocker). Must answer at startup
+  with full entropy, see [Architecture](architecture.md#randomness-for-tls). Pending: the KIRK
+  probe's power-cycle run on hardware decides whether anything must be mixed in.
 - **Network**: join a WPA/TKIP 2.4 GHz network through `sceUtilityNetconf`; HTTPS to RomM.
 - **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard.
 - **Measure**:

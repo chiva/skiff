@@ -106,6 +106,11 @@ jobs:
         run: >-
           docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
           tests/emulator/run_eboot.sh build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
+      # PPSSPP has no ARK, so the KIRK probe checks that Skiff's real entropy hook refuses there.
+      - name: Run the KIRK probe EBOOT (no ARK, TLS must refuse)
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
+          tests/emulator/run_eboot.sh build/psp/pbp/skiff_kirk_probe/EBOOT.PBP "KIRK PROBE NO ARK"
 
   commit-lint:
     name: Conventional commit PR title

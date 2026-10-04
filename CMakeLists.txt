@@ -22,7 +22,8 @@ configure_file(src/core/version_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generat
                @ONLY)
 
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
-add_library(skiff_core STATIC src/core/error.c src/core/selftest.c src/core/version.c)
+add_library(skiff_core STATIC src/core/error.c src/core/selftest.c src/core/version.c
+                              src/net/entropy.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

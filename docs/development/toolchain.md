@@ -59,7 +59,7 @@ that links Mbed TLS must provide both or it does not link:
 
 | Function | Provided by | Purpose |
 |---|---|---|
-| `mbedtls_platform_get_entropy()` | Skiff's entropy pool (Phase 1) | the only seed for all TLS randomness; see [Architecture](architecture.md#randomness-for-tls) |
+| `mbedtls_platform_get_entropy()` | `src/platform/psp/kirk_entropy.c` (KIRK through ARK) | the only seed for all TLS randomness; see [Architecture](architecture.md#randomness-for-tls) |
 | `mbedtls_ms_time()` | `src/platform/psp/mbedtls_time.c` | monotonic milliseconds for TLS 1.3 ticket ages |
 
 **Bumping a version.** Renovate opens a "TLS libraries" PR that fails the image's `sha256sum -c`

@@ -187,25 +187,13 @@ Connections are kept alive to pay the handshake once per session.
 
 ### Randomness for TLS
 
-Verified in the SDK source (`pspsdk/src/libcglue/glue.c`, `_getentropy`): every call seeds a fresh
-Mersenne Twister with `time(NULL)`, so its output is a function of the current second. Since
-pspdev's mbedtls 2.28.10 package (April 2026), mbedtls's platform entropy source calls it; before
-that the package had no platform source at all.
-
-mbedtls also mixes in its "hardclock" source, but on MIPS that falls back to microseconds elapsed
-since its first call in the process: about zero for the first connection, and the gap between
-connections (visible in a packet capture) for later ones. That adds roughly 10–20 bits. Each guess
-is checked against the client random sent in clear in the ClientHello, so recovering the DRBG
-state, the ECDHE key and the session keys from a captured session is cheap. This is a code
-analysis, confirmed by a determinism probe (`tests/security/entropy_probe.c`): `getentropy()`
-returns identical bytes when called twice within one second. Skiff's own pool must break that.
-
-Mbed TLS 4.x makes this structural. The toolchain image compiles out the built-in entropy source
-(`MBEDTLS_PSA_BUILTIN_GET_ENTROPY`, which refuses non-Unix targets anyway) and enables
-`MBEDTLS_PSA_DRIVER_GET_ENTROPY`: every random byte TLS uses, including inside libcurl, is seeded
-from one function Skiff supplies, `mbedtls_platform_get_entropy()`. An EBOOT that links mbedtls
-without it fails to link, so a build that silently falls back to the SDK's `getentropy()` cannot
-exist. `tests/security/tls_probe.c` verifies the routing on every PR.
+TLS is only as strong as its random numbers: they make the ECDHE keys and session keys. Mbed TLS's
+built-in entropy sources only support Unix and Windows, so on the PSP the application must supply
+one. The toolchain image compiles the built-in source out (`MBEDTLS_PSA_BUILTIN_GET_ENTROPY`) and
+enables `MBEDTLS_PSA_DRIVER_GET_ENTROPY`: every random byte TLS uses, including inside libcurl, is
+seeded from one function Skiff supplies, `mbedtls_platform_get_entropy()`. An EBOOT that links
+mbedtls without it fails to link, so TLS cannot end up seeded from anything else.
+`tests/security/tls_probe.c` verifies the routing on every PR.
 
 Two constraints from Mbed TLS shape Skiff's pool:
 

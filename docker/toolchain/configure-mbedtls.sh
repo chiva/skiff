@@ -9,9 +9,9 @@ set -eu
 cd "${1:?usage: configure-mbedtls.sh <mbedtls-source-dir>}"
 config() { python3 scripts/config.py "$@"; }
 
-# Entropy (release blocker, see docs/development/architecture.md "Randomness for TLS"). The PSP has
-# no built-in source mbedtls trusts, and the SDK's getentropy() is time(NULL)-seeded. Skiff supplies
-# mbedtls_platform_get_entropy(); any EBOOT that links mbedtls without it fails to link.
+# Entropy (release blocker, see docs/development/architecture.md "Randomness for TLS"). mbedtls's
+# built-in sources only support Unix and Windows. Skiff supplies mbedtls_platform_get_entropy(); any
+# EBOOT that links mbedtls without it fails to link.
 config unset MBEDTLS_PSA_BUILTIN_GET_ENTROPY
 config set MBEDTLS_PSA_DRIVER_GET_ENTROPY
 

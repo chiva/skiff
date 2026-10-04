@@ -27,7 +27,6 @@ Commands run in the order given and stop at the first failure.
   lint         clang-tidy and cppcheck over first-party sources
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
   tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
-  entropy-probe Run the getentropy determinism probe in PPSSPPHeadless (needs `psp` first)
   clean        Remove build/ and dist/
 EOF
 }
@@ -104,11 +103,6 @@ run_command() {
     ;;
   tls-probe)
     run_emulator build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
-    ;;
-  entropy-probe)
-    ensure_ppsspp_image
-    docker run --rm -v "$REPO_ROOT":/src -w /src "$PPSSPP_IMAGE" \
-      tests/security/run_entropy_probe.sh build/psp/pbp/skiff_entropy_probe/EBOOT.PBP
     ;;
   clean)
     rm -rf "$REPO_ROOT/build" "$REPO_ROOT/dist"

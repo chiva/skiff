@@ -18,14 +18,14 @@
   "minimumReleaseAge": "3 days",
   "customManagers": [
     {
-      "description": "The pspdev toolchain image is referenced as a plain string in scripts and workflows, where the docker managers cannot see it. One regex keeps every occurrence on the same monthly release.",
+      "description": "The pspdev toolchain image is referenced as a plain string in scripts and workflows, where the docker managers cannot see it. One regex keeps every occurrence on the same monthly release, and bumps the tag and its digest together.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/dev\\.sh$/",
         "/^\\.github/workflows/.+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "pspdev/pspdev:(?<currentValue>v\\d{8})"
+        "pspdev/pspdev:(?<currentValue>v\\d{8})@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
       "depNameTemplate": "pspdev/pspdev",
       "datasourceTemplate": "docker",

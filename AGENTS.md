@@ -13,8 +13,8 @@ All builds and checks run in containers. Docker is the only prerequisite.
 
 | Task | Command |
 |---|---|
-| Host unit tests | `scripts/dev.sh test` |
-| ASan + UBSan | `scripts/dev.sh asan` |
+| Host unit tests (gcc + clang) | `scripts/dev.sh test` → `build/host-{gcc,clang}/` |
+| ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
 | PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest}/EBOOT.PBP` |
@@ -22,7 +22,9 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Entropy probe | `scripts/dev.sh entropy-probe` (after `psp`) |
 
-`scripts/dev.sh` accepts several commands: `scripts/dev.sh test asan lint psp selftest`.
+`scripts/dev.sh` accepts several commands: `scripts/dev.sh test asan lint psp selftest`. CI's host
+jobs run these same commands, so the compiler matrix lives only in `HOST_COMPILERS` in `dev.sh`.
+The pspdev image is pinned as `tag@digest`; change both together (Renovate does).
 
 ## Layout rules
 

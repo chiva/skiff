@@ -14,9 +14,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  COVERAGE_FLOOR: "85"
-
 jobs:
   hygiene:
     name: Hygiene (pre-commit)
@@ -30,70 +27,36 @@ jobs:
       # checked by the commit-lint job instead.
       - run: pipx run pre-commit==4.6.2 run --all-files --show-diff-on-failure
 
-  host-tests:
-    name: Host tests (${{ matrix.compiler }}, ${{ matrix.preset }})
+  # The same scripts/dev.sh commands developers run, in the same docker/host.Dockerfile image, so a
+  # green local run means a green job. The compiler matrix (gcc, clang) and the coverage floor live
+  # in scripts/dev.sh; the compiler check in scripts/host-tests.sh fails a run whose CMake picked
+  # the wrong compiler.
+  host:
+    name: Host ${{ matrix.check.name }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
-        preset: [host, host-asan]
-    env:
-      CC: ${{ matrix.compiler }}
+        check:
+          - { command: test, name: "tests (gcc, clang)" }
+          - { command: asan, name: "tests under ASan + UBSan (gcc, clang)" }
+          - { command: coverage, name: "coverage (≥85% lines)" }
+          - { command: lint, name: "static analysis (clang-tidy, cppcheck)" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Prove the leg really builds with the compiler it is named after, so a runner image change
-      # cannot silently turn the clang leg into a second gcc run.
-      - name: Verify the compiler matches the matrix leg
-        run: |
-          cmake --preset ${{ matrix.preset }} > configure.log
-          if ! grep -qi "The C compiler identification is ${{ matrix.compiler == 'gcc' && 'GNU' || 'Clang' }}" configure.log; then
-            cat configure.log
-            echo "::error::matrix leg claims ${{ matrix.compiler }} but CMake picked another compiler"
-            exit 1
-          fi
-      - run: cmake --build --preset ${{ matrix.preset }}
-      - run: ctest --preset ${{ matrix.preset }}
-
-  coverage:
-    name: Coverage (≥85% lines)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - run: sudo apt-get install -y --no-install-recommends gcovr
-      - run: cmake --preset host-coverage
-      - run: cmake --build --preset host-coverage
-      - run: ctest --preset host-coverage
-      # PSP platform glue cannot run on the host; it is exercised by the emulator job instead.
-      - name: Enforce the coverage floor
-        run: >-
-          gcovr --root . --filter src/ --exclude src/platform/
-          --fail-under-line "$COVERAGE_FLOOR" --print-summary --txt --xml coverage.xml
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - run: scripts/dev.sh ${{ matrix.check.command }}
+      - if: matrix.check.command == 'coverage'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage
-          path: coverage.xml
-
-  lint:
-    name: Static analysis (clang-tidy, cppcheck)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - run: sudo apt-get install -y --no-install-recommends clang-tidy cppcheck
-      # Configure only: clang-tidy needs compile_commands.json and the generated headers.
-      - run: cmake --preset host
-      - run: scripts/lint.sh build/host
+          path: build/host-coverage/coverage.xml
 
   psp-build:
     name: PSP build (${{ matrix.preset }})
     runs-on: ubuntu-24.04
-    container: pspdev/pspdev:v20261001
+    container: pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
     strategy:
       fail-fast: false
       matrix:

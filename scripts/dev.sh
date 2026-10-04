@@ -5,10 +5,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
-readonly PSPDEV_IMAGE="pspdev/pspdev:v20261001"
+readonly PSPDEV_IMAGE="pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f"
 readonly HOST_IMAGE="skiff-host"
 readonly PPSSPP_IMAGE="skiff-ppsspp"
 readonly COVERAGE_FLOOR=85
+# CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
+readonly HOST_COMPILERS=(gcc clang)
 
 usage() {
   cat <<'EOF'
@@ -19,8 +21,8 @@ Commands run in the order given and stop at the first failure.
   psp          Build the debug EBOOTs        -> build/psp/pbp/
   psp-release  Build the release EBOOTs      -> build/psp-release/pbp/
   package      Build release and zip it      -> dist/skiff-<version>.zip
-  test         Host unit tests
-  asan         Host unit tests under ASan + UBSan
+  test         Host unit tests, gcc and clang  -> build/host-{gcc,clang}/
+  asan         Host unit tests under ASan + UBSan, gcc and clang
   coverage     Host unit tests with coverage (fails under 85% line coverage)
   lint         clang-tidy and cppcheck over first-party sources
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
@@ -48,8 +50,10 @@ run_host() {
 }
 
 host_tests() {
-  local preset="$1"
-  run_host "cmake --preset $preset >/dev/null && cmake --build --preset $preset && ctest --preset $preset"
+  local preset="$1" compiler
+  for compiler in "${HOST_COMPILERS[@]}"; do
+    run_host "scripts/host-tests.sh $preset $compiler"
+  done
 }
 
 run_command() {
@@ -71,8 +75,10 @@ run_command() {
     host_tests host-asan
     ;;
   coverage)
-    host_tests host-coverage
-    run_host "gcovr --root . --filter src/ --exclude src/platform/ --fail-under-line $COVERAGE_FLOOR --print-summary --txt"
+    run_host "cmake --preset host-coverage >/dev/null && cmake --build --preset host-coverage \
+      && ctest --preset host-coverage"
+    run_host "gcovr --root . --filter src/ --exclude src/platform/ --fail-under-line $COVERAGE_FLOOR \
+      --print-summary --txt --xml build/host-coverage/coverage.xml"
     ;;
   lint)
     run_host "cmake --preset host >/dev/null && scripts/lint.sh build/host"

@@ -12,8 +12,9 @@ Docker is the only requirement. `scripts/dev.sh help` lists every command.
 
 ## PSP: pspdev
 
-- Image: `pspdev/pspdev:v20261001` (GCC 15.2, newlib 4.5, CMake 4.2). Monthly tags; Renovate
-  proposes updates in a dedicated PR so the hardware tier can be run before merging.
+- Image: `pspdev/pspdev:v20261001` (GCC 15.2, newlib 4.5, CMake 4.2), pinned by digest everywhere
+  it is used so a re-pushed tag cannot change what we build or release with. Monthly tags; Renovate
+  proposes tag and digest together in a dedicated PR so the hardware tier can be run before merging.
 - **amd64 only.** On Apple Silicon Docker runs it under emulation: slower, but the output is
   identical.
 - CMake uses pspdev's toolchain file (`$PSPDEV/psp/share/pspdev.cmake`) through the `psp` and
@@ -26,9 +27,11 @@ Building natively, without Docker, works too: install pspdev from its
 
 ## Host
 
-`docker/host.Dockerfile` (Ubuntu 24.04 with cmake, gcc, clang-tidy, cppcheck, gcovr) matches the CI
-runners. Natively on macOS: `brew install cmake` and use Apple clang with the `host` and `host-asan`
-presets.
+`docker/host.Dockerfile` (Ubuntu 24.04 with cmake, gcc, clang, clang-tidy, cppcheck, gcovr) is the
+only host environment: CI's host jobs run `scripts/dev.sh` too. `test` and `asan` build every
+preset with each compiler in `HOST_COMPILERS` (gcc and clang) into `build/<preset>-<compiler>/`,
+because clang flags warnings gcc does not and `-Werror` makes them fatal. Natively on macOS:
+`brew install cmake` and use Apple clang with the `host` and `host-asan` presets.
 
 ## Presets
 
@@ -46,7 +49,7 @@ All presets build with `-Werror` and a strict warning set (`cmake/SkiffWarnings.
 
 | Dependency | Where | Pinned by |
 |---|---|---|
-| pspdev toolchain | Docker image | tag, Renovate |
+| pspdev toolchain | Docker image | tag + digest, Renovate |
 | Unity (C test framework) | `tests/CMakeLists.txt` FetchContent | commit, Renovate |
 | PPSSPP (emulator tests) | `docker/ppsspp.Dockerfile` | commit, Renovate |
 | GitHub Actions | workflows | commit SHA, Renovate |

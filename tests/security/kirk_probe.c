@@ -181,11 +181,12 @@ static int check_skiff_entropy(skiff_psp_report *report, stack_timing *timing) {
     unsigned char second[PROBE_RANDOM_DRAW_BYTES];
     const psa_status_t first_status = psa_generate_random(first, sizeof first);
     const psa_status_t second_status = psa_generate_random(second, sizeof second);
-    const int draws_ok = first_status == PSA_SUCCESS && second_status == PSA_SUCCESS &&
-                         memcmp(first, second, sizeof first) != 0;
+    const int both_drawn = first_status == PSA_SUCCESS && second_status == PSA_SUCCESS;
+    /* Buffers are only defined after a successful draw. */
+    const int draws_ok = both_drawn && memcmp(first, second, sizeof first) != 0;
     snprintf(line, sizeof line, "%s psa_generate_random() x2 = %d, %d, draws differ: %s",
              draws_ok ? "ok  " : "FAIL", (int)first_status, (int)second_status,
-             memcmp(first, second, sizeof first) != 0 ? "yes" : "no");
+             both_drawn ? (draws_ok ? "yes" : "no") : "n/a");
     skiff_psp_report_line(report, line);
 
     start_us = sceKernelGetSystemTimeWide();
@@ -310,13 +311,12 @@ static int append_fingerprint(skiff_psp_report *report, const char *program_path
         skiff_psp_report_line(report, "FAIL fingerprint log: could not open " PROBE_LOG_FILE);
         return 0;
     }
-    const int written =
-        fprintf(log,
-                "uptime_us=%lld first=%08x %08x %08x %08x kirk_total_us=%lld kirk_max_us=%lld "
-                "baseline_total_us=%lld baseline_max_us=%lld psa_init_us=%lld curl_init_us=%lld\n",
-                uptime_us, samples[0], samples[1], samples[2], samples[3], kirk->total_us,
-                kirk->max_us, baseline->total_us, baseline->max_us, stack->psa_init_us,
-                stack->curl_init_us);
+    const int written = fprintf(
+        log,
+        "uptime_us=%lld first=%08x %08x %08x %08x kirk_total_us=%lld kirk_max_us=%lld "
+        "baseline_total_us=%lld baseline_max_us=%lld psa_init_us=%lld curl_init_us=%lld\n",
+        uptime_us, samples[0], samples[1], samples[2], samples[3], kirk->total_us, kirk->max_us,
+        baseline->total_us, baseline->max_us, stack->psa_init_us, stack->curl_init_us);
     const int closed = fclose(log);
     if (written < 0 || closed != 0) {
         skiff_psp_report_line(report, "FAIL fingerprint log: write to " PROBE_LOG_FILE " failed");

@@ -91,9 +91,10 @@ so CI only builds it. Per run it reports how long a 128-byte gather (one Mbed TL
 default source) as a baseline, and 1024 values checked for repeats, bit balance and byte
 distribution (`SKIFF KIRK PROBE OK`/`FAIL`; the baseline is timed only, but a baseline failure or
 an unwritten log fails the run). It appends a fingerprint line (uptime, the first KIRK values in
-`first=`, and both timings) to `kirk-log.txt`. Run it several times, power-cycling the PSP in
-between, and compare only the `first=` values: identical values across boots would mean KIRK
-restarts the same sequence after every power-on (uptime and timings differ regardless).
+`first=`, and both timings) to `kirk-log.txt`, after comparing its `first=` values with every
+earlier run in that file: a match fails the run, since it would mean KIRK produced the same sequence
+twice, e.g. restarting it after every power-on. Run it several times, power-cycling the PSP in
+between; a single run has nothing to compare against.
 `scripts/memstick.sh results` prints both files.
 
 ## Test data rules

@@ -8,8 +8,9 @@
  *   - the same timing for the baseline, the C library's getentropy(), the toolchain's default
  *     entropy source, so the cost of switching to KIRK is a ratio rather than a bare number;
  *   - whether 1024 consecutive values look random (no repeats, balanced bits, flat byte histogram);
- *   - whether the sequence repeats across power cycles, by appending a per-run fingerprint to
- *     kirk-log.txt next to the EBOOT. Run it several times, rebooting in between, and compare.
+ *   - whether the sequence repeats across runs and power cycles: each run compares its first values
+ *     with every earlier run recorded in kirk-log.txt next to the EBOOT, fails on a match, then
+ *     appends its own. Run it several times, rebooting in between; one run alone proves nothing.
  *
  * Hardware only: PPSSPP has no ARK custom firmware. The in-run checks catch gross failures only;
  * passing them does not prove the generator is strong.
@@ -18,6 +19,7 @@
 #include <pspthreadman.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "skiff/selftest.h"
@@ -40,6 +42,8 @@ enum {
     PROBE_BITS_PER_WORD = 32,
     PROBE_BYTES_PER_WORD = 4,
     PROBE_PATH_MAX = 256,
+    /* Longer than a fingerprint line, so fgets() reads one whole line at a time. */
+    PROBE_LOG_LINE_MAX = 320,
 };
 
 /*
@@ -166,6 +170,43 @@ static double byte_chi_squared(void) {
     return chi2;
 }
 
+/*
+ * Compares this run's first values with every earlier run in the log. A match means KIRK produced
+ * the same sequence twice, e.g. restarting it after a power cycle: the failure that would make it
+ * unfit as the only TLS seed. Lines without a parsable first= field are skipped.
+ */
+static int differs_from_earlier_runs(skiff_psp_report *report, const char *program_path) {
+    char path[PROBE_PATH_MAX];
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    if (skiff_selftest_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
+        skiff_psp_report_line(report, "FAIL earlier runs: no EBOOT path to find " PROBE_LOG_FILE);
+        return 0;
+    }
+    unsigned earlier_runs = 0;
+    unsigned matches = 0;
+    FILE *log = fopen(path, "r");
+    if (log != NULL) {
+        char entry[PROBE_LOG_LINE_MAX];
+        while (fgets(entry, sizeof entry, log) != NULL) {
+            const char *first = strstr(entry, "first=");
+            unsigned int recorded[PROBE_FINGERPRINT_WORDS];
+            if (first == NULL || sscanf(first, "first=%x %x %x %x", &recorded[0], &recorded[1],
+                                        &recorded[2], &recorded[3]) != PROBE_FINGERPRINT_WORDS) {
+                continue;
+            }
+            earlier_runs++;
+            if (memcmp(recorded, samples, sizeof recorded) == 0) {
+                matches++;
+            }
+        }
+        fclose(log);
+    }
+    snprintf(line, sizeof line, "%s first values match %u of %u earlier runs in %s (expect 0)",
+             matches == 0 ? "ok  " : "FAIL", matches, earlier_runs, PROBE_LOG_FILE);
+    skiff_psp_report_line(report, line);
+    return matches == 0;
+}
+
 /* One line per run, appended, so runs across reboots end up side by side in one file. The log is
  * what the power-cycle comparison reads, so failing to write it fails the probe. */
 static int append_fingerprint(skiff_psp_report *report, const char *program_path,
@@ -249,9 +290,11 @@ int main(int argc, char *argv[]) {
              chi2_ok ? "ok  " : "FAIL", chi2, PROBE_CHI2_MIN, PROBE_CHI2_MAX);
     skiff_psp_report_line(&report, line);
 
+    const int unique = differs_from_earlier_runs(&report, program_path);
     const int logged = append_fingerprint(&report, program_path, uptime_us, &kirk, &baseline);
 
-    const int passed = repeats_ok && ones_ok && chi2_ok && baseline.failures == 0 && logged;
+    const int passed =
+        repeats_ok && ones_ok && chi2_ok && baseline.failures == 0 && unique && logged;
     skiff_psp_report_line(&report, passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);
     skiff_psp_report_close(&report);
     sceKernelExitGame();

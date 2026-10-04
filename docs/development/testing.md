@@ -93,7 +93,9 @@ seed TLS, they would succeed and the probe fails.
 - 1024 KIRK values checked for repeats, bit balance and byte distribution (the baseline is timed
   only);
 - Skiff's TLS stack seeded by the real hook: `psa_crypto_init()` and `curl_global_init()` must
-  succeed (their times are reported), and two `psa_generate_random()` draws must differ.
+  succeed (their times are reported), and two `psa_generate_random()` draws must differ;
+- last, a request the hook does not support (non-zero flags) must be refused and turn the status to
+  `SKIFF_ERR_NET_ENTROPY`.
 
 It ends with `SKIFF KIRK PROBE OK`/`FAIL` (a baseline failure or an unwritten log also fails the run)
 and appends a fingerprint line (uptime, the first KIRK values in `first=`, and all timings) to

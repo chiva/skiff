@@ -23,6 +23,7 @@
  * sees (SKIFF_ERR_NET_NEEDS_ARK). That run ends with its own marker, SKIFF KIRK PROBE NO ARK OK.
  */
 #include <curl/curl.h>
+#include <mbedtls/platform.h>
 #include <psa/crypto.h>
 #include <pspkernel.h>
 #include <pspthreadman.h>
@@ -200,6 +201,20 @@ static int check_skiff_entropy(skiff_psp_report *report, stack_timing *timing) {
     }
     const int status_ok = check_entropy_status(report, SKIFF_OK);
     return draws_ok && curl_status == CURLE_OK && status_ok;
+}
+
+/* A request with flags, which no supported Mbed TLS makes, must be refused and disable the source,
+ * so the status matches what TLS sees. Run last: it leaves the hook refusing. */
+static int check_refuses_unsupported_request(skiff_psp_report *report) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    unsigned char output[PROBE_RANDOM_DRAW_BYTES];
+    size_t estimate_bits = 0;
+    const int status = mbedtls_platform_get_entropy(1, &estimate_bits, output, sizeof output);
+    const int refused = status == PSA_ERROR_INSUFFICIENT_ENTROPY && estimate_bits == 0;
+    snprintf(line, sizeof line, "%s entropy request with flags = %d, %zu bits (expect %d, 0 bits)",
+             refused ? "ok  " : "FAIL", status, estimate_bits, (int)PSA_ERROR_INSUFFICIENT_ENTROPY);
+    skiff_psp_report_line(report, line);
+    return refused && check_entropy_status(report, SKIFF_ERR_NET_ENTROPY);
 }
 
 static int check_refuses_without_ark(skiff_psp_report *report) {
@@ -388,8 +403,10 @@ int main(int argc, char *argv[]) {
     const int logged =
         append_fingerprint(&report, program_path, uptime_us, &kirk, &baseline, &stack);
 
+    const int unsupported_refused = check_refuses_unsupported_request(&report);
+
     const int passed = repeats_ok && ones_ok && chi2_ok && baseline.failures == 0 && stack_ok &&
-                       unique && logged;
+                       unique && logged && unsupported_refused;
     skiff_psp_report_line(&report, passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);
     skiff_psp_report_close(&report);
     sceKernelExitGame();

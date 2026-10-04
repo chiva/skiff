@@ -45,14 +45,22 @@ skiff_err skiff_psp_entropy_status(void) {
     return kirk_source.failed ? SKIFF_ERR_NET_ENTROPY : SKIFF_OK;
 }
 
+/* A request Skiff cannot satisfy as asked (non-zero flags, which TF-PSA-Crypto 1.x never passes, or
+ * no estimate_bits) means an Mbed TLS it was not written for: refuse it and every later request, so
+ * the status reports SKIFF_ERR_NET_ENTROPY instead of SKIFF_OK while TLS fails. */
+static int refuse_permanently(void) {
+    kirk_source.failed = 1;
+    return PSA_ERROR_INSUFFICIENT_ENTROPY;
+}
+
 int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags, size_t *estimate_bits,
                                  unsigned char *output, size_t output_size) {
     if (estimate_bits == NULL) {
-        return PSA_ERROR_INSUFFICIENT_ENTROPY;
+        return refuse_permanently();
     }
     *estimate_bits = 0;
     if (flags != 0) {
-        return PSA_ERROR_NOT_SUPPORTED;
+        return refuse_permanently();
     }
     if (!ark_present() || skiff_entropy_fill(&kirk_source, output, output_size) != SKIFF_OK) {
         return PSA_ERROR_INSUFFICIENT_ENTROPY;

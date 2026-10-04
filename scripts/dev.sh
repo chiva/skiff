@@ -37,6 +37,8 @@ Commands run in the order given and stop at the first failure.
   lint         clang-tidy and cppcheck over first-party sources
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
   tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
+  kirk-probe   Run the KIRK probe in PPSSPPHeadless, which has no ARK: TLS must refuse to start
+               (needs `psp` first; the measurements need a real PSP)
   icons        Render the icon PNGs from the SVG masters in assets/brand/
   clean        Remove build/ and dist/
 EOF
@@ -114,6 +116,9 @@ run_command() {
     ;;
   tls-probe)
     run_emulator build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
+    ;;
+  kirk-probe)
+    run_emulator build/psp/pbp/skiff_kirk_probe/EBOOT.PBP "KIRK PROBE NO ARK"
     ;;
   icons)
     run_host scripts/render-icons.sh

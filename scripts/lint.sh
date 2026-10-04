@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Static analysis over first-party portable sources. Needs a configured host build tree for
-# compile_commands.json. PSP-only sources are skipped because host clang cannot see the PSP SDK;
-# they are identified by including a PSP SDK header (<psp...>) rather than by a hard-coded path, so
-# a new PSP-only file anywhere is excluded automatically.
+# compile_commands.json. PSP-only sources are skipped because host clang cannot see the PSP SDK or
+# the toolchain image's TLS stack; they are identified by including a PSP SDK header (<psp...>) or
+# an Mbed TLS one (<mbedtls/...>, <psa/...>) rather than by a hard-coded path, so a new PSP-only
+# file anywhere is excluded automatically.
 # Usage: scripts/lint.sh <build-dir>
 set -euo pipefail
 
@@ -14,7 +15,7 @@ tracked="$(git ls-files 'src/*.c' 'tests/*.c')"
 
 sources=()
 while IFS= read -r file; do
-  if grep -qE '^\s*#\s*include\s*<psp' "$file"; then
+  if grep -qE '^\s*#\s*include\s*<(psp|mbedtls/|psa/)' "$file"; then
     continue
   fi
   sources+=("$file")

@@ -7,7 +7,7 @@ the logic.
 | Tier | Where | In CI | Command |
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
-| Emulator | PPSSPPHeadless | ✅ self-test + TLS probe | `scripts/dev.sh psp selftest tls-probe` |
+| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK probe (no ARK) | `scripts/dev.sh psp selftest tls-probe kirk-probe` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
 ## Unit tests
@@ -27,8 +27,9 @@ Planned additions:
 ## Emulator tests
 
 `tests/emulator/run_eboot.sh <EBOOT> <NAME>` boots a check EBOOT in PPSSPPHeadless and passes only
-when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`) and
-`skiff_tls_probe` (`TLS PROBE`, see [Security probes](#security-probes)). PPSSPPHeadless only shows a
+when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`),
+`skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)) and `skiff_kirk_probe`
+(`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -85,17 +86,28 @@ seed TLS, they would succeed and the probe fails.
 ## KIRK probe
 
 `tests/security/kirk_probe.c` measures the KIRK crypto engine's random generator, read through ARK's
-`sctrlKernelRand()`, before Skiff's entropy source is built on it. Hardware only: PPSSPP has no ARK,
-so CI only builds it. Per run it reports how long a 128-byte gather (one Mbed TLS entropy request,
-32 calls) takes, next to the same gather from the C library's `getentropy()` (the toolchain's
-default source) as a baseline, and 1024 values checked for repeats, bit balance and byte
-distribution (`SKIFF KIRK PROBE OK`/`FAIL`; the baseline is timed only, but a baseline failure or
-an unwritten log fails the run). It appends a fingerprint line (uptime, the first KIRK values in
-`first=`, and both timings) to `kirk-log.txt`, after comparing its `first=` values with every
-earlier run in that file: a match fails the run, since it would mean KIRK produced the same sequence
-twice, e.g. restarting it after every power-on. Run it several times, power-cycling the PSP in
-between; a single run has nothing to compare against.
+`sctrlKernelRand()`, and Skiff's entropy hook built on it. On a PSP with ARK it reports, per run:
+
+- how long a 128-byte gather (one Mbed TLS entropy request, 32 calls) takes, next to the same gather
+  from the C library's `getentropy()` (the toolchain's default source) as a baseline;
+- 1024 KIRK values checked for repeats, bit balance and byte distribution (the baseline is timed
+  only);
+- Skiff's TLS stack seeded by the real hook: `psa_crypto_init()` and `curl_global_init()` must
+  succeed (their times are reported), and two `psa_generate_random()` draws must differ;
+- last, a request the hook does not support (non-zero flags) must be refused and turn the status to
+  `SKIFF_ERR_NET_ENTROPY`.
+
+It ends with `SKIFF KIRK PROBE OK`/`FAIL` (a baseline failure or an unwritten log also fails the run)
+and appends a fingerprint line (uptime, the first KIRK values in `first=`, and all timings) to
+`kirk-log.txt`, after comparing its `first=` values with every earlier run in that file: a match
+fails the run, since it would mean KIRK produced the same sequence twice, e.g. restarting it after
+every power-on. Run it several times, power-cycling the PSP in between; a single run has nothing to
+compare against.
 `scripts/memstick.sh results` prints both files.
+
+Without ARK there is nothing to measure, so the probe checks instead that Skiff's hook refuses, TLS
+fails closed, and the reason reported is `SKIFF_ERR_NET_NEEDS_ARK` (`SKIFF KIRK PROBE NO ARK OK`).
+PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 
 ## Test data rules
 

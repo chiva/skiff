@@ -7,7 +7,8 @@ Any model works: PSP-1000 ("Fat"), 2000 ("Slim"), 3000 ("Brite"), Go, or Street 
 - **Custom firmware, already installed.** Skiff is homebrew, so the PSP must run custom firmware.
   Skiff is tested on **ARK-5** with official firmware 6.61. This guide does not cover installing it:
   follow your custom firmware's own instructions (for ARK-5,
-  [FasterARK](https://github.com/PSP-Arkfive/FasterARK)).
+  [FasterARK](https://github.com/PSP-Arkfive/FasterARK)). Connecting to RomM needs **ARK** (ARK-4
+  or ARK-5) specifically: on other custom firmware Skiff runs but shows error 109 when it connects.
 - **Memory Stick.** A Memory Stick Pro Duo, or a microSD card in a Pro Duo adapter (cheap and
   works well). 8 GB or more is comfortable; a PSP game is usually between 200 MB and 1.8 GB. The PSP
   Go has 16 GB built in and uses Memory Stick Micro (M2) instead.

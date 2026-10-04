@@ -78,11 +78,6 @@ add_library(skiff_psp_ark OBJECT src/platform/psp/ark_sysctrl.S)
 target_compile_options(skiff_psp_ark PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_include_directories(skiff_psp_ark PUBLIC src/platform/psp)
 
-# KIRK probe (Phase 1 hardware spike): measures ARK's sctrlKernelRand() on a real PSP before the
-# entropy design is written. Hardware only, since PPSSPP has no ARK; not run in CI.
-skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/security/kirk_probe.c)
-target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark)
-
 # TLS stack from the Skiff toolchain image (docker/toolchain.Dockerfile). Imported targets put their
 # headers on the system include path, so our strict warnings do not apply to them.
 find_package(MbedTLS 4.1 CONFIG REQUIRED)
@@ -99,3 +94,19 @@ skiff_set_warnings(skiff_psp_tls)
 # only from mbedtls_platform_get_entropy() (see tests/security/tls_probe.c).
 skiff_add_psp_app(skiff_tls_probe "${SKIFF_PBP_TITLE} TLS probe" tests/security/tls_probe.c)
 target_link_libraries(skiff_tls_probe PRIVATE skiff_psp_tls skiff_psp_check)
+
+# Skiff's TLS entropy hook: KIRK through ARK, behind skiff_entropy_fill()'s health test. Every EBOOT
+# that uses TLS for real links it; the TLS probe instead supplies a hook that refuses. Object
+# libraries pass their objects only to targets that link them directly, so such an EBOOT also links
+# skiff_psp_ark and skiff_psp_tls itself.
+add_library(skiff_psp_entropy OBJECT src/platform/psp/kirk_entropy.c)
+target_compile_options(skiff_psp_entropy PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_entropy PUBLIC skiff_core skiff_psp_ark skiff_psp_tls)
+skiff_set_warnings(skiff_psp_entropy)
+
+# KIRK probe (Phase 1 hardware spike): measures ARK's sctrlKernelRand() on a real PSP, against the
+# toolchain's default getentropy(), then runs Skiff's TLS stack seeded by skiff_psp_entropy.
+# Hardware only, since PPSSPP has no ARK; not run in CI.
+skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/security/kirk_probe.c)
+target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark skiff_psp_tls
+                                               skiff_psp_entropy)

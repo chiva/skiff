@@ -107,6 +107,10 @@ turn_off MBEDTLS_DEBUG_C
 # changes their upstream defaults, and also if it renames or removes them, so a missing option can
 # never pass as "disabled".
 require_state MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG off
+# mbedtls's own seed-file source and its "no true entropy source" mode would also let TLS run on
+# something other than Skiff's hook (Skiff's seed file lives inside its pool instead).
+require_state MBEDTLS_ENTROPY_NV_SEED off
+require_state MBEDTLS_ENTROPY_NO_SOURCES_OK off
 require_state MBEDTLS_SSL_PROTO_TLS1_3 on
 require_state MBEDTLS_SSL_PROTO_TLS1_2 on
 require_state MBEDTLS_HAVE_TIME_DATE on

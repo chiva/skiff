@@ -119,7 +119,9 @@ static void report_timing(skiff_psp_report *report, const char *source,
 static void report_ratio(skiff_psp_report *report, const gather_timing *kirk,
                          const gather_timing *baseline) {
     char line[SKIFF_SELFTEST_LINE_MAX];
-    if (baseline->total_us == 0) {
+    if (baseline->failures != 0) {
+        snprintf(line, sizeof line, "FAIL KIRK vs baseline: no ratio, the baseline failed");
+    } else if (baseline->total_us == 0) {
         snprintf(line, sizeof line, "KIRK vs baseline: baseline below the 1 us timer resolution");
     } else {
         snprintf(line, sizeof line, "KIRK vs baseline: %.1fx the time per gather",
@@ -164,27 +166,34 @@ static double byte_chi_squared(void) {
     return chi2;
 }
 
-/* One line per run, appended, so runs across reboots end up side by side in one file. */
-static void append_fingerprint(skiff_psp_report *report, const char *program_path,
-                               long long uptime_us, const gather_timing *kirk,
-                               const gather_timing *baseline) {
+/* One line per run, appended, so runs across reboots end up side by side in one file. The log is
+ * what the power-cycle comparison reads, so failing to write it fails the probe. */
+static int append_fingerprint(skiff_psp_report *report, const char *program_path,
+                              long long uptime_us, const gather_timing *kirk,
+                              const gather_timing *baseline) {
     char path[PROBE_PATH_MAX];
     if (skiff_selftest_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
-        skiff_psp_report_line(report, "fingerprint log: not written (no EBOOT path)");
-        return;
+        skiff_psp_report_line(report, "FAIL fingerprint log: not written (no EBOOT path)");
+        return 0;
     }
     FILE *log = fopen(path, "a");
     if (log == NULL) {
-        skiff_psp_report_line(report, "fingerprint log: could not open " PROBE_LOG_FILE);
-        return;
+        skiff_psp_report_line(report, "FAIL fingerprint log: could not open " PROBE_LOG_FILE);
+        return 0;
     }
-    fprintf(log,
-            "uptime_us=%lld first=%08x %08x %08x %08x kirk_total_us=%lld kirk_max_us=%lld "
-            "baseline_total_us=%lld baseline_max_us=%lld\n",
-            uptime_us, samples[0], samples[1], samples[2], samples[3], kirk->total_us, kirk->max_us,
-            baseline->total_us, baseline->max_us);
-    fclose(log);
+    const int written =
+        fprintf(log,
+                "uptime_us=%lld first=%08x %08x %08x %08x kirk_total_us=%lld kirk_max_us=%lld "
+                "baseline_total_us=%lld baseline_max_us=%lld\n",
+                uptime_us, samples[0], samples[1], samples[2], samples[3], kirk->total_us,
+                kirk->max_us, baseline->total_us, baseline->max_us);
+    const int closed = fclose(log);
+    if (written < 0 || closed != 0) {
+        skiff_psp_report_line(report, "FAIL fingerprint log: write to " PROBE_LOG_FILE " failed");
+        return 0;
+    }
     skiff_psp_report_line(report, "fingerprint appended to " PROBE_LOG_FILE);
+    return 1;
 }
 
 int main(int argc, char *argv[]) {
@@ -240,9 +249,9 @@ int main(int argc, char *argv[]) {
              chi2_ok ? "ok  " : "FAIL", chi2, PROBE_CHI2_MIN, PROBE_CHI2_MAX);
     skiff_psp_report_line(&report, line);
 
-    append_fingerprint(&report, program_path, uptime_us, &kirk, &baseline);
+    const int logged = append_fingerprint(&report, program_path, uptime_us, &kirk, &baseline);
 
-    const int passed = repeats_ok && ones_ok && chi2_ok;
+    const int passed = repeats_ok && ones_ok && chi2_ok && baseline.failures == 0 && logged;
     skiff_psp_report_line(&report, passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);
     skiff_psp_report_close(&report);
     sceKernelExitGame();

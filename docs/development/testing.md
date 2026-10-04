@@ -89,9 +89,11 @@ seed TLS, they would succeed and the probe fails.
 so CI only builds it. Per run it reports how long a 128-byte gather (one Mbed TLS entropy request,
 32 calls) takes, next to the same gather from the C library's `getentropy()` (the toolchain's
 default source) as a baseline, and 1024 values checked for repeats, bit balance and byte
-distribution (`SKIFF KIRK PROBE OK`/`FAIL`; the baseline is timed only). It appends a fingerprint
-line (uptime, the first values and both timings) to `kirk-log.txt`. Run it several times, power-cycling the PSP in between:
-identical fingerprints across boots would mean KIRK restarts the same sequence after every power-on.
+distribution (`SKIFF KIRK PROBE OK`/`FAIL`; the baseline is timed only, but a baseline failure or
+an unwritten log fails the run). It appends a fingerprint line (uptime, the first KIRK values in
+`first=`, and both timings) to `kirk-log.txt`. Run it several times, power-cycling the PSP in
+between, and compare only the `first=` values: identical values across boots would mean KIRK
+restarts the same sequence after every power-on (uptime and timings differ regardless).
 `scripts/memstick.sh results` prints both files.
 
 ## Test data rules

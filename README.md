@@ -1,4 +1,6 @@
-<h1 align="center">Skiff</h1>
+<h1 align="center">
+  <img src="assets/brand/skiff-icon0.svg" alt="Skiff" width="288">
+</h1>
 
 <p align="center">
   <strong>Your <a href="https://github.com/rommapp/romm">RomM</a> library, on your PSP. Browse, download, play.</strong>

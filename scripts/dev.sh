@@ -27,6 +27,7 @@ Commands run in the order given and stop at the first failure.
   lint         clang-tidy and cppcheck over first-party sources
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
   tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
+  icons        Render the icon PNGs from the SVG masters in assets/brand/
   clean        Remove build/ and dist/
 EOF
 }
@@ -103,6 +104,9 @@ run_command() {
     ;;
   tls-probe)
     run_emulator build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
+    ;;
+  icons)
+    run_host scripts/render-icons.sh
     ;;
   clean)
     rm -rf "$REPO_ROOT/build" "$REPO_ROOT/dist"

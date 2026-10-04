@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 272" width="480" height="272">
+<title>Skiff background</title>
+<rect width="480" height="272" fill="#0F2A3D"/>
+<path d="M-30 200Q0 190 30 200T90 200T150 200T210 200T270 200T330 200T390 200T450 200T510 200V272H-30Z" fill="#1F8A8A" fill-opacity="0.45"/>
+<g transform="translate(300 30) scale(3)">
+<path d="M10 52H48L43 60H15Z" fill="#F3EBDD"/>
+<rect x="28" y="22" width="2" height="30" fill="#F3EBDD"/>
+<path d="M32 24V49H46Z" fill="#E8833A"/>
+<path d="M26 29V49H15Z" fill="#F3EBDD"/>
+</g>
+<path d="M0 210Q30 198 60 210T120 210T180 210T240 210T300 210T360 210T420 210T480 210V272H0Z" fill="#1F8A8A"/>
+</svg>

@@ -34,6 +34,18 @@ pspdev packages curl and mbedtls for the PSP
 - **Configuration.** The package uses mbedtls's default configuration, which includes the server
   side, DTLS and renegotiation, none of which a client like Skiff needs.
 
+Where randomness comes from in an app built with pspdev's packages:
+
+```mermaid
+flowchart LR
+    clock["wall clock"] --> getentropy["SDK getentropy()"]
+    getentropy --> platform["mbedtls platform source<br/>(the only one counted)"]
+    hardclock["hardclock: µs since first call<br/>(counted as weak)"] --> collector
+    platform --> collector["mbedtls entropy collector"]
+    collector -->|seeds and reseeds| drbg["mbedtls CTR_DRBG"]
+    drbg --> curl["libcurl 7.64.1"]
+```
+
 These are sensible defaults for a general SDK that cannot assume custom firmware or a particular
 app's needs. They are not what Skiff should ship.
 
@@ -57,10 +69,13 @@ uses (`psa_generate_random()`). The toolchain image compiles the built-in entrop
 is seeded and reseeded from a single function, `mbedtls_platform_get_entropy()`, which mbedtls
 declares and **Skiff implements**:
 
-```text
-libcurl ──► psa_generate_random() ──► PSA random generator
-                                          ▲ seeded at psa_crypto_init(), reseeded periodically
-                                     mbedtls_platform_get_entropy()   (Skiff's entropy pool)
+```mermaid
+flowchart LR
+    kirk["KIRK hardware RNG<br/>(required)"] --> pool
+    extra["timer jitter, input timing,<br/>seed file<br/>(mixed in, not counted)"] --> pool
+    pool["mbedtls_platform_get_entropy()<br/>Skiff's entropy pool"] -->|"seeds at psa_crypto_init(),<br/>reseeds periodically"| drbg["PSA random generator"]
+    drbg -->|"psa_generate_random()"| curl["libcurl 8.22"]
+    pool -. "cannot answer" .-> fail["TLS refuses to start<br/>SKIFF_ERR_NET_ENTROPY"]
 ```
 
 - There is no fallback: nothing in Skiff's mbedtls calls `getentropy()` or reads a clock for
@@ -71,7 +86,8 @@ libcurl ──► psa_generate_random() ──► PSA random generator
 
 Behind that function, Skiff's pool requires the KIRK crypto engine's hardware random generator,
 mixes in weaker sources without counting them, and refuses rather than over-claims. See
-[Architecture](architecture.md#randomness-for-tls) for the pool's design and constraints.
+[Architecture](architecture.md#randomness-for-tls) for the pool's design and constraints. The pool
+is the next part of Phase 1 ([Roadmap](roadmap.md)); until it exists, Skiff's TLS refuses to start.
 
 ### A smaller library
 

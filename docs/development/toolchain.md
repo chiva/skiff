@@ -43,10 +43,16 @@ pspdev's `curl`, `mbedtls` and `libzip` (the only other package depending on psp
 removed first so no 2.28 header or archive can be picked up. Neither library needs a PSP patch.
 
 **Mbed TLS profile.** `docker/toolchain/configure-mbedtls.sh` edits Mbed TLS's default config
-headers with its own `scripts/config.py`, so the installed headers carry the profile and Skiff, curl
-and mbedtls agree on struct layouts. It removes the server side, DTLS, renegotiation, certificate
-writing, persistent PSA keys, self-tests and debug strings, and asserts the security-critical
-settings so a renamed option fails the image build.
+headers in place with `sed`, so the installed headers carry the profile and Skiff, curl and mbedtls
+agree on struct layouts. It removes the server side, DTLS, renegotiation, certificate writing,
+persistent PSA keys, self-tests and debug strings. Every edit must change exactly one line and the
+security-critical settings it does not edit are asserted, so an option renamed by an mbedtls
+update fails the image build.
+
+**No unpinned tools.** The image installs nothing from a package repository: the build uses only
+what the digest-pinned pspdev image ships (cmake, make, tar, bzip2, sed), and curl is fetched as
+`.tar.bz2` because the base image has no `xz`. The same commit therefore always builds with the
+same tools.
 
 **Link-time contracts.** The profile leaves two functions for the application to supply. Any EBOOT
 that links Mbed TLS must provide both or it does not link:
@@ -63,7 +69,7 @@ on purpose. Verify the new archive, then update its `*_SHA256` argument:
   (`gh release view mbedtls-<version> --repo Mbed-TLS/mbedtls`).
 - curl: check the signature with Daniel Stenberg's key, fingerprint
   `27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2`
-  (`gpgv --keyring <dearmored key> curl-<version>.tar.xz.asc curl-<version>.tar.xz`), then
+  (`gpgv --keyring <dearmored key> curl-<version>.tar.bz2.asc curl-<version>.tar.bz2`), then
   `sha256sum` the archive.
 
 Mbed TLS stays on the 4.1 LTS line (Renovate's `allowedVersions`); moving to the next LTS is a

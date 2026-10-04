@@ -3,21 +3,22 @@
 # archive can be picked up by mistake. libzip goes too: it is the only other package that depends on
 # pspdev's mbedtls, and Skiff does not use it.
 #
-# Every archive is pinned by SHA256. When bumping a version, verify the new archive first: mbedtls
-# publishes SHA256 sums in its release notes; curl archives are signed by Daniel Stenberg
-# (27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2), see docs/development/toolchain.md.
+# Every input is pinned: the base image by digest, each archive by SHA256. Nothing is installed from
+# a package repository, so the same commit always builds with the same tools; everything the build
+# runs (cmake, make, tar, bzip2, sed) comes from the pinned base image.
+# When bumping a version, verify the new archive first: mbedtls publishes SHA256 sums in its release
+# notes; curl archives are signed by Daniel Stenberg (27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2), see
+# docs/development/toolchain.md.
 FROM pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f
 
 ARG MBEDTLS_VERSION=4.1.1
 ARG MBEDTLS_SHA256=3359a349e23db3d5536fcee032ae7b2ecbfc08972fab643089b5cbf2a375c98c
 ARG CURL_VERSION=8.22.0
-ARG CURL_SHA256=f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7
+ARG CURL_SHA256=5d956a6a22b3c279f50c421ee5d3c9e9d660cb6f115dcf881b579e952130549c
 
 # The docs and AGENTS.md promise GCC 15; fail here if a pspdev bump changes the major version, so
 # the hardware tier is re-run before anything is built with a different compiler.
-# python3 runs mbedtls's config.py; xz unpacks the curl archive whose signature was verified.
 RUN psp-gcc -dumpversion | grep -q '^15\.' \
- && apk add --no-cache python3 xz \
  && psp-pacman -R --noconfirm curl libzip mbedtls
 
 COPY toolchain/configure-mbedtls.sh /usr/local/bin/configure-mbedtls
@@ -47,9 +48,9 @@ RUN wget -q -O mbedtls.tar.bz2 \
 # dependency off. CA bundle and path are unset because Skiff passes the CA file at runtime.
 # zlib is off for now: RomM's JSON pages are small and decompression costs RAM; revisit with
 # Phase 1 measurements.
-RUN wget -q -O curl.tar.xz "https://curl.se/download/curl-${CURL_VERSION}.tar.xz" \
- && echo "${CURL_SHA256}  curl.tar.xz" | sha256sum -c - \
- && tar -xJf curl.tar.xz \
+RUN wget -q -O curl.tar.bz2 "https://curl.se/download/curl-${CURL_VERSION}.tar.bz2" \
+ && echo "${CURL_SHA256}  curl.tar.bz2" | sha256sum -c - \
+ && tar -xjf curl.tar.bz2 \
  && cmake -S "curl-${CURL_VERSION}" -B curl-build -Wno-dev \
       -DCMAKE_TOOLCHAIN_FILE="${PSPDEV}/psp/share/pspdev.cmake" \
       -DCMAKE_INSTALL_PREFIX="${PSPDEV}/psp" \

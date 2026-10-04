@@ -23,6 +23,16 @@ if [[ ! -d "$GAME_DIR" ]]; then
   exit 1
 fi
 
+# macOS writes AppleDouble files ("._<name>") on FAT volumes: inside each folder, and one beside
+# the folder in PSP/GAME, which the XMB can list as Corrupted Data. Only Skiff's own are removed.
+remove_macos_metadata() {
+  local folder="$1"
+  rm -f "$GAME_DIR/._$folder"
+  if [[ -d "$GAME_DIR/$folder" ]]; then
+    find "$GAME_DIR/$folder" -name '._*' -delete
+  fi
+}
+
 install_eboots() {
   for i in "${!TARGETS[@]}"; do
     local source="$BUILD_PBP_DIR/${TARGETS[$i]}/EBOOT.PBP"
@@ -33,9 +43,9 @@ install_eboots() {
     fi
     mkdir -p "$dest"
     cp "$source" "$dest/EBOOT.PBP"
-    # A stale result would be mistaken for a new run; macOS metadata files confuse the XMB.
+    # A stale result would be mistaken for a new run.
     rm -f "$dest/$RESULT_FILE"
-    find "$dest" -name '._*' -delete
+    remove_macos_metadata "${FOLDERS[$i]}"
     echo "installed ${TARGETS[$i]} -> PSP/GAME/${FOLDERS[$i]}"
   done
   sync
@@ -58,6 +68,7 @@ print_results() {
 uninstall_eboots() {
   for folder in "${FOLDERS[@]}"; do
     rm -rf "${GAME_DIR:?}/$folder"
+    remove_macos_metadata "$folder"
     echo "removed PSP/GAME/$folder"
   done
   sync

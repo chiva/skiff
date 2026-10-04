@@ -56,7 +56,10 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    shows how far it got.
 5. Run **Skiff**: check the version on screen and that START exits; then HOME → Quit must exit
    without freezing.
-6. `scripts/memstick.sh uninstall <mount>` removes the three folders when done.
+6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
+
+The **Skiff KIRK probe** is installed too; run it only when working on entropy (see
+[KIRK probe](#kirk-probe)).
 
 ### Over PSPLINK
 
@@ -78,6 +81,16 @@ libcurl uses Mbed TLS 4.1 with HTTP and HTTPS only, and that TLS randomness come
 `mbedtls_platform_get_entropy()`: the probe's version of that hook refuses every request, and both
 `psa_crypto_init()` and `curl_global_init()` must then fail after calling it. If anything else could
 seed TLS, they would succeed and the probe fails.
+
+## KIRK probe
+
+`tests/security/kirk_probe.c` measures the KIRK crypto engine's random generator, read through ARK's
+`sctrlKernelRand()`, before Skiff's entropy source is built on it. Hardware only: PPSSPP has no ARK,
+so CI only builds it. Per run it reports the call time and 1024 values checked for repeats, bit
+balance and byte distribution (`SKIFF KIRK PROBE OK`/`FAIL`), and appends a fingerprint line (uptime
+and the first values) to `kirk-log.txt`. Run it several times, power-cycling the PSP in between:
+identical fingerprints across boots would mean KIRK restarts the same sequence after every power-on.
+`scripts/memstick.sh results` prints both files.
 
 ## Test data rules
 

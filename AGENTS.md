@@ -17,7 +17,7 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | Release zip | `scripts/dev.sh package` → `dist/` |
@@ -62,6 +62,13 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
   pass `MBEDTLS_*CONFIG_FILE` defines to a consumer, or Skiff and libcurl disagree on struct layouts.
 - An EBOOT linking Mbed TLS must provide `mbedtls_platform_get_entropy()` and `mbedtls_ms_time()`
   (link-time contracts, see `docs/development/toolchain.md`).
+- ARK custom firmware functions are imported through hand-written stubs in
+  `src/platform/psp/ark_sysctrl.S` (pspsdk ships none). A NID is the first four bytes of SHA-1 of the
+  function name, read little-endian; an import from a library that is not loaded returns
+  `0x8002013A`, so check `sctrlHENGetVersion()` before trusting other ARK calls.
+- `scripts/dev.sh` works from git worktrees (it mounts the main repository's `.git` read-only in the
+  containers). Parallel sessions should each work in their own worktree, never switch branches in
+  a shared checkout.
 - "Clock skew detected" warnings from make in containers come from the Docker VM's clock and are
   harmless.
 

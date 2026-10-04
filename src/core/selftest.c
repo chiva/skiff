@@ -125,11 +125,12 @@ skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx) {
     return result;
 }
 
-skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t out_size) {
+skiff_err skiff_selftest_sibling_path(const char *program_path, const char *file_name, char *out,
+                                      size_t out_size) {
     if (out != NULL && out_size > 0) {
         out[0] = '\0';
     }
-    if (program_path == NULL || out == NULL) {
+    if (program_path == NULL || file_name == NULL || out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
     const char *last_separator = strrchr(program_path, '/');
@@ -138,11 +139,15 @@ skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t
     }
     /* Keeps the trailing '/', so "ms0:/EBOOT.PBP" becomes "ms0:/result.txt". */
     const size_t directory_length = (size_t)(last_separator - program_path) + 1;
-    const size_t needed = directory_length + strlen(SKIFF_SELFTEST_RESULT_FILE) + 1;
-    if (needed > out_size) {
+    const size_t name_length = strlen(file_name);
+    if (directory_length + name_length + 1 > out_size) {
         return SKIFF_ERR_BUFFER_TOO_SMALL;
     }
     memcpy(out, program_path, directory_length);
-    memcpy(out + directory_length, SKIFF_SELFTEST_RESULT_FILE, sizeof SKIFF_SELFTEST_RESULT_FILE);
+    memcpy(out + directory_length, file_name, name_length + 1);
     return SKIFF_OK;
+}
+
+skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t out_size) {
+    return skiff_selftest_sibling_path(program_path, SKIFF_SELFTEST_RESULT_FILE, out, out_size);
 }

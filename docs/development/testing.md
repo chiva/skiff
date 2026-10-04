@@ -41,13 +41,30 @@ storage behaviour must also be checked on hardware.
 Run before merging changes to `src/net/`, `src/storage/`, `src/platform/psp/`, or a toolchain
 bump. Record the PSP model and firmware in the PR.
 
+### From the XMB (no PSPLINK, nothing to install)
+
+Every check EBOOT also writes its output to `result.txt` next to its `EBOOT.PBP`, flushed line by
+line, so a run started from the XMB can be read back from the Memory Stick.
+
+1. Build: `scripts/dev.sh psp`.
+2. Put the PSP in USB mode (or use a card reader), then `scripts/memstick.sh install <mount>`
+   (e.g. `/Volumes/PSP`). Eject.
+3. On the PSP, from Game → Memory Stick, run **Skiff self-test**, **Skiff TLS probe** and **Skiff
+   entropy probe**. Each returns to the XMB when done.
+4. Back in USB mode: `scripts/memstick.sh results <mount>` → expect `SKIFF SELFTEST OK`,
+   `SKIFF TLS PROBE OK`, and `DETERMINISTIC` from the entropy probe. A missing or truncated
+   `result.txt` means the EBOOT crashed; its last line shows how far it got.
+5. Run **Skiff**: check the version on screen and that START exits; then HOME → Quit must exit
+   without freezing.
+6. `scripts/memstick.sh uninstall <mount>` removes the four folders when done.
+
+### Over PSPLINK
+
 1. Set up PSPLINK ([debugging](debugging.md)) and build: `scripts/dev.sh psp`.
 2. In `pspsh`: `./build/psp/skiff_selftest.prx` → expect `SKIFF SELFTEST OK`, and
    `./build/psp/skiff_tls_probe.prx` → expect `SKIFF TLS PROBE OK`.
 3. Run the app: `./build/psp/skiff.prx`, check the version on screen, press START, and
    check it returns cleanly.
-4. Copy `build/psp/pbp/skiff/EBOOT.PBP` to `PSP/GAME/Skiff/` and launch it from the XMB; HOME →
-   Quit must exit without freezing.
 
 From the networking release on, the hardware tier adds: joining the TKIP test SSID; an HTTPS
 request to a test RomM; TLS 1.3 (or 1.2 with ECDHE) confirmed in a packet capture; a proxy rejecting a

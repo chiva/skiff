@@ -20,6 +20,24 @@ We recommend **ARK-5**, installed permanently with **CustomIPL**, on top of offi
 > **official instructions** linked below, and use this page to understand what you are doing and
 > to check you have done it right.
 
+## Already on ARK-4? Update instead
+
+If System Information mentions ARK-4, you do not need to start over:
+
+1. Use ARK's built-in online update if it works on your PSP.
+2. Otherwise, download `ARK_UPDATE.zip` from the
+   [FasterARK releases](https://github.com/PSP-Arkfive/FasterARK/releases/latest), copy its `PSP`
+   folder to the Memory Stick, and run the updater from Game → Memory Stick. Keep the charger
+   plugged in and do not turn the PSP off while it runs.
+3. Afterwards, delete `PSP/GAME/UPDATE/` from the Memory Stick so it is not mistaken for a Sony
+   update later.
+
+✅ **Check:** System Information mentions ARK-5. Your games, saves and plugins stay where they are.
+If an old plugin misbehaves after the update, turn it off in `SEPLUGINS/PLUGINS.TXT`.
+
+Then continue with [Step 3](#step-3-make-it-permanent-with-customipl) if ARK does not yet start on
+its own when you turn the PSP on.
+
 ## Before you start
 
 - [ ] Battery above 75% **and** the charger plugged in.

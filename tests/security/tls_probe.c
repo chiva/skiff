@@ -14,12 +14,12 @@
 #include <curl/curl.h>
 #include <mbedtls/platform.h>
 #include <psa/crypto.h>
-#include <pspdebug.h>
 #include <pspkernel.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "lifecycle.h"
+#include "report.h"
 
 #define PROBE_OK_MARKER "SKIFF TLS PROBE OK"
 #define PROBE_FAIL_MARKER "SKIFF TLS PROBE FAIL"
@@ -37,27 +37,23 @@ int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags, size_t *e
     return PSA_ERROR_INSUFFICIENT_ENTROPY;
 }
 
-static void log_line(const char *line) {
-    printf("%s\n", line);
-    pspDebugScreenPrintf("%s\n", line);
-}
-
-static int report(int passed, const char *check, const char *detail) {
+static int report_check(skiff_psp_report *report, int passed, const char *check,
+                        const char *detail) {
     char line[160];
     snprintf(line, sizeof line, "%s %s: %s", passed ? "ok  " : "FAIL", check, detail);
-    log_line(line);
+    skiff_psp_report_line(report, line);
     return passed;
 }
 
-static int check_curl_build(void) {
+static int check_curl_build(skiff_psp_report *report) {
     const curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);
     const char *ssl = info->ssl_version != NULL ? info->ssl_version : "(none)";
     char detail[120];
 
     snprintf(detail, sizeof detail, "libcurl %s with %s", info->version, ssl);
-    int passed =
-        report(strncmp(ssl, PROBE_EXPECTED_SSL_PREFIX, strlen(PROBE_EXPECTED_SSL_PREFIX)) == 0,
-               "TLS backend is Mbed TLS 4.1", detail);
+    const int expected_backend =
+        strncmp(ssl, PROBE_EXPECTED_SSL_PREFIX, strlen(PROBE_EXPECTED_SSL_PREFIX)) == 0;
+    int passed = report_check(report, expected_backend, "TLS backend is Mbed TLS 4.1", detail);
 
     int only_http = 1;
     int has_https = 0;
@@ -72,46 +68,50 @@ static int check_curl_build(void) {
     if (only_http) {
         snprintf(detail, sizeof detail, "%s", has_https ? "http, https" : "https missing");
     }
-    passed &= report(only_http && has_https, "protocols are HTTP and HTTPS only", detail);
+    passed &=
+        report_check(report, only_http && has_https, "protocols are HTTP and HTTPS only", detail);
     return passed;
 }
 
-static int check_psa_needs_skiff_entropy(void) {
+static int check_psa_needs_skiff_entropy(skiff_psp_report *report) {
     const unsigned before = entropy_requests;
     const psa_status_t status = psa_crypto_init();
     char detail[120];
 
     snprintf(detail, sizeof detail, "psa_crypto_init() = %d after %u entropy request(s)",
              (int)status, entropy_requests - before);
-    return report(status == PSA_ERROR_INSUFFICIENT_ENTROPY && entropy_requests > before,
-                  "PSA RNG is seeded only through Skiff's hook", detail);
+    return report_check(report,
+                        status == PSA_ERROR_INSUFFICIENT_ENTROPY && entropy_requests > before,
+                        "PSA RNG is seeded only through Skiff's hook", detail);
 }
 
-static int check_curl_refuses_without_entropy(void) {
+static int check_curl_refuses_without_entropy(skiff_psp_report *report) {
     const unsigned before = entropy_requests;
     const CURLcode code = curl_global_init(CURL_GLOBAL_DEFAULT);
     char detail[120];
 
     snprintf(detail, sizeof detail, "curl_global_init() = %d after %u entropy request(s)",
              (int)code, entropy_requests - before);
-    const int passed = report(code != CURLE_OK && entropy_requests > before,
-                              "libcurl will not start TLS without entropy", detail);
+    const int passed = report_check(report, code != CURLE_OK && entropy_requests > before,
+                                    "libcurl will not start TLS without entropy", detail);
     if (code == CURLE_OK) {
         curl_global_cleanup();
     }
     return passed;
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
+    skiff_psp_report report;
+
     skiff_psp_install_exit_callback();
-    pspDebugScreenInit();
+    skiff_psp_report_open(&report, argc > 0 ? argv[0] : NULL);
 
-    int passed = check_curl_build();
-    passed &= check_psa_needs_skiff_entropy();
-    passed &= check_curl_refuses_without_entropy();
+    int passed = check_curl_build(&report);
+    passed &= check_psa_needs_skiff_entropy(&report);
+    passed &= check_curl_refuses_without_entropy(&report);
 
-    log_line(passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);
-    fflush(stdout);
+    skiff_psp_report_line(&report, passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);
+    skiff_psp_report_close(&report);
     sceKernelExitGame();
     return passed ? 0 : 1;
 }

@@ -22,6 +22,7 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Entropy probe | `scripts/dev.sh entropy-probe` (after `psp`) |
+| Hardware tier without PSPLINK | `scripts/memstick.sh install\|results\|uninstall <mount>` (host only, no Docker) |
 
 `scripts/dev.sh` accepts several commands: `scripts/dev.sh test asan lint psp selftest tls-probe`.
 CI runs these same commands, so the compiler matrix lives only in `HOST_COMPILERS` in `dev.sh`.
@@ -52,6 +53,8 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
 - `create_pbp_file` defaults to `MEMSIZE=2` (limited memory); `cmake/SkiffPsp.cmake` passes
   `MEMSIZE 1` so 64 MB models get their full RAM.
 - PPSSPPHeadless prints a program's stdout only in its full log (`-l`, `I stdout: ` prefix).
+- Check EBOOTs report through `src/platform/psp/report.h` (stdout, screen, and `result.txt` next to
+  the EBOOT, found from `argv[0]`); a new check EBOOT should use it too.
 - Every package linked into the EBOOT goes in `scripts/psp-packages.txt` so its licence ships
   (`mbedtls` and `curl` too, once the app links them: the toolchain image installs their licences
   where `psp-create-license-directory` looks).

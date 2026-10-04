@@ -103,9 +103,9 @@ every power-on. Run it several times, power-cycling the PSP in between; a single
 compare against.
 `scripts/memstick.sh results` prints both files.
 
-Without ARK there is nothing to measure, so the probe checks instead that Skiff's hook refuses and
-TLS fails closed (`SKIFF KIRK PROBE NO ARK OK`). PPSSPP has no ARK, so that is what CI runs
-(`scripts/dev.sh kirk-probe`).
+Without ARK there is nothing to measure, so the probe checks instead that Skiff's hook refuses, TLS
+fails closed, and the reason reported is `SKIFF_ERR_NET_NEEDS_ARK` (`SKIFF KIRK PROBE NO ARK OK`).
+PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 
 ## Test data rules
 

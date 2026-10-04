@@ -15,7 +15,7 @@ Turn the PSP fully off (hold the power switch up for 3 seconds) and try again. I
 happening, [open a bug report](https://github.com/chiva/skiff/issues/new?template=bug_report.yml)
 with your PSP model and firmware.
 
-## Network errors (100–108)
+## Network errors (100–109)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -26,8 +26,9 @@ with your PSP model and firmware.
 | 104 | Secure connection failed | The server may require TLS settings the PSP cannot do (TLS 1.3 only). Allow TLS 1.2 on the proxy |
 | 105 | Server certificate not trusted | Self-signed or private CA: set `ca_file` ([guide](05-secure-connections.md#https-with-your-own-certificate-authority)) |
 | 106 | Client certificate rejected | Check `cert_file`/`key_file` names, that the certificate is signed by the CA the proxy trusts, and that it has not expired |
-| 107 | Not enough randomness for a secure connection | Press a few buttons and move the analog stick, then retry. If it persists, report a bug |
+| 107 | Not enough randomness for a secure connection | The PSP's hardware random number generator failed a check. Restart Skiff; if it happens again, report a bug with your PSP model and custom firmware version |
 | 108 | The PSP's date and time are wrong | Certificates are only valid between two dates, so the PSP needs the right date to check them. Set it in Settings → System Settings → Date & Time Settings. The date often resets after the battery runs completely flat |
+| 109 | Networking needs ARK custom firmware | Every connection, even plain HTTP, needs random numbers from the PSP's hardware generator, which Skiff reads through ARK-4 or ARK-5. Other custom firmware runs Skiff but cannot connect. Install ARK following its own instructions (for ARK-5, [FasterARK](https://github.com/PSP-Arkfive/FasterARK)) |
 
 ## RomM errors (200–205)
 

@@ -19,7 +19,8 @@
  *
  * Without ARK (PPSSPP in CI, or a PSP running other firmware) there is nothing to measure. The
  * probe then checks that Skiff's hook refuses, so TLS fails closed: psa_crypto_init() and
- * curl_global_init() must both fail. That run ends with its own marker, SKIFF KIRK PROBE NO ARK OK.
+ * curl_global_init() must both fail, and skiff_psp_entropy_status() must name the reason the player
+ * sees (SKIFF_ERR_NET_NEEDS_ARK). That run ends with its own marker, SKIFF KIRK PROBE NO ARK OK.
  */
 #include <curl/curl.h>
 #include <psa/crypto.h>
@@ -33,6 +34,7 @@
 #include "skiff/selftest.h"
 
 #include "ark_sysctrl.h"
+#include "kirk_entropy.h"
 #include "lifecycle.h"
 #include "report.h"
 
@@ -150,6 +152,17 @@ typedef struct stack_timing {
     long long curl_init_us;
 } stack_timing;
 
+/* What the network layer will report when TLS does not start, as the player would see it. */
+static int check_entropy_status(skiff_psp_report *report, skiff_err expected) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    const skiff_err status = skiff_psp_entropy_status();
+    snprintf(line, sizeof line, "%s entropy status %s (expect %s): \"%s [%d]\"",
+             status == expected ? "ok  " : "FAIL", skiff_err_name(status), skiff_err_name(expected),
+             skiff_err_message(status), (int)status);
+    skiff_psp_report_line(report, line);
+    return status == expected;
+}
+
 /* Skiff's TLS stack seeded by its real entropy hook: what the app will do at startup. */
 static int check_skiff_entropy(skiff_psp_report *report, stack_timing *timing) {
     char line[SKIFF_SELFTEST_LINE_MAX];
@@ -184,7 +197,8 @@ static int check_skiff_entropy(skiff_psp_report *report, stack_timing *timing) {
     if (curl_status == CURLE_OK) {
         curl_global_cleanup();
     }
-    return draws_ok && curl_status == CURLE_OK;
+    const int status_ok = check_entropy_status(report, SKIFF_OK);
+    return draws_ok && curl_status == CURLE_OK && status_ok;
 }
 
 static int check_refuses_without_ark(skiff_psp_report *report) {
@@ -204,7 +218,8 @@ static int check_refuses_without_ark(skiff_psp_report *report) {
     if (!curl_refused) {
         curl_global_cleanup();
     }
-    return init_refused && curl_refused;
+    const int status_ok = check_entropy_status(report, SKIFF_ERR_NET_NEEDS_ARK);
+    return init_refused && curl_refused && status_ok;
 }
 
 static unsigned count_repeats(void) {

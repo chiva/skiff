@@ -77,7 +77,8 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
 
 - TLS entropy comes only from Skiff's `mbedtls_platform_get_entropy()`, which must return full
   entropy or `PSA_ERROR_INSUFFICIENT_ENTROPY` (never a weaker credit), and connections then fail
-  with `SKIFF_ERR_NET_ENTROPY`. Never re-enable `MBEDTLS_PSA_BUILTIN_GET_ENTROPY` or
+  with the reason from `skiff_psp_entropy_status()`: `SKIFF_ERR_NET_NEEDS_ARK` or
+  `SKIFF_ERR_NET_ENTROPY`. Never re-enable `MBEDTLS_PSA_BUILTIN_GET_ENTROPY` or
   `MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG`, and never implement the hook with `getentropy()`, `rand()` or
   the clock. Only test binaries may stub it, and only with a stub that refuses. The real hook is
   `src/platform/psp/kirk_entropy.c` (KIRK through ARK); it has no fallback, so without ARK

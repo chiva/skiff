@@ -75,7 +75,7 @@ flowchart LR
     health --> hook["mbedtls_platform_get_entropy()<br/>Skiff's hook"]
     hook -->|"seeds at psa_crypto_init(),<br/>reseeds periodically"| drbg["PSA random generator"]
     drbg -->|"psa_generate_random()"| curl["libcurl 8.22"]
-    hook -. "no ARK, or health failure" .-> fail["TLS refuses to start<br/>SKIFF_ERR_NET_ENTROPY"]
+    hook -. "no ARK, or health failure" .-> fail["TLS refuses to start<br/>SKIFF_ERR_NET_NEEDS_ARK<br/>or SKIFF_ERR_NET_ENTROPY"]
 ```
 
 - There is no fallback: nothing in Skiff's mbedtls calls `getentropy()` or reads a clock for
@@ -113,4 +113,5 @@ its maintainer's signature whenever a version changes. The pspdev base image is 
   source cannot answer, no connection of any kind can be made.
 - **ARK custom firmware is required for networking.** Reading KIRK needs kernel mode, which ARK-4
   and ARK-5 provide through `sctrlKernelRand()`, with nothing for the player to install. On other
-  custom firmware Skiff runs, but its networking refuses to start.
+  custom firmware Skiff runs, but its networking refuses to start with error 109
+  (`SKIFF_ERR_NET_NEEDS_ARK`).

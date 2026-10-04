@@ -14,7 +14,8 @@ readonly HOST_COMPILERS=(gcc clang)
 # The integration RomM (tests/integration/): generated certificates, secrets and seed results.
 readonly INTEGRATION_DIR="build/integration"
 readonly COMPOSE_FILE="$REPO_ROOT/tests/integration/compose.yaml"
-readonly COMPOSE_NETWORK="skiff-romm_default"
+readonly COMPOSE_PROJECT="skiff-romm"
+readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
 readonly ROMM_ADMIN_USER="skiff"
 
 # Bind mounts for every container. In a git worktree, .git is a file pointing at the main
@@ -124,7 +125,10 @@ romm_up() {
     plain_bind_address="$bind_address"
   fi
   mkdir -p "$dir"
-  run_host "tests/integration/gen-certs.sh $INTEGRATION_DIR/certs $lan_ip"
+  # As the invoking user, so on a Linux host the keys to copy to a PSP are readable by that user.
+  ensure_host_image
+  docker run --rm --user "$(id -u):$(id -g)" "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" \
+    tests/integration/gen-certs.sh "$INTEGRATION_DIR/certs" "$lan_ip"
   admin_password="$(random_hex)"
   (
     umask 077
@@ -155,10 +159,9 @@ Seeded file, its hashes and an API token: $INTEGRATION_DIR/romm.json
 EOF
 }
 
+# By project name, so it works even when build/integration/ is gone.
 romm_down() {
-  if [[ -f "$REPO_ROOT/$INTEGRATION_DIR/romm.env" ]]; then
-    compose down --volumes --remove-orphans
-  fi
+  docker compose --progress quiet -p "$COMPOSE_PROJECT" down --volumes --remove-orphans
 }
 
 host_tests() {
@@ -226,6 +229,8 @@ run_command() {
     run_host scripts/render-icons.sh
     ;;
   clean)
+    # Stop the test RomM first: its secrets live in build/.
+    romm_down
     rm -rf "$REPO_ROOT/build" "$REPO_ROOT/dist"
     ;;
   help | -h | --help)

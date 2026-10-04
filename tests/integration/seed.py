@@ -31,6 +31,8 @@ DEFAULT_PAYLOAD_BYTES = 1024 * 1024
 # same hashes on every run and every machine.
 PAYLOAD_SEED = b"skiff-integration-payload"
 SCAN_TIMEOUT_SECONDS = 120
+# Every call is bounded, so a stalled RomM fails the seed instead of hanging it.
+REQUEST_TIMEOUT_SECONDS = 30
 TOKEN_NAME = "skiff-integration"
 # What a Skiff client needs: browse and download, upload saves, register itself as a device.
 TOKEN_SCOPES = [
@@ -43,6 +45,7 @@ TOKEN_SCOPES = [
     "devices.read",
     "devices.write",
 ]
+HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_FORBIDDEN = 403
 
@@ -84,7 +87,7 @@ def request(method, path, auth, body=None):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read()
             return response.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
@@ -114,7 +117,7 @@ def session_cookie(auth):
     """Log in with a session, which RomM's socket uses to authorise a scan."""
     req = urllib.request.Request(f"{API}/api/login", method="POST")
     req.add_header("Authorization", auth)
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         cookies = response.headers.get_all("Set-Cookie") or []
     return "; ".join(cookie.split(";", 1)[0] for cookie in cookies)
 
@@ -131,7 +134,12 @@ async def scan(cookie):
     async def failed(reason):
         outcome.set_exception(SystemExit(f"seed: scan failed: {reason}"))
 
-    await client.connect(API, headers={"Cookie": cookie}, socketio_path="/ws/socket.io")
+    await client.connect(
+        API,
+        headers={"Cookie": cookie},
+        socketio_path="/ws/socket.io",
+        wait_timeout=REQUEST_TIMEOUT_SECONDS,
+    )
     try:
         await client.emit("scan", {"platform_fs_slugs": [PLATFORM_SLUG], "type": "quick", "apis": []})
         stats = await asyncio.wait_for(outcome, SCAN_TIMEOUT_SECONDS)
@@ -143,12 +151,12 @@ async def scan(cookie):
 def find_rom(auth):
     status, platforms = request("GET", "/api/platforms", auth)
     platform = next((p for p in platforms or [] if p["fs_slug"] == PLATFORM_SLUG), None)
-    if status != 200 or platform is None:
+    if status != HTTP_OK or platform is None:
         raise SystemExit(f"seed: platform {PLATFORM_SLUG} missing after the scan (HTTP {status})")
     status, page = request("GET", f"/api/roms?platform_ids={platform['id']}", auth)
     items = (page or {}).get("items", [])
     rom = next((r for r in items if r["fs_name"] == PAYLOAD_NAME), None)
-    if status != 200 or rom is None:
+    if status != HTTP_OK or rom is None:
         raise SystemExit(f"seed: {PAYLOAD_NAME} missing after the scan (HTTP {status})")
     return platform["id"], rom["id"]
 

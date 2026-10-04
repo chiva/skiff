@@ -121,10 +121,50 @@ static void test_repeat_across_fills_is_detected(void) {
     assert_zeroed(out, 4);
 }
 
-static void test_non_consecutive_repeat_passes(void) {
-    const uint32_t words[] = {0x11111111U, 0x22222222U, 0x11111111U};
-    load_script(words, 3);
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_entropy_fill(&source, out, 12));
+static void test_alternating_values_fail_the_proportion_test(void) {
+    const uint32_t words[] = {0x11111111U, 0x22222222U, 0x11111111U, 0x22222222U};
+    load_script(words, 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_ENTROPY, skiff_entropy_fill(&source, out, 16));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(3, generator.reads, "the window's first word came back");
+    assert_zeroed(out, 16);
+}
+
+static void test_short_cycle_fails_the_proportion_test(void) {
+    const uint32_t words[] = {0xA0A0A0A0U, 0xB1B1B1B1U, 0xC2C2C2C2U, 0xA0A0A0A0U};
+    load_script(words, 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_ENTROPY, skiff_entropy_fill(&source, out, 16));
+    TEST_ASSERT_EQUAL_size_t(4, generator.reads);
+}
+
+static void test_repeat_of_a_word_other_than_the_window_start_passes(void) {
+    const uint32_t words[] = {0x11111111U, 0x22222222U, 0x33333333U, 0x22222222U};
+    load_script(words, 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_entropy_fill(&source, out, 16));
+}
+
+/* Distinct words, except that word SKIFF_ENTROPY_WINDOW_WORDS (the first of the second window)
+ * repeats word 0, the first of the first window. */
+static size_t counter_reads;
+
+static skiff_err read_counter(void *ctx, uint32_t *word) {
+    (void)ctx;
+    *word =
+        counter_reads == SKIFF_ENTROPY_WINDOW_WORDS ? 0x1000U : 0x1000U + (uint32_t)counter_reads;
+    counter_reads++;
+    return SKIFF_OK;
+}
+
+static void test_window_start_may_recur_in_the_next_window(void) {
+    enum { REQUEST_BYTES = MBEDTLS_GATHER_BYTES, WINDOW_BYTES = SKIFF_ENTROPY_WINDOW_WORDS * 4 };
+    unsigned char request[REQUEST_BYTES];
+    skiff_entropy_source counted;
+    counter_reads = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_entropy_source_init(&counted, read_counter, NULL));
+    for (size_t filled = 0; filled < WINDOW_BYTES + REQUEST_BYTES; filled += REQUEST_BYTES) {
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_entropy_fill(&counted, request, sizeof request));
+    }
+    TEST_PRINTF("read %zu words across two windows", counter_reads);
+    TEST_ASSERT_GREATER_THAN_size_t(SKIFF_ENTROPY_WINDOW_WORDS, counter_reads);
 }
 
 static void test_health_failure_is_permanent(void) {
@@ -172,7 +212,10 @@ int main(void) {
     RUN_TEST(test_fill_rejects_null_arguments);
     RUN_TEST(test_consecutive_repeat_fails_and_wipes_output);
     RUN_TEST(test_repeat_across_fills_is_detected);
-    RUN_TEST(test_non_consecutive_repeat_passes);
+    RUN_TEST(test_alternating_values_fail_the_proportion_test);
+    RUN_TEST(test_short_cycle_fails_the_proportion_test);
+    RUN_TEST(test_repeat_of_a_word_other_than_the_window_start_passes);
+    RUN_TEST(test_window_start_may_recur_in_the_next_window);
     RUN_TEST(test_health_failure_is_permanent);
     RUN_TEST(test_read_error_propagates_wipes_output_and_is_permanent);
     RUN_TEST(test_mbedtls_sized_request_reads_32_words);

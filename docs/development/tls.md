@@ -71,7 +71,7 @@ declares and **Skiff implements**:
 
 ```mermaid
 flowchart LR
-    kirk["KIRK hardware RNG<br/>via ARK's sctrlKernelRand()"] --> health["health test<br/>(repetition count)"]
+    kirk["KIRK hardware RNG<br/>via ARK's sctrlKernelRand()"] --> health["health tests<br/>(repetition count,<br/>adaptive proportion)"]
     health --> hook["mbedtls_platform_get_entropy()<br/>Skiff's hook"]
     hook -->|"seeds at psa_crypto_init(),<br/>reseeds periodically"| drbg["PSA random generator"]
     drbg -->|"psa_generate_random()"| curl["libcurl 8.22"]

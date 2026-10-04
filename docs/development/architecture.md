@@ -207,8 +207,8 @@ The source is the KIRK crypto engine's hardware random generator. Only kernel mo
 ARK-4 and ARK-5 export `sctrlKernelRand()` to applications (it runs KIRK's random command in kernel
 mode), so Skiff needs no kernel module of its own. `src/platform/psp/kirk_entropy.c` passes KIRK's
 32-bit words to Mbed TLS unmodified (Mbed TLS's random generator conditions its seed itself), behind
-the health test in `src/net/entropy.c`: the SP 800-90B repetition count test, which turns TLS off
-for the session if the generator repeats a word.
+the health tests in `src/net/entropy.c`: SP 800-90B's repetition count and adaptive proportion
+tests, which turn TLS off for the session if the generator repeats a word, alternates or cycles.
 
 There is no fallback. Without ARK, or after a health failure, the hook refuses and TLS
 initialisation fails. `skiff_psp_entropy_status()` tells the two apart, so the player sees what to

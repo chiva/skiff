@@ -14,21 +14,52 @@ cd "${1:?usage: configure-mbedtls.sh <mbedtls-source-dir>}"
 readonly TLS_CONFIG=include/mbedtls/mbedtls_config.h
 readonly CRYPTO_CONFIG=tf-psa-crypto/include/psa/crypto_config.h
 
-# Rewrites the one line "<from><name>" in whichever config header holds it to "<to><name>".
+count_lines() { cat "$TLS_CONFIG" "$CRYPTO_CONFIG" | grep -cE "$1" || true; }
+
+# Fails unless <name> appears exactly once across the config headers, in the given state (on/off).
+require_state() {
+  name="$1"
+  state="$2"
+  enabled="$(count_lines "^#define ${name}([[:space:]]|\$)")"
+  disabled="$(count_lines "^//[[:space:]]*#define ${name}([[:space:]]|\$)")"
+  case "$state" in
+  on) expected_enabled=1 expected_disabled=0 ;;
+  off) expected_enabled=0 expected_disabled=1 ;;
+  esac
+  if [ "$enabled" -ne "$expected_enabled" ] || [ "$disabled" -ne "$expected_disabled" ]; then
+    echo "error: $name must be present once and $state" \
+      "(found $enabled enabled and $disabled disabled lines)" >&2
+    exit 1
+  fi
+}
+
+# Rewrites the one line "<from><name>" in whichever config header holds it to "<to><name>". Writes
+# through a temporary file rather than `sed -i`, whose syntax differs between GNU, BusyBox and BSD
+# sed (BSD would take -E as a backup suffix and silently match nothing).
 edit_option() {
   name="$1"
   from="$2"
   to="$3"
   pattern="^${from}${name}([[:space:]]|\$)"
-  matches="$(cat "$TLS_CONFIG" "$CRYPTO_CONFIG" | grep -cE "$pattern" || true)"
+  matches="$(count_lines "$pattern")"
   if [ "$matches" -ne 1 ]; then
     echo "error: expected exactly one '${from}${name}' line in the config headers, found $matches" >&2
     exit 1
   fi
-  sed -i -E "s@${pattern}@${to}${name}\\1@" "$TLS_CONFIG" "$CRYPTO_CONFIG"
+  for header in "$TLS_CONFIG" "$CRYPTO_CONFIG"; do
+    sed -E "s@${pattern}@${to}${name}\\1@" "$header" >"$header.skiff-tmp"
+    mv "$header.skiff-tmp" "$header"
+  done
 }
-turn_on() { edit_option "$1" '//#define ' '#define '; }
-turn_off() { edit_option "$1" '#define ' '//#define '; }
+# Each edit is verified afterwards, so a sed that matched nothing can never pass silently.
+turn_on() {
+  edit_option "$1" '//#define ' '#define '
+  require_state "$1" on
+}
+turn_off() {
+  edit_option "$1" '#define ' '//#define '
+  require_state "$1" off
+}
 
 # Entropy (release blocker, see docs/development/architecture.md "Randomness for TLS"). mbedtls's
 # built-in sources only support Unix and Windows. Skiff supplies mbedtls_platform_get_entropy(); any
@@ -75,22 +106,6 @@ turn_off MBEDTLS_DEBUG_C
 # Settings the security of Skiff depends on but this script does not edit: fail if an mbedtls update
 # changes their upstream defaults, and also if it renames or removes them, so a missing option can
 # never pass as "disabled".
-count_lines() { cat "$TLS_CONFIG" "$CRYPTO_CONFIG" | grep -cE "$1" || true; }
-require_state() {
-  name="$1"
-  state="$2"
-  enabled="$(count_lines "^#define ${name}([[:space:]]|\$)")"
-  disabled="$(count_lines "^//[[:space:]]*#define ${name}([[:space:]]|\$)")"
-  case "$state" in
-  on) expected_enabled=1 expected_disabled=0 ;;
-  off) expected_enabled=0 expected_disabled=1 ;;
-  esac
-  if [ "$enabled" -ne "$expected_enabled" ] || [ "$disabled" -ne "$expected_disabled" ]; then
-    echo "error: $name must be present once and $state" \
-      "(found $enabled enabled and $disabled disabled lines)" >&2
-    exit 1
-  fi
-}
 require_state MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG off
 require_state MBEDTLS_SSL_PROTO_TLS1_3 on
 require_state MBEDTLS_SSL_PROTO_TLS1_2 on

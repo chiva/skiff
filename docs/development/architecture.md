@@ -174,10 +174,13 @@ The PSP's built-in HTTPS stops at TLS 1.0 and cannot present client certificates
 brings its own TLS stack: libcurl over mbedtls, behind the `transport` interface.
 
 pspdev's packages are too old to ship: curl 7.64.1 (2019) and mbedtls 2.28, out of support since
-the end of 2024 and TLS 1.2 only. Skiff builds its own toolchain image on top of
-`pspdev/pspdev` with pinned, current releases (curl 8.x, mbedtls 3.6 LTS with TLS 1.3), published to
-GHCR and updated by Renovate. wolfSSL is excluded because its GPL-2.0 licence is incompatible with
-Skiff's MIT licence.
+the end of 2024 and TLS 1.2 only. Skiff's toolchain image (`docker/toolchain.Dockerfile`, see
+[Toolchain](toolchain.md#the-skiff-toolchain-image)) removes them and builds curl 8.22 and
+Mbed TLS 4.1 LTS (TLS 1.3, supported until March 2029) from checksum-pinned archives. Mbed TLS 3.6
+LTS was the original plan, but its support ends in March 2027, before Skiff's first networking
+release would have had a meaningful life. The image is built from source in every build rather
+than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
+excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
 For mTLS, client keys should be ECDSA P-256: RSA-2048 signing is far slower on the Allegrex.
 Connections are kept alive to pay the handshake once per session.
@@ -197,17 +200,34 @@ state, the ECDHE key and the session keys from a captured session is cheap. This
 analysis, confirmed by a determinism probe (`tests/security/entropy_probe.c`): `getentropy()`
 returns identical bytes when called twice within one second. Skiff's own pool must break that.
 
-Skiff disables the platform source and registers its own entropy pool before the first connection,
-mixing:
+Mbed TLS 4.x makes this structural. The toolchain image compiles out the built-in entropy source
+(`MBEDTLS_PSA_BUILTIN_GET_ENTROPY`, which refuses non-Unix targets anyway) and enables
+`MBEDTLS_PSA_DRIVER_GET_ENTROPY`: every random byte TLS uses, including inside libcurl, is seeded
+from one function Skiff supplies, `mbedtls_platform_get_entropy()`. An EBOOT that links mbedtls
+without it fails to link, so a build that silently falls back to the SDK's `getentropy()` cannot
+exist. `tests/security/tls_probe.c` verifies the routing on every PR.
+
+Two constraints from Mbed TLS shape Skiff's pool:
+
+- **Full entropy per call.** TF-PSA-Crypto 1.x only accepts output credited at 8 bits per byte; less
+  counts as failure. The pool conditions its inputs (hashes them) and credits sources conservatively,
+  and returns `PSA_ERROR_INSUFFICIENT_ENTROPY` rather than over-claiming.
+- **Ready at startup.** libcurl calls `psa_crypto_init()` inside `curl_global_init()`, which seeds
+  the DRBG there and then. The pool must be able to answer before the user has touched anything.
+
+Sources:
 
 - the KIRK crypto engine's hardware random generator, read by a small kernel-mode module
-  (`platform/psp/kprx/`) that the app loads through ARK's kernel bridge;
+  (`platform/psp/kprx/`) that the app loads through ARK's kernel bridge. It is the only source
+  available at boot, so it is **required**;
 - the microsecond system timer sampled at unpredictable moments (button presses, network events);
 - analog stick noise;
 - a seed file on the Memory Stick, replaced after every successful connection.
 
-If the pool lacks entropy, the connection fails with `SKIFF_ERR_NET_ENTROPY`. This is a release
-blocker for the first networking release. Plain HTTP needs no entropy and is unaffected.
+The last three are mixed in for later reseeds and as defence in depth; they are not credited enough
+to start TLS on their own. If the pool cannot answer, TLS initialisation fails and the connection
+reports `SKIFF_ERR_NET_ENTROPY`. This is a release blocker for the first networking release. Plain
+HTTP needs no entropy and is unaffected.
 
 ### The PSP's clock
 

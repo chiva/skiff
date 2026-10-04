@@ -18,18 +18,29 @@
   "minimumReleaseAge": "3 days",
   "customManagers": [
     {
-      "description": "The pspdev toolchain image is referenced as a plain string in scripts and workflows, where the docker managers cannot see it. One regex keeps every occurrence on the same monthly release, and bumps the tag and its digest together.",
+      "description": "Mbed TLS in the toolchain image. The PR fails the image's sha256sum check until a maintainer verifies the new archive and updates MBEDTLS_SHA256 (docs/development/toolchain.md).",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^scripts/dev\\.sh$/",
-        "/^\\.github/workflows/.+\\.ya?ml$/"
+        "/^docker/toolchain\\.Dockerfile$/"
       ],
       "matchStrings": [
-        "pspdev/pspdev:(?<currentValue>v\\d{8})@(?<currentDigest>sha256:[0-9a-f]{64})"
+        "ARG MBEDTLS_VERSION=(?<currentValue>[\\d.]+)"
       ],
-      "depNameTemplate": "pspdev/pspdev",
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "regex:^v(?<major>\\d{8})$"
+      "depNameTemplate": "Mbed-TLS/mbedtls",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^mbedtls-(?<version>[\\d.]+)$"
+    },
+    {
+      "description": "curl in the toolchain image. curl's own tags (curl-8_22_0) are not semver, so the official curlimages/curl image tags stand in as the release feed. The PR fails the sha256sum check until a maintainer verifies the signed archive and updates CURL_SHA256.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^docker/toolchain\\.Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG CURL_VERSION=(?<currentValue>[\\d.]+)"
+      ],
+      "depNameTemplate": "curlimages/curl",
+      "datasourceTemplate": "docker"
     },
     {
       "description": "Unity, pinned by commit with its tag in a trailing comment in tests/CMakeLists.txt. Renovate bumps the tag and the commit together.",
@@ -71,6 +82,20 @@
         "pspdev/pspdev"
       ],
       "groupName": "pspdev toolchain"
+    },
+    {
+      "description": "TLS library bumps get their own PR, stay on the Mbed TLS 4.1 LTS line (supported until March 2029), and need a manual checksum update after verifying the archive.",
+      "matchPackageNames": [
+        "Mbed-TLS/mbedtls",
+        "curlimages/curl"
+      ],
+      "groupName": "TLS libraries"
+    },
+    {
+      "matchPackageNames": [
+        "Mbed-TLS/mbedtls"
+      ],
+      "allowedVersions": "<4.2.0"
     },
     {
       "description": "PPSSPP bumps get their own PR: a rebuilt emulator can change self-test behaviour independently of our code, and the 15-minute image rebuild should be attributable.",

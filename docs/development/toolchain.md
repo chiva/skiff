@@ -12,9 +12,11 @@ Docker is the only requirement. `scripts/dev.sh help` lists every command.
 
 ## PSP: pspdev
 
-- Image: `pspdev/pspdev:v20261001` (GCC 15.2, newlib 4.5, CMake 4.2), pinned by digest everywhere
-  it is used so a re-pushed tag cannot change what we build or release with. Monthly tags; Renovate
-  proposes tag and digest together in a dedicated PR so the hardware tier can be run before merging.
+- Base image: `pspdev/pspdev:v20261001` (GCC 15.2, newlib 4.5, CMake 4.2), pinned by digest in
+  `docker/toolchain.Dockerfile`, the only place it is referenced, so a re-pushed tag cannot change
+  what we build or release with. Monthly tags; Renovate proposes tag and digest together in a
+  dedicated PR so the hardware tier can be run before merging. The image build fails if the GCC
+  major version changes.
 - **amd64 only.** On Apple Silicon Docker runs it under emulation: slower, but the output is
   identical.
 - CMake uses pspdev's toolchain file (`$PSPDEV/psp/share/pspdev.cmake`) through the `psp` and
@@ -23,7 +25,49 @@ Docker is the only requirement. `scripts/dev.sh help` lists every command.
 
 Building natively, without Docker, works too: install pspdev from its
 [releases](https://github.com/pspdev/pspdev/releases), set `PSPDEV`, put `$PSPDEV/bin` on
-`PATH`, then `cmake --preset psp && cmake --build --preset psp`.
+`PATH`, replay the steps of `docker/toolchain.Dockerfile` against it, then
+`cmake --preset psp && cmake --build --preset psp`.
+
+## The Skiff toolchain image
+
+`docker/toolchain.Dockerfile` (`skiff-toolchain`) is pspdev with its TLS libraries replaced. Every PSP
+build uses it: `scripts/dev.sh psp`, CI and the release job. It is built from source each time it
+changes, not pulled from a registry.
+
+| Library | Version | Why |
+|---|---|---|
+| Mbed TLS | 4.1.1 (LTS, supported until March 2029) | TLS 1.3; 3.6 LTS ends March 2027 |
+| curl | 8.22.0 | HTTP/HTTPS only, IPv4, no optional dependencies |
+
+pspdev's `curl`, `mbedtls` and `libzip` (the only other package depending on pspdev's mbedtls) are
+removed first so no 2.28 header or archive can be picked up. Neither library needs a PSP patch.
+
+**Mbed TLS profile.** `docker/toolchain/configure-mbedtls.sh` edits Mbed TLS's default config
+headers with its own `scripts/config.py`, so the installed headers carry the profile and Skiff, curl
+and mbedtls agree on struct layouts. It removes the server side, DTLS, renegotiation, certificate
+writing, persistent PSA keys, self-tests and debug strings, and asserts the security-critical
+settings so a renamed option fails the image build.
+
+**Link-time contracts.** The profile leaves two functions for the application to supply. Any EBOOT
+that links Mbed TLS must provide both or it does not link:
+
+| Function | Provided by | Purpose |
+|---|---|---|
+| `mbedtls_platform_get_entropy()` | Skiff's entropy pool (Phase 1) | the only seed for all TLS randomness; see [Architecture](architecture.md#randomness-for-tls) |
+| `mbedtls_ms_time()` | `src/platform/psp/mbedtls_time.c` | monotonic milliseconds for TLS 1.3 ticket ages |
+
+**Bumping a version.** Renovate opens a "TLS libraries" PR that fails the image's `sha256sum -c`
+on purpose. Verify the new archive, then update its `*_SHA256` argument:
+
+- Mbed TLS: compare with the SHA256 in the release notes
+  (`gh release view mbedtls-<version> --repo Mbed-TLS/mbedtls`).
+- curl: check the signature with Daniel Stenberg's key, fingerprint
+  `27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2`
+  (`gpgv --keyring <dearmored key> curl-<version>.tar.xz.asc curl-<version>.tar.xz`), then
+  `sha256sum` the archive.
+
+Mbed TLS stays on the 4.1 LTS line (Renovate's `allowedVersions`); moving to the next LTS is a
+deliberate change.
 
 ## Host
 
@@ -49,15 +93,14 @@ All presets build with `-Werror` and a strict warning set (`cmake/SkiffWarnings.
 
 | Dependency | Where | Pinned by |
 |---|---|---|
-| pspdev toolchain | Docker image | tag + digest, Renovate |
+| pspdev toolchain | `docker/toolchain.Dockerfile` `FROM` | tag + digest, Renovate |
+| Mbed TLS, curl | `docker/toolchain.Dockerfile` | version + SHA256, Renovate + manual verification |
 | Unity (C test framework) | `tests/CMakeLists.txt` FetchContent | commit, Renovate |
 | PPSSPP (emulator tests) | `docker/ppsspp.Dockerfile` | commit, Renovate |
 | GitHub Actions | workflows | commit SHA, Renovate |
 | pre-commit hooks | `.pre-commit-config.yaml` | commit SHA, Renovate |
 
-Planned (Phase 1): a Skiff toolchain image on top of `pspdev/pspdev` with pinned curl 8.x and
-mbedtls 3.6 LTS, because pspdev's packages are too old to ship (curl 7.64.1, mbedtls 2.28). cJSON
-and intraFont come from pspdev's packages; argosy-sigil will be a pinned submodule.
+cJSON and intraFont come from pspdev's packages; argosy-sigil will be a pinned submodule.
 
 ## Licences
 

@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
-readonly PSPDEV_IMAGE="pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf2dcb1d7a694a5233e45f"
+readonly TOOLCHAIN_IMAGE="skiff-toolchain"
 readonly HOST_IMAGE="skiff-host"
 readonly PPSSPP_IMAGE="skiff-ppsspp"
 readonly COVERAGE_FLOOR=85
@@ -26,14 +26,30 @@ Commands run in the order given and stop at the first failure.
   coverage     Host unit tests with coverage (fails under 85% line coverage)
   lint         clang-tidy and cppcheck over first-party sources
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
+  tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
   entropy-probe Run the getentropy determinism probe in PPSSPPHeadless (needs `psp` first)
   clean        Remove build/ and dist/
 EOF
 }
 
-run_pspdev() {
-  # pspdev publishes amd64 images only; Apple Silicon runs them under emulation.
-  docker run --rm --platform linux/amd64 -v "$REPO_ROOT":/src -w /src "$PSPDEV_IMAGE" sh -c "$1"
+ensure_toolchain_image() {
+  # pspdev publishes amd64 images only; Apple Silicon runs them under emulation. The first build
+  # compiles mbedtls and curl and takes minutes there; later runs are cached until the Dockerfile
+  # changes.
+  echo "toolchain image: building if docker/toolchain.Dockerfile changed..." >&2
+  docker build --quiet --platform linux/amd64 -t "$TOOLCHAIN_IMAGE" \
+    -f "$REPO_ROOT/docker/toolchain.Dockerfile" "$REPO_ROOT/docker" >/dev/null
+}
+
+run_toolchain() {
+  ensure_toolchain_image
+  docker run --rm --platform linux/amd64 -v "$REPO_ROOT":/src -w /src "$TOOLCHAIN_IMAGE" bash -c "$1"
+}
+
+run_emulator() {
+  local eboot="$1" name="$2"
+  ensure_ppsspp_image
+  docker run --rm -v "$REPO_ROOT":/src -w /src "$PPSSPP_IMAGE" tests/emulator/run_eboot.sh "$eboot" "$name"
 }
 
 ensure_host_image() {
@@ -60,10 +76,10 @@ run_command() {
   local cmd="$1"
   case "$cmd" in
   psp | psp-release)
-    run_pspdev "cmake --preset $cmd >/dev/null && cmake --build --preset $cmd"
+    run_toolchain "cmake --preset $cmd >/dev/null && cmake --build --preset $cmd"
     ;;
   package)
-    run_pspdev "cmake --preset psp-release >/dev/null && cmake --build --preset psp-release \
+    run_toolchain "cmake --preset psp-release >/dev/null && cmake --build --preset psp-release \
       && scripts/collect-licenses.sh build/psp-release/licenses >/dev/null"
     "$REPO_ROOT/scripts/package.sh" "$REPO_ROOT/build/psp-release/pbp/skiff/EBOOT.PBP" \
       "$REPO_ROOT/build/psp-release/licenses/third-party-licenses"
@@ -84,9 +100,10 @@ run_command() {
     run_host "cmake --preset host >/dev/null && scripts/lint.sh build/host"
     ;;
   selftest)
-    ensure_ppsspp_image
-    docker run --rm -v "$REPO_ROOT":/src -w /src "$PPSSPP_IMAGE" \
-      tests/emulator/run_selftest.sh build/psp/pbp/skiff_selftest/EBOOT.PBP
+    run_emulator build/psp/pbp/skiff_selftest/EBOOT.PBP SELFTEST
+    ;;
+  tls-probe)
+    run_emulator build/psp/pbp/skiff_tls_probe/EBOOT.PBP "TLS PROBE"
     ;;
   entropy-probe)
     ensure_ppsspp_image

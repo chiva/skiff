@@ -7,8 +7,9 @@
  * It prints the two samples and a verdict, then exits. It runs in PPSSPPHeadless and on real
  * hardware over PSPLINK, the same way as the self-test.
  *
- * Once Skiff registers its own entropy source, this probe becomes a regression test with the
- * opposite expectation: the two samples must then differ (SKIFF_ENTROPY_PROBE_DETERMINISTIC gone).
+ * Skiff does not repair getentropy(); its TLS stack is built so it cannot reach it (Mbed TLS takes
+ * entropy only from Skiff's mbedtls_platform_get_entropy(), verified by tls_probe.c). This probe
+ * therefore keeps reporting DETERMINISTIC until pspsdk itself is fixed upstream.
  */
 #include <pspdebug.h>
 #include <pspkernel.h>

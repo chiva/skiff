@@ -5,6 +5,8 @@
  *   - whether ARK's sctrlKernelRand() (the KIRK crypto engine's random generator) is available;
  *   - how long one Mbed TLS entropy request takes: 128 bytes, i.e. 32 calls, timed as a block,
  *     the first block separately since it includes any one-off setup;
+ *   - the same timing for the baseline, the C library's getentropy(), the toolchain's default
+ *     entropy source, so the cost of switching to KIRK is a ratio rather than a bare number;
  *   - whether 1024 consecutive values look random (no repeats, balanced bits, flat byte histogram);
  *   - whether the sequence repeats across power cycles, by appending a per-run fingerprint to
  *     kirk-log.txt next to the EBOOT. Run it several times, rebooting in between, and compare.
@@ -16,6 +18,7 @@
 #include <pspthreadman.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "skiff/selftest.h"
 
@@ -50,21 +53,38 @@ enum {
 #define PROBE_CHI2_MAX 368.0
 
 static unsigned int samples[PROBE_SAMPLES];
+/* Only timed; the baseline's output is not analysed. */
+static unsigned int baseline_samples[PROBE_SAMPLES];
 
 typedef struct gather_timing {
     long long first_us;
     long long min_us;
     long long max_us;
     long long total_us;
+    int failures;
 } gather_timing;
 
-/* Fills samples in Mbed TLS-sized blocks, timing each block. */
-static gather_timing sample_in_gathers(void) {
-    gather_timing timing = {0, 0, 0, 0};
+/* Fills one Mbed TLS request's worth of words; returns 0 on success. */
+typedef int (*gather_fn)(unsigned int *words);
+
+static int gather_kirk(unsigned int *words) {
+    for (size_t word = 0; word < PROBE_GATHER_WORDS; word++) {
+        words[word] = sctrlKernelRand();
+    }
+    return 0;
+}
+
+static int gather_baseline(unsigned int *words) {
+    return getentropy(words, PROBE_GATHER_WORDS * PROBE_BYTES_PER_WORD);
+}
+
+/* Fills out (PROBE_SAMPLES words) in Mbed TLS-sized blocks, timing each block. */
+static gather_timing time_gathers(gather_fn gather_into, unsigned int *out) {
+    gather_timing timing = {0, 0, 0, 0, 0};
     for (size_t gather = 0; gather < PROBE_GATHERS; gather++) {
         const long long start_us = sceKernelGetSystemTimeWide();
-        for (size_t word = 0; word < PROBE_GATHER_WORDS; word++) {
-            samples[gather * PROBE_GATHER_WORDS + word] = sctrlKernelRand();
+        if (gather_into(out + gather * PROBE_GATHER_WORDS) != 0) {
+            timing.failures++;
         }
         const long long elapsed_us = sceKernelGetSystemTimeWide() - start_us;
         if (gather == 0) {
@@ -79,6 +99,33 @@ static gather_timing sample_in_gathers(void) {
         timing.total_us += elapsed_us;
     }
     return timing;
+}
+
+static void report_timing(skiff_psp_report *report, const char *source,
+                          const gather_timing *timing) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(line, sizeof line,
+             "%s 128-byte gather: mean %.1f us, first %lld us, min %lld us, max %lld us", source,
+             (double)timing->total_us / PROBE_GATHERS, timing->first_us, timing->min_us,
+             timing->max_us);
+    skiff_psp_report_line(report, line);
+    if (timing->failures != 0) {
+        snprintf(line, sizeof line, "%s failed %d of %d gathers", source, timing->failures,
+                 PROBE_GATHERS);
+        skiff_psp_report_line(report, line);
+    }
+}
+
+static void report_ratio(skiff_psp_report *report, const gather_timing *kirk,
+                         const gather_timing *baseline) {
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    if (baseline->total_us == 0) {
+        snprintf(line, sizeof line, "KIRK vs baseline: baseline below the 1 us timer resolution");
+    } else {
+        snprintf(line, sizeof line, "KIRK vs baseline: %.1fx the time per gather",
+                 (double)kirk->total_us / (double)baseline->total_us);
+    }
+    skiff_psp_report_line(report, line);
 }
 
 static unsigned count_repeats(void) {
@@ -119,7 +166,8 @@ static double byte_chi_squared(void) {
 
 /* One line per run, appended, so runs across reboots end up side by side in one file. */
 static void append_fingerprint(skiff_psp_report *report, const char *program_path,
-                               long long uptime_us, const gather_timing *timing) {
+                               long long uptime_us, const gather_timing *kirk,
+                               const gather_timing *baseline) {
     char path[PROBE_PATH_MAX];
     if (skiff_selftest_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
         skiff_psp_report_line(report, "fingerprint log: not written (no EBOOT path)");
@@ -131,9 +179,10 @@ static void append_fingerprint(skiff_psp_report *report, const char *program_pat
         return;
     }
     fprintf(log,
-            "uptime_us=%lld first=%08x %08x %08x %08x gather_first_us=%lld gather_max_us=%lld\n",
-            uptime_us, samples[0], samples[1], samples[2], samples[3], timing->first_us,
-            timing->max_us);
+            "uptime_us=%lld first=%08x %08x %08x %08x kirk_total_us=%lld kirk_max_us=%lld "
+            "baseline_total_us=%lld baseline_max_us=%lld\n",
+            uptime_us, samples[0], samples[1], samples[2], samples[3], kirk->total_us, kirk->max_us,
+            baseline->total_us, baseline->max_us);
     fclose(log);
     skiff_psp_report_line(report, "fingerprint appended to " PROBE_LOG_FILE);
 }
@@ -158,13 +207,14 @@ int main(int argc, char *argv[]) {
     skiff_psp_report_line(&report, line);
 
     const long long uptime_us = sceKernelGetSystemTimeWide();
-    const gather_timing timing = sample_in_gathers();
-    snprintf(line, sizeof line, "%d calls in %lld us (%lld us per call); uptime at start %lld us",
-             PROBE_SAMPLES, timing.total_us, timing.total_us / PROBE_SAMPLES, uptime_us);
+    const gather_timing kirk = time_gathers(gather_kirk, samples);
+    const gather_timing baseline = time_gathers(gather_baseline, baseline_samples);
+    snprintf(line, sizeof line, "%d KIRK calls in %lld us; uptime at start %lld us", PROBE_SAMPLES,
+             kirk.total_us, uptime_us);
     skiff_psp_report_line(&report, line);
-    snprintf(line, sizeof line, "128-byte gather: first %lld us, min %lld us, max %lld us",
-             timing.first_us, timing.min_us, timing.max_us);
-    skiff_psp_report_line(&report, line);
+    report_timing(&report, "KIRK", &kirk);
+    report_timing(&report, "baseline getentropy()", &baseline);
+    report_ratio(&report, &kirk, &baseline);
 
     for (size_t i = 0; i < PROBE_FINGERPRINT_WORDS; i++) {
         snprintf(line, sizeof line, "sample[%zu] = 0x%08x", i, samples[i]);
@@ -190,7 +240,7 @@ int main(int argc, char *argv[]) {
              chi2_ok ? "ok  " : "FAIL", chi2, PROBE_CHI2_MIN, PROBE_CHI2_MAX);
     skiff_psp_report_line(&report, line);
 
-    append_fingerprint(&report, program_path, uptime_us, &timing);
+    append_fingerprint(&report, program_path, uptime_us, &kirk, &baseline);
 
     const int passed = repeats_ok && ones_ok && chi2_ok;
     skiff_psp_report_line(&report, passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER);

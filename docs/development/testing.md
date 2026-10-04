@@ -87,9 +87,10 @@ seed TLS, they would succeed and the probe fails.
 `tests/security/kirk_probe.c` measures the KIRK crypto engine's random generator, read through ARK's
 `sctrlKernelRand()`, before Skiff's entropy source is built on it. Hardware only: PPSSPP has no ARK,
 so CI only builds it. Per run it reports how long a 128-byte gather (one Mbed TLS entropy request,
-32 calls) takes, and 1024 values checked for repeats, bit balance and byte distribution
-(`SKIFF KIRK PROBE OK`/`FAIL`), and appends a fingerprint line (uptime, the first values and the
-gather times) to `kirk-log.txt`. Run it several times, power-cycling the PSP in between:
+32 calls) takes, next to the same gather from the C library's `getentropy()` (the toolchain's
+default source) as a baseline, and 1024 values checked for repeats, bit balance and byte
+distribution (`SKIFF KIRK PROBE OK`/`FAIL`; the baseline is timed only). It appends a fingerprint
+line (uptime, the first values and both timings) to `kirk-log.txt`. Run it several times, power-cycling the PSP in between:
 identical fingerprints across boots would mean KIRK restarts the same sequence after every power-on.
 `scripts/memstick.sh results` prints both files.
 

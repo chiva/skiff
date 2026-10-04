@@ -71,6 +71,18 @@ skiff_set_warnings(skiff_psp_check)
 skiff_add_psp_app(skiff_selftest "${SKIFF_PBP_TITLE} self-test" src/platform/psp/selftest_main.c)
 target_link_libraries(skiff_selftest PRIVATE skiff_psp_check)
 
+# Imports from ARK custom firmware's SystemCtrlForUser library, hand-written as import stubs
+# (src/platform/psp/ark_sysctrl.S) because pspsdk ships none.
+enable_language(ASM)
+add_library(skiff_psp_ark OBJECT src/platform/psp/ark_sysctrl.S)
+target_compile_options(skiff_psp_ark PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_include_directories(skiff_psp_ark PUBLIC src/platform/psp)
+
+# KIRK probe (Phase 1 hardware spike): measures ARK's sctrlKernelRand() on a real PSP before the
+# entropy design is written. Hardware only, since PPSSPP has no ARK; not run in CI.
+skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/security/kirk_probe.c)
+target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark)
+
 # TLS stack from the Skiff toolchain image (docker/toolchain.Dockerfile). Imported targets put their
 # headers on the system include path, so our strict warnings do not apply to them.
 find_package(MbedTLS 4.1 CONFIG REQUIRED)

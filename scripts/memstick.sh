@@ -11,8 +11,10 @@ readonly USAGE="usage: scripts/memstick.sh install|results|uninstall <memory-sti
 readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
-readonly TARGETS=(skiff skiff_selftest skiff_tls_probe)
-readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe)
+readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe)
+readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe)
+# Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
+readonly RUN_LOGS=(kirk-log.txt)
 
 readonly COMMAND="${1:?$USAGE}"
 readonly MOUNT="${2:?$USAGE}"
@@ -62,6 +64,13 @@ print_results() {
     else
       echo "(no $RESULT_FILE: not run yet, or it crashed before opening the file)"
     fi
+    for log in "${RUN_LOGS[@]}"; do
+      local log_path="$GAME_DIR/${FOLDERS[$i]}/$log"
+      if [[ -f "$log_path" ]]; then
+        echo "-- $log (one line per run)"
+        cat "$log_path"
+      fi
+    done
   done
 }
 

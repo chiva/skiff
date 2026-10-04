@@ -12,6 +12,16 @@ readonly COVERAGE_FLOOR=85
 # CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
 readonly HOST_COMPILERS=(gcc clang)
 
+# Bind mounts for every container. In a git worktree, .git is a file pointing at the main
+# repository's .git directory by absolute host path; mounting that directory read-only at the same
+# path lets git (lint.sh's file list) work inside the containers as it does in a normal checkout.
+SOURCE_MOUNTS=(-v "$REPO_ROOT":/src)
+GIT_COMMON_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "$GIT_COMMON_DIR" && "$GIT_COMMON_DIR" != "$REPO_ROOT/.git" ]]; then
+  SOURCE_MOUNTS+=(-v "$GIT_COMMON_DIR":"$GIT_COMMON_DIR":ro)
+fi
+readonly SOURCE_MOUNTS
+
 usage() {
   cat <<'EOF'
 Usage: scripts/dev.sh <command> [<command>...]
@@ -43,13 +53,13 @@ ensure_toolchain_image() {
 
 run_toolchain() {
   ensure_toolchain_image
-  docker run --rm --platform linux/amd64 -v "$REPO_ROOT":/src -w /src "$TOOLCHAIN_IMAGE" bash -c "$1"
+  docker run --rm --platform linux/amd64 "${SOURCE_MOUNTS[@]}" -w /src "$TOOLCHAIN_IMAGE" bash -c "$1"
 }
 
 run_emulator() {
   local eboot="$1" name="$2"
   ensure_ppsspp_image
-  docker run --rm -v "$REPO_ROOT":/src -w /src "$PPSSPP_IMAGE" tests/emulator/run_eboot.sh "$eboot" "$name"
+  docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$PPSSPP_IMAGE" tests/emulator/run_eboot.sh "$eboot" "$name"
 }
 
 ensure_host_image() {
@@ -62,7 +72,7 @@ ensure_ppsspp_image() {
 
 run_host() {
   ensure_host_image
-  docker run --rm -v "$REPO_ROOT":/src -w /src "$HOST_IMAGE" bash -c "$1"
+  docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
 }
 
 host_tests() {

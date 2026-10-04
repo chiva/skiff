@@ -64,7 +64,9 @@ The UI draws with the PSP's GU directly and renders text with intraFont, rather 
   RAM on bundled fonts. RomM libraries contain Japanese titles.
 - `libintrafont` is packaged by pspdev.
 
-Phase 1 confirms this with a prototype on hardware before the UI layer is written.
+Phase 1 confirms this with a prototype on hardware before the UI layer is written
+(`tests/prototype/ui_proto.c`, see [Testing](testing.md#ui-prototype)). It also measures what the
+fonts cost: intraFont loads a font file whole into the heap, and the Japanese font is the large one.
 
 ## Errors and languages
 

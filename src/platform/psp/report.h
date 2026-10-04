@@ -18,6 +18,13 @@ void skiff_psp_report_open(skiff_psp_report *report, const char *program_path);
 
 void skiff_psp_report_line(skiff_psp_report *report, const char *line);
 
+/*
+ * stdout and result.txt only, for EBOOTs that draw their own frames (GU): the debug screen writes
+ * straight into VRAM and would scribble over them. Lets such an EBOOT log each step as it happens,
+ * so a crash still leaves the steps before it.
+ */
+void skiff_psp_report_line_offscreen(skiff_psp_report *report, const char *line);
+
 void skiff_psp_report_close(skiff_psp_report *report);
 
 #endif

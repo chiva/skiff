@@ -21,7 +21,9 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   never repeated across launches and power cycles, so nothing is mixed in; seeding Mbed TLS takes
   about 11 ms at startup. See [Architecture](architecture.md#randomness-for-tls).
 - **Network**: join a WPA/TKIP 2.4 GHz network through `sceUtilityNetconf`; HTTPS to RomM.
-- **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard.
+- **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard and
+  the network picker (`tests/prototype/ui_proto.c`; its headless run is in CI, the hardware run is
+  pending).
 - **Measure**:
   - free memory after loading the network modules;
   - TLS handshake time with ECDSA vs RSA client certificates;

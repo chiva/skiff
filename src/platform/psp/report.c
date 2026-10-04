@@ -37,12 +37,21 @@ void skiff_psp_report_open(skiff_psp_report *report, const char *program_path) {
     }
 }
 
-void skiff_psp_report_line(skiff_psp_report *report, const char *line) {
-    print_line(line);
+static void write_line(skiff_psp_report *report, const char *line) {
     if (report->file != NULL) {
         fprintf(report->file, "%s\n", line);
         fflush(report->file);
     }
+}
+
+void skiff_psp_report_line(skiff_psp_report *report, const char *line) {
+    print_line(line);
+    write_line(report, line);
+}
+
+void skiff_psp_report_line_offscreen(skiff_psp_report *report, const char *line) {
+    printf("%s\n", line);
+    write_line(report, line);
 }
 
 void skiff_psp_report_close(skiff_psp_report *report) {

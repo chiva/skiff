@@ -40,6 +40,13 @@ RUN git init -q /ppsspp \
  && git -C /ppsspp fetch -q --depth 1 https://github.com/hrydgard/ppsspp.git "$PPSSPP_COMMIT" \
  && git -C /ppsspp checkout -q FETCH_HEAD \
  && git -C /ppsspp -c submodule.ffmpeg.update=none submodule update --init --recursive --depth 1
+# On Linux, PPSSPP serves flash0: from a VFS that accepts only plain reads, but sceIoOpen always adds
+# PPSSPP's internal "quiet" flag, so every read of flash0: from a program fails (seen with the
+# firmware fonts the UI prototype loads; still unfixed upstream as of v1.20.4). Mask the flag. The
+# last grep fails the build if the patch no longer applies, so a PPSSPP bump re-checks it.
+RUN f=/ppsspp/Core/FileSystems/DirectoryFileSystem.cpp \
+ && sed -i '/^int VFSFileSystem::OpenFile/,/^}/ s/if (access != FILEACCESS_READ) {/if ((access \& ~FILEACCESS_PPSSPP_QUIET) != FILEACCESS_READ) {/' "$f" \
+ && grep -qF 'if ((access & ~FILEACCESS_PPSSPP_QUIET) != FILEACCESS_READ) {' "$f"
 # The ffmpeg submodule (prebuilt media libraries for every platform) is gigabytes and only serves
 # video and audio playback, which the self-test never uses; skip it and build without FFmpeg.
 RUN cmake -S /ppsspp -B /ppsspp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHEADLESS=ON \

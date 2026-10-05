@@ -17,11 +17,12 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
 | UI prototype, headless (fonts and frames) | `scripts/dev.sh ui-proto` (after `psp`) |
+| Network probe without ARK (modules load, TLS must refuse) | `scripts/dev.sh net-probe` (after `psp`) |
 | Test RomM behind TLS/mTLS (Docker Compose) | `scripts/dev.sh romm-up` (or `romm-lan` for a PSP), `romm-check`, `romm-down` → `build/integration/` |
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Icon PNGs from `assets/brand/` SVGs | `scripts/dev.sh icons` → `assets/{psp,github}/` (commit them) |
@@ -37,7 +38,9 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
 
 - `include/skiff/` public headers; `src/core/` and every other `src/` layer except `src/platform/`
   must compile and be unit-tested on the host.
-- `src/platform/psp/` is the only place allowed to include `psp*.h` or call `sce*`.
+- `src/platform/psp/` is the only place allowed to include `psp*.h` or call `sce*`. The network
+  stack (modules, access point, teardown) lives in `src/platform/psp/net_psp.c`; unload it only
+  after a confirmed disconnect.
 - Errors: return `skiff_err` from `include/skiff/error.h`. Add codes to `SKIFF_ERROR_TABLE` at the end
   of their group; never renumber (codes appear in user bug reports).
 - The self-test (`src/core/selftest.c`) runs on host, emulator and hardware. Each new layer adds

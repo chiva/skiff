@@ -266,9 +266,9 @@ order (each can be chosen with `sections=` in `bench.ini`):
 - **net:** the seeded file downloaded `runs=` times (default 3, median, min and max) for each of:
   curl buffer 16 to 512 KB; plain HTTP at 16 and 512 KB (only when the server publishes it on the
   LAN); `SO_RCVBUF` 32, 64 and 128 KB; TLS 1.3 and TLS 1.2, each forcing AES-128-GCM and
-  ChaCha20-Poly1305; and HTTPS and plain HTTP at 333 MHz. Speed counts from the request to the last
-  byte (no TCP or TLS setup). A thread at the lowest priority counts while the CPU is idle, so each
-  download also reports how busy the CPU was: if TLS is the limit, HTTPS runs near 100% and gets
+  ChaCha20-Poly1305; and HTTPS and plain HTTP at 333 MHz. Speed counts from the first chunk of the body to the
+  last (no TCP or TLS setup, no wait for the first byte). A thread at the lowest priority counts
+  while the CPU is idle, so each download also reports how busy the CPU was over the same window: if TLS is the limit, HTTPS runs near 100% and gets
   faster at 333 MHz while plain HTTP does not. Every download is checked against the seeded size
   and CRC-32;
 - **ms:** Memory Stick write and read-back speed with 16 to 512 KB blocks (16 MiB each, compared

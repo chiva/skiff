@@ -729,8 +729,11 @@ typedef struct download_result {
     long status;
     unsigned long long bytes;
     uint32_t crc32;
-    /* From sending the request to the last byte: no TCP or TLS setup. */
+    /* From the first body chunk's arrival to the last's, and the bytes that arrived in between (all
+     * but the first chunk): no TCP or TLS setup, no wait for the first byte. CPU busy is measured
+     * over the same window. */
     long long transfer_us;
+    unsigned long long transfer_bytes;
     long long tls_us;
     int busy_percent;
     char tls_version[SKIFF_PROBE_TLS_NAME_MAX];
@@ -744,12 +747,18 @@ typedef struct download_result {
 } download_result;
 
 typedef struct download {
+    const bench *owner;
     const download_spec *spec;
     download_result *result;
     CURL *curl;
     SceUID file;
     unsigned char *sink;
     size_t sink_used;
+    /* When the first body chunk arrived, and the idle ticks then. */
+    int receiving;
+    long long first_chunk_us;
+    unsigned first_chunk_ticks;
+    unsigned long long first_chunk_bytes;
 } download;
 
 static void write_sink(download *d) {
@@ -766,6 +775,19 @@ static void write_sink(download *d) {
 static size_t on_download_body(char *data, size_t size, size_t count, void *context) {
     download *d = context;
     const size_t bytes = size * count;
+    const long long arrived_us = now_us();
+    const unsigned arrived_ticks = idle_ticks;
+    if (!d->receiving) {
+        d->receiving = 1;
+        d->first_chunk_us = arrived_us;
+        d->first_chunk_ticks = arrived_ticks;
+        d->first_chunk_bytes = bytes;
+    } else {
+        d->result->transfer_us = arrived_us - d->first_chunk_us;
+        d->result->transfer_bytes = d->result->bytes + bytes - d->first_chunk_bytes;
+        d->result->busy_percent =
+            busy_percent(d->owner, arrived_ticks - d->first_chunk_ticks, d->result->transfer_us);
+    }
     if (d->result->tls_version[0] == '\0' && d->spec->https) {
         skiff_probe_read_tls_session(d->curl, d->result->tls_version, d->result->cipher);
     }
@@ -841,20 +863,13 @@ static int configure_download(const bench *b, download *d, const char *url,
     return ok;
 }
 
-static void read_timings(bench *b, CURL *curl, unsigned idle_ticks_seen, long long elapsed_us,
-                         download_result *result) {
+static void read_timings(CURL *curl, download_result *result) {
     curl_off_t tcp_done = 0;
     curl_off_t tls_done = 0;
-    curl_off_t request_sent = 0;
-    curl_off_t total = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result->status);
     curl_easy_getinfo(curl, CURLINFO_CONNECT_TIME_T, &tcp_done);
     curl_easy_getinfo(curl, CURLINFO_APPCONNECT_TIME_T, &tls_done);
-    curl_easy_getinfo(curl, CURLINFO_PRETRANSFER_TIME_T, &request_sent);
-    curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME_T, &total);
     result->tls_us = tls_done > tcp_done ? (long long)(tls_done - tcp_done) : 0;
-    result->transfer_us = total > request_sent ? (long long)(total - request_sent) : 0;
-    result->busy_percent = busy_percent(b, idle_ticks_seen, elapsed_us);
 }
 
 /* Opens the Memory Stick file a download is written to; 0 if it cannot. */
@@ -884,7 +899,7 @@ static void run_download(bench *b, const download_spec *spec, download_result *r
     memset(result, 0, sizeof *result);
     result->receive_buffer = -1;
     result->busy_percent = -1;
-    download d = {.spec = spec, .result = result, .file = -1};
+    download d = {.owner = b, .spec = spec, .result = result, .file = -1};
     char url[URL_MAX];
     content_url(b, spec->https, url);
     struct curl_slist *headers = curl_slist_append(NULL, b->authorization);
@@ -893,11 +908,8 @@ static void run_download(bench *b, const download_spec *spec, download_result *r
         (spec->to_memory_stick && !open_download_file(b, &d))) {
         result->setup_failed = 1;
     } else {
-        const unsigned start_ticks = idle_ticks;
-        const long long start = now_us();
         result->code = curl_easy_perform(d.curl);
-        const long long elapsed_us = now_us() - start;
-        read_timings(b, d.curl, idle_ticks - start_ticks, elapsed_us, result);
+        read_timings(d.curl, result);
     }
     if (d.file >= 0) {
         close_download_file(b, &d);
@@ -932,9 +944,10 @@ static void report_run(bench *b, const download_spec *spec, int run, const downl
     snprintf(text, sizeof text,
              "  %s run %d: %llu KB/s, CPU busy %d%%, TLS %lld ms, curl %d (%s), HTTP %ld, %llu "
              "bytes, CRC-32 %08lx, %s %s, SO_RCVBUF %d%s",
-             spec->id, run + 1, skiff_probe_kb_per_s(r->bytes, r->transfer_us), r->busy_percent,
-             r->tls_us / US_PER_MS, (int)r->code, curl_easy_strerror(r->code), r->status, r->bytes,
-             (unsigned long)r->crc32, r->tls_version, r->cipher, r->receive_buffer, writes);
+             spec->id, run + 1, skiff_probe_kb_per_s(r->transfer_bytes, r->transfer_us),
+             r->busy_percent, r->tls_us / US_PER_MS, (int)r->code, curl_easy_strerror(r->code),
+             r->status, r->bytes, (unsigned long)r->crc32, r->tls_version, r->cipher,
+             r->receive_buffer, writes);
     check(b, ok, text);
 }
 
@@ -961,7 +974,7 @@ static download_summary measure_download(bench *b, const download_spec *spec) {
         const int ok = download_ok(b, spec, &result);
         report_run(b, spec, runs, &result, ok);
         all_ok &= ok;
-        kb_per_s[runs] = (long long)skiff_probe_kb_per_s(result.bytes, result.transfer_us);
+        kb_per_s[runs] = (long long)skiff_probe_kb_per_s(result.transfer_bytes, result.transfer_us);
         busy[runs] = result.busy_percent;
         tls_ms[runs] = result.tls_us / US_PER_MS;
         write_ms[runs] = result.write_us / US_PER_MS;

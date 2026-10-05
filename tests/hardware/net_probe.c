@@ -504,12 +504,14 @@ static int check_keep_alive(probe *p, const request_spec *spec) {
     return ok;
 }
 
-/* A download's bytes from file offset RESUME_OFFSET on, hashed as they arrive. */
+/* A download hashed as it arrives: every byte of the body (whole), and the bytes from file offset
+ * RESUME_OFFSET on (suffix), which a resumed 206 must match. */
 typedef struct download_digest {
     const skiff_http_response *response;
     int started;
     unsigned long long position; /* file offset of the next byte */
-    uint32_t hash;
+    uint32_t whole;
+    uint32_t suffix;
 } download_digest;
 
 /* The status and headers are parsed before the first chunk: a 206 starts where its Content-Range
@@ -521,8 +523,9 @@ static skiff_err digest_body(void *ctx, const unsigned char *data, size_t size) 
         digest->position = digest->response->has_content_range ? digest->response->range_start : 0;
     }
     for (size_t i = 0; i < size; i++, digest->position++) {
+        digest->whole = (digest->whole ^ data[i]) * FNV_PRIME;
         if (digest->position >= RESUME_OFFSET) {
-            digest->hash = (digest->hash ^ data[i]) * FNV_PRIME;
+            digest->suffix = (digest->suffix ^ data[i]) * FNV_PRIME;
         }
     }
     return SKIFF_OK;
@@ -535,7 +538,8 @@ static skiff_err transport_get(probe *p, skiff_transport *transport, const char 
     digest->response = response;
     digest->started = 0;
     digest->position = 0;
-    digest->hash = FNV_OFFSET_BASIS;
+    digest->whole = FNV_OFFSET_BASIS;
+    digest->suffix = FNV_OFFSET_BASIS;
     const skiff_http_request request = {.url = url,
                                         .has_range = resume,
                                         .range_start = resume ? RESUME_OFFSET : 0,
@@ -617,7 +621,7 @@ static int run_transport_checks(probe *p, long long *download_us) {
     err = transport_get(p, transport, content, 0, NULL, &digest, &response, download_us);
     char etag[SKIFF_HTTP_ETAG_MAX];
     snprintf(etag, sizeof etag, "%s", response.etag);
-    const uint32_t whole_hash = digest.hash;
+    const download_digest whole_file = digest;
     ok &= report_transport(p,
                            err == SKIFF_OK && response.status == HTTP_OK &&
                                response.body_bytes == config->size && etag[0] != '\0',
@@ -636,14 +640,15 @@ static int run_transport_checks(probe *p, long long *download_us) {
         p,
         err == SKIFF_OK && response.status == HTTP_STATUS_PARTIAL && response.has_content_range &&
             response.range_start == RESUME_OFFSET &&
-            response.body_bytes == config->size - RESUME_OFFSET && digest.hash == whole_hash,
+            response.body_bytes == config->size - RESUME_OFFSET &&
+            digest.suffix == whole_file.suffix,
         "resume with the current ETag (206, same bytes)", err, &response, elapsed_us);
     err = transport_get(p, transport, content, 1, STALE_ETAG, &digest, &response, &elapsed_us);
-    ok &=
-        report_transport(p,
-                         err == SKIFF_OK && response.status == HTTP_OK &&
-                             response.body_bytes == config->size && digest.hash == whole_hash,
-                         "resume with a stale ETag (whole file again)", err, &response, elapsed_us);
+    ok &= report_transport(
+        p,
+        err == SKIFF_OK && response.status == HTTP_OK && response.body_bytes == config->size &&
+            digest.whole == whole_file.whole,
+        "resume with a stale ETag (whole file again)", err, &response, elapsed_us);
     skiff_transport_destroy(transport);
 
     /* The real clock goes back whatever happens: later requests verify certificates against it. */

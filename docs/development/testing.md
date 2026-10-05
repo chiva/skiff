@@ -8,7 +8,7 @@ the logic.
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
 | Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK and network probes (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe net-probe ui-proto` |
-| Integration server | Docker Compose | ✅ server checks | `scripts/dev.sh romm-up romm-check romm-down` |
+| Integration | Docker Compose | ✅ server checks, host transport against the server | `scripts/dev.sh romm-up romm-check romm-test romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
 ## Unit tests
@@ -17,13 +17,26 @@ the logic.
   `tests/unit/test_<module>.c`, registered with `skiff_add_unit_test()` in `tests/CMakeLists.txt`.
 - Tests narrate with `TEST_PRINTF` so a failure in CI shows what was being checked.
 - Coverage counts portable code only (`src/` minus `src/platform/`).
+- Tests that use the network layer link the same curl and Mbed TLS as the EBOOTs, built into the
+  host image, with `skiff_add_tls_unit_test()`.
 
-Planned additions:
+### Test doubles (`tests/support/`)
 
-- **Contract tests**: recorded RomM 5.3 API responses in `tests/fixtures/romm/`, parsed by the real
-  client code, so an API change shows up as a failing test rather than a crash on a PSP.
-- **Integration tests**: the host build of the client against the
-  [integration server](#integration-server).
+- **Fake transport** (`fake_transport.h`): a `skiff_transport` that replays the RomM responses in
+  `tests/fixtures/romm/` and injects failures: a timeout or lost connection after N body bytes, a
+  refusal before any response, a file that changed on the server. It answers `Range`/`If-Range`
+  from the recorded body as RomM does (206, 200 on a stale ETag, 416 past the end) and logs every
+  request. Layers above `net/` (`romm/`, `jobs/`) test against it, so an API change shows up as a
+  failing test rather than a crash on a PSP.
+- **Local HTTP server** (`local_http_server.h`): a scripted server on `127.0.0.1` that sends exact
+  bytes back (a cut-off body, a stalled connection, garbage to a TLS client), for the curl
+  transport's tests without a network.
+
+The fixtures are recorded, not written by hand: `scripts/dev.sh romm-record` starts a fresh test
+RomM with a 4 KiB synthetic file, saves each response byte for byte (CRLF headers, de-chunked body;
+`Date` and `Set-Cookie` dropped) and stops the server. Review the files before committing: they
+must hold synthetic data only, never a token. The hygiene hooks leave `tests/fixtures/` untouched so
+the bytes stay exact.
 
 ## Emulator tests
 
@@ -66,6 +79,8 @@ the PSP's network checks:
 | `scripts/dev.sh romm-up` | Starts a fresh server on `127.0.0.1` (new secrets, empty volumes, about a minute) |
 | `scripts/dev.sh romm-lan` | The same with the TLS ports on the LAN, for a PSP; the address is detected, or set `SKIFF_LAN_IP`. Plain HTTP stays local unless `SKIFF_LAN_PLAIN_HTTP=1` |
 | `scripts/dev.sh romm-check` | Checks what the client relies on (below); ends with `SKIFF INTEGRATION SERVER OK` |
+| `scripts/dev.sh romm-test` | Runs the host build's transport against it ([below](#integration-tests)); ends with `SKIFF TRANSPORT INTEGRATION OK` |
+| `scripts/dev.sh romm-record` | Records the fake transport's fixtures from a fresh server, then stops it |
 | `scripts/dev.sh romm-down` | Stops it and deletes its volumes |
 
 There is one test RomM per machine, since the ports are fixed. The commands refuse to touch one
@@ -83,6 +98,22 @@ that another checkout (a parallel worktree) started.
 - RomM reports the seeded file's size, CRC32, MD5 and SHA-1, and the download matches;
 - `Range` with the current ETag in `If-Range` resumes (206), and a stale ETag restarts with the
   whole file (200).
+
+### Integration tests
+
+`romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c` on the
+host and runs it on the compose network. It checks the error codes a player would see, over the TLS
+stack the PSP uses:
+
+- HTTPS through the test CA works, and without the CA the server is untrusted (105);
+- with the clock set to 2000 (a PSP whose battery ran flat) the failure is the clock (108); with
+  the clock in 2100 it is an untrusted certificate (105);
+- both client certificates pass the mTLS port; no certificate, or one from the untrusted CA, gives
+  106;
+- plain HTTP works; an unknown host gives 101 and a closed port 102;
+- a second request reuses the connection (no new handshake);
+- the token is required (401 maps to 200), the whole file downloads, a `Range` with the current
+  ETag resumes with exactly the missing bytes, and a stale ETag restarts with the whole file.
 
 Everything generated lives in `build/integration/` (git-ignored):
 

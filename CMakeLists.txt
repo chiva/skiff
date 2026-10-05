@@ -22,8 +22,14 @@ configure_file(src/core/version_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generat
                @ONLY)
 
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
-add_library(skiff_core STATIC src/core/error.c src/core/selftest.c src/core/version.c
-                              src/net/entropy.c)
+add_library(
+  skiff_core STATIC
+  src/core/error.c
+  src/core/selftest.c
+  src/core/version.c
+  src/net/entropy.c
+  src/net/http.c
+  src/net/transport.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -35,6 +41,13 @@ skiff_set_warnings(skiff_core)
 # targets put their headers on the system include path, so our strict warnings do not apply to them.
 find_package(MbedTLS 4.1 CONFIG REQUIRED)
 find_package(CURL CONFIG REQUIRED)
+
+# The real transport, libcurl over Mbed TLS (skiff/curl_transport.h), for the PSP and host tests. On
+# the PSP an EBOOT linking it also links skiff_psp_tls and skiff_psp_entropy; on the host,
+# skiff_host_tls.
+add_library(skiff_net STATIC src/net/curl_transport.c src/net/net_errors.c)
+target_link_libraries(skiff_net PUBLIC skiff_core CURL::libcurl MbedTLS::mbedtls)
+skiff_set_warnings(skiff_net)
 
 if(PSP)
   include(SkiffPsp)

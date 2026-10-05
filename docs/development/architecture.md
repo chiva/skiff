@@ -30,15 +30,16 @@
   ├──────────────────────────────────────────────────────────────┤
   │ core/    errors, version, self-test                          │
   ├──────────────────────────────────────────────────────────────┤
-  │ platform/psp  sce*, ARK calls   │ platform/host  test doubles │
+  │ platform/psp  sce*, ARK calls   │ platform/host  TLS hooks    │
   └──────────────────────────────────────────────────────────────┘
 ```
 
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/` and `platform/psp/` (lifecycle only) exist. The other layers arrive with the
-[roadmap](roadmap.md) phases that need them.
+Status: `core/`, `net/` (transport, TLS entropy source) and `platform/psp/` (lifecycle, network
+stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+them.
 
 ## Threads, power and suspend
 
@@ -172,8 +173,10 @@ A game and Skiff never run at the same time, so a save is never synced while it 
 
 ## Testing seams
 
-- `net/` exposes a `transport` interface. Host tests use a fake transport that replays recorded
-  RomM responses (contract tests) and injects failures: timeouts, truncated bodies, a changed ETag.
+- `net/` exposes a `transport` interface (`include/skiff/transport.h`). Host tests use a fake
+  transport that replays recorded RomM responses and injects failures: timeouts, truncated bodies,
+  a changed ETag (`tests/support/fake_transport.h`). The real curl transport is tested against a
+  scripted local server and, in CI, against the integration RomM; see [Testing](testing.md).
 - `storage/` roots point at a temporary directory on the host.
 - The self-test checks what differs between host, emulator and hardware (C library, heap, clock,
   byte order) and grows with each layer. See [Testing](testing.md).
@@ -194,6 +197,32 @@ LTS was the original plan, but its support ends in March 2027, before Skiff's fi
 release would have had a meaningful life. The image is built from source in every build rather
 than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
 excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
+
+The `transport` interface (`include/skiff/transport.h`) takes a URL, headers, `Range`/`If-Range`
+and a body callback, and fills a small response record: status, ETag, Content-Length and
+Content-Range, read by one header parser shared with the fake transport. Custom headers from
+`config.ini` are sent on every request and may not contain line breaks. Only URLs with an
+explicit `http://` or `https://` are sent: curl would guess plain HTTP for a bare address and send
+the token in the clear, so a server address without a scheme is a configuration error (402). The curl transport
+(`include/skiff/curl_transport.h`) keeps one handle, and so one connection, per session. It sets no
+limit on a whole transfer, since a download can take an hour; a connection that delivers nothing for
+30 seconds (`SKIFF_CURL_STALL_TIMEOUT_S`) counts as a timeout instead.
+
+Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
+`tests/unit/test_net_errors.c` and checked against Caddy by the integration tests):
+
+| What happened | Code |
+|---|---|
+| Name not found / connection refused / connect or stall timeout | 101 / 102 / 103 |
+| TLS handshake failed | 104, or 106 with a client certificate configured |
+| Server certificate rejected, clock plausible / clock before `SKIFF_TLS_CLOCK_FLOOR` | 105 / 108 |
+| Server closed the connection right after the handshake (how a TLS 1.3 server refuses a missing or unaccepted client certificate); client certificate unreadable | 106 |
+| Connection broke after the response started, without TLS, or on a connection kept from an earlier request | 111 |
+| The body callback stopped the transfer (e.g. Memory Stick full) | the callback's code |
+| Bad server address or unreadable CA file | 402 |
+
+An HTTP response is not a network failure: callers map its status with `skiff_http_status_error()`
+(401, 403, 404 → 200–202; 408 and 504 → 103; 502 → 102; other 5xx → 203).
 
 For mTLS, client keys should be ECDSA P-256: on a PSP-1000, a TLS 1.3 handshake took 0.59 s
 without a client certificate, 0.69 s with an ECDSA P-256 one and 2.07 s with RSA-2048 (median of
@@ -242,9 +271,14 @@ started at 5.92–5.95 s), so clock-derived seeds would repeat; nothing is mixed
 ### The PSP's clock
 
 Certificate validation needs the right date, and the PSP's clock resets when the battery goes
-completely flat. A certificate rejected only because of the date is reported as
-`SKIFF_ERR_NET_TLS_CLOCK` ("set the date") rather than as an untrusted certificate. Skiff never
-takes the time from the server it is trying to verify.
+completely flat. When the server's certificate is rejected while the clock reads earlier than
+`SKIFF_TLS_CLOCK_FLOOR` (2026-10-01, before this code existed, so the clock cannot be right), Skiff
+reports `SKIFF_ERR_NET_TLS_CLOCK` ("set the date") rather than an untrusted certificate: the date
+has to be fixed before anything else about the certificate can be judged. The check reads the same
+clock Mbed TLS verified against (`mbedtls_time()`). It cannot look at the reason for the rejection,
+because curl's Mbed TLS backend does not report the verify flags. A clock set in the future is not
+detected; it shows as an untrusted certificate. Skiff never takes the time from the server it is
+trying to verify.
 
 ### Secrets on the Memory Stick
 

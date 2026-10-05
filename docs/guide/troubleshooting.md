@@ -15,7 +15,7 @@ Turn the PSP fully off (hold the power switch up for 3 seconds) and try again. I
 happening, [open a bug report](https://github.com/chiva/skiff/issues/new?template=bug_report.yml)
 with your PSP model and firmware.
 
-## Network errors (100–110)
+## Network errors (100–111)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -28,8 +28,9 @@ with your PSP model and firmware.
 | 106 | Client certificate rejected | Check `cert_file`/`key_file` names, that the certificate is signed by the CA the proxy trusts, and that it has not expired |
 | 107 | Not enough randomness for a secure connection | The PSP's hardware random number generator failed a check. Restart Skiff; if it happens again, report a bug with your PSP model and custom firmware version |
 | 108 | The PSP's date and time are wrong | Certificates are only valid between two dates, so the PSP needs the right date to check them. Set it in Settings → System Settings → Date & Time Settings. The date often resets after the battery runs completely flat |
-| 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 109 | Networking needs ARK custom firmware | Every connection, even plain HTTP, needs random numbers from the PSP's hardware generator, which Skiff reads through ARK-4 or ARK-5. Other custom firmware runs Skiff but cannot connect. Install ARK following its own instructions (for ARK-5, [FasterARK](https://github.com/PSP-Arkfive/FasterARK)) |
+| 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
+| 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
 ## RomM errors (200–205)
 

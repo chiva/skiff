@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "skiff/http.h"
 #include "skiff/version.h"
 
 typedef const char *(*selftest_check_fn)(void);
@@ -23,6 +24,11 @@ typedef struct selftest_check {
 
 /* Roughly what one download needs at once: TLS buffers, write buffer, JSON page, UI textures. */
 #define SKIFF_SELFTEST_HEAP_PROBE_BYTES ((size_t)8 * 1024 * 1024)
+/* A resumed download past 4 GiB: offsets that need all 64 bits on a 32-bit CPU. */
+#define SKIFF_SELFTEST_RANGE_HEADER "Content-Range: bytes 4294967296-6442450943/6442450944\r\n"
+#define SKIFF_SELFTEST_RANGE_START 4294967296ULL
+#define SKIFF_SELFTEST_RANGE_END 6442450943ULL
+#define SKIFF_SELFTEST_RANGE_TOTAL 6442450944ULL
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -82,6 +88,20 @@ static const char *check_little_endian(void) {
     return first_byte == 0x04 ? NULL : "CPU is not little-endian";
 }
 
+/* Resuming reads Content-Range with 64-bit arithmetic, which the PSP's 32-bit MIPS CPU does in
+ * software (libgcc): check it gives the host's answer. */
+static const char *check_http_range_parsing(void) {
+    skiff_http_response response;
+    skiff_http_response_reset(&response);
+    skiff_http_response_parse_header(&response, SKIFF_SELFTEST_RANGE_HEADER,
+                                     sizeof SKIFF_SELFTEST_RANGE_HEADER - 1);
+    return response.has_content_range && response.range_start == SKIFF_SELFTEST_RANGE_START &&
+                   response.range_end == SKIFF_SELFTEST_RANGE_END &&
+                   response.range_total == SKIFF_SELFTEST_RANGE_TOTAL
+               ? NULL
+               : "Content-Range above 4 GiB parsed wrongly";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -90,6 +110,7 @@ static const selftest_check CHECKS[] = {
     {"heap-headroom", check_heap_headroom},
     {"clock", check_clock_advances},
     {"little-endian", check_little_endian},
+    {"http-range", check_http_range_parsing},
 };
 // clang-format on
 

@@ -1,0 +1,2 @@
+# Recorded HTTP responses are replayed byte for byte; never convert their line endings.
+tests/fixtures/** -text

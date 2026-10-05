@@ -1,0 +1,8 @@
+HTTP/1.1 401 Unauthorized
+Content-Length: 30
+Content-Type: application/json
+Server: nginx/1.30.5
+Via: 1.1 Caddy
+Www-Authenticate: Bearer
+
+{"detail":"Not authenticated"}

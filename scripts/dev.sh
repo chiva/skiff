@@ -11,6 +11,12 @@ readonly PPSSPP_IMAGE="skiff-ppsspp"
 readonly COVERAGE_FLOOR=85
 # CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
 readonly HOST_COMPILERS=(gcc clang)
+# The integration RomM (tests/integration/): generated certificates, secrets and seed results.
+readonly INTEGRATION_DIR="build/integration"
+readonly COMPOSE_FILE="$REPO_ROOT/tests/integration/compose.yaml"
+readonly COMPOSE_PROJECT="skiff-romm"
+readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
+readonly ROMM_ADMIN_USER="skiff"
 
 # Bind mounts for every container. In a git worktree, .git is a file pointing at the main
 # repository's .git directory by absolute host path; mounting that directory read-only at the same
@@ -41,6 +47,10 @@ Commands run in the order given and stop at the first failure.
                (needs `psp` first; the measurements need a real PSP)
   ui-proto     Run the UI prototype in PPSSPPHeadless: with no input it renders, checks its fonts
                and exits on its own (needs `psp` first; the dialogs need a real PSP)
+  romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
+  romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
+  romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
+  romm-down    Stop the test RomM and delete its data
   icons        Render the icon PNGs from the SVG masters in assets/brand/
   clean        Remove build/ and dist/
 EOF
@@ -77,6 +87,104 @@ ensure_ppsspp_image() {
 run_host() {
   ensure_host_image
   docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
+}
+
+# The ports are global, so there is one test RomM per Docker host. Its containers record the
+# checkout that started it; empty when none is running.
+romm_owner() {
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1
+}
+
+# Refuses to act on a test RomM another checkout (a parallel worktree) started.
+require_own_romm() {
+  local owner
+  owner="$(romm_owner)"
+  if [[ -n "$owner" && "$owner" != "$(dirname "$COMPOSE_FILE")" ]]; then
+    echo "error: the test RomM running now was started from ${owner%/tests/integration};" \
+      "run scripts/dev.sh romm-down there first" >&2
+    exit 1
+  fi
+}
+
+run_host_in_romm_network() {
+  if [[ -z "$(romm_owner)" ]]; then
+    echo "error: the test RomM is not running; start it with scripts/dev.sh romm-up" >&2
+    exit 1
+  fi
+  require_own_romm
+  ensure_host_image
+  docker run --rm --network "$COMPOSE_NETWORK" "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
+}
+
+compose() {
+  docker compose --progress quiet -f "$COMPOSE_FILE" --env-file "$REPO_ROOT/$INTEGRATION_DIR/romm.env" "$@"
+}
+
+random_hex() {
+  od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+}
+
+# The address a PSP on the same network can reach this machine at.
+lan_ip() {
+  if [[ -n "${SKIFF_LAN_IP:-}" ]]; then
+    echo "$SKIFF_LAN_IP"
+    return
+  fi
+  case "$(uname -s)" in
+  Darwin) ipconfig getifaddr "$(route -n get default | awk '/interface:/ {print $2}')" ;;
+  *) ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}' ;;
+  esac
+}
+
+# romm_up <bind-address> [<lan-ip>]: always a fresh server (empty volumes, new secrets), so every run
+# starts from the same state. Plain HTTP is published on the LAN only with SKIFF_LAN_PLAIN_HTTP=1.
+romm_up() {
+  local bind_address="$1" lan_ip="${2:-}" dir="$REPO_ROOT/$INTEGRATION_DIR" admin_password host
+  local plain_bind_address="127.0.0.1" plain_host
+  if [[ -n "$lan_ip" && "${SKIFF_LAN_PLAIN_HTTP:-0}" == 1 ]]; then
+    plain_bind_address="$bind_address"
+  fi
+  require_own_romm
+  mkdir -p "$dir"
+  # As the invoking user, so on a Linux host the keys to copy to a PSP are readable by that user.
+  ensure_host_image
+  docker run --rm --user "$(id -u):$(id -g)" "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" \
+    tests/integration/gen-certs.sh "$INTEGRATION_DIR/certs" "$lan_ip"
+  admin_password="$(random_hex)"
+  (
+    umask 077
+    printf '%s\n' "ROMM_DB_PASSWORD=$(random_hex)" "ROMM_AUTH_SECRET_KEY=$(random_hex)" \
+      "ROMM_BIND_ADDRESS=$bind_address" "ROMM_PLAIN_BIND_ADDRESS=$plain_bind_address" \
+      "SKIFF_CERTS_DIR=$dir/certs" \
+      "SKIFF_ADMIN_USER=$ROMM_ADMIN_USER" "SKIFF_ADMIN_PASSWORD=$admin_password" >"$dir/romm.env"
+  )
+  echo "test RomM: starting from empty volumes (about a minute)..." >&2
+  compose down --volumes --remove-orphans
+  compose up --detach --wait
+  (
+    umask 077
+    compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
+      romm python3 /seed.py >"$dir/romm.json"
+  )
+  host="${lan_ip:-localhost}"
+  plain_host="localhost"
+  if [[ "$plain_bind_address" != 127.0.0.1 ]]; then
+    plain_host="$host"
+  fi
+  cat <<EOF
+Test RomM is up (web UI login: $ROMM_ADMIN_USER, password in $INTEGRATION_DIR/romm.env):
+  http://$plain_host:8080   plain HTTP, for comparison only
+  https://$host:8443  TLS, trusted through $INTEGRATION_DIR/certs/ca.crt
+  https://$host:8444  TLS + client certificate ($INTEGRATION_DIR/certs/client-{ecdsa,rsa}.{crt,key})
+Seeded file, its hashes and an API token: $INTEGRATION_DIR/romm.json
+EOF
+}
+
+# By project name, so it works even when build/integration/ is gone.
+romm_down() {
+  require_own_romm
+  docker compose --progress quiet -p "$COMPOSE_PROJECT" down --volumes --remove-orphans
 }
 
 host_tests() {
@@ -125,10 +233,32 @@ run_command() {
   ui-proto)
     run_emulator build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS"
     ;;
+  romm-up)
+    romm_up 127.0.0.1
+    ;;
+  romm-lan)
+    local ip
+    ip="$(lan_ip)"
+    if [[ -z "$ip" ]]; then
+      echo "error: no LAN address found; set SKIFF_LAN_IP to this machine's address" >&2
+      exit 1
+    fi
+    romm_up 0.0.0.0 "$ip"
+    ;;
+  romm-check)
+    run_host_in_romm_network "tests/integration/check.sh $INTEGRATION_DIR"
+    ;;
+  romm-down)
+    romm_down
+    ;;
   icons)
     run_host scripts/render-icons.sh
     ;;
   clean)
+    # Stop this checkout's test RomM first: its secrets live in build/.
+    if [[ "$(romm_owner)" == "$(dirname "$COMPOSE_FILE")" ]]; then
+      romm_down
+    fi
     rm -rf "$REPO_ROOT/build" "$REPO_ROOT/dist"
     ;;
   help | -h | --help)

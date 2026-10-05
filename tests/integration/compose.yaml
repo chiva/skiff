@@ -1,0 +1,73 @@
+# Disposable RomM behind a TLS proxy, for the integration tests (host, CI) and the network probe
+# (a real PSP on the LAN). Use it through scripts/dev.sh romm-up | romm-lan | romm-check | romm-down,
+# which generate the secrets and certificates first (docs/development/testing.md). Every image is
+# pinned by tag and digest. Nothing persists: each romm-up starts from empty volumes.
+name: skiff-romm
+
+services:
+  db:
+    image: mariadb:11.8.9@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+      MARIADB_DATABASE: romm
+      MARIADB_USER: romm
+      MARIADB_PASSWORD: ${ROMM_DB_PASSWORD:?run scripts/dev.sh romm-up}
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 30s
+      start_interval: 2s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  romm:
+    image: rommapp/romm:5.3.1@sha256:0d66b4ea152a237c7f24b95e87459f46d3c596a7c0b35a82f26bc971487278b3
+    environment:
+      DB_HOST: db
+      DB_NAME: romm
+      DB_USER: romm
+      DB_PASSWD: ${ROMM_DB_PASSWORD:?run scripts/dev.sh romm-up}
+      ROMM_AUTH_SECRET_KEY: ${ROMM_AUTH_SECRET_KEY:?run scripts/dev.sh romm-up}
+      # No metadata providers: the tests need files and the API, not covers, and stay offline.
+      UPC_LOOKUP_ENABLED: "false"
+    volumes:
+      - library:/romm/library
+      - resources:/romm/resources
+      - assets:/romm/assets
+      - ./seed.py:/seed.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/heartbeat"]
+      start_period: 120s
+      start_interval: 2s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # TLS terminates here, as in front of most self-hosted RomMs. RomM itself is not published.
+  proxy:
+    image: caddy:2.11.6@sha256:907efba736324e43f891ccb9d760fe5abe545e313419b3d18d63d4ec670dad8d
+    # Only what the proxy needs: never the CA's or the clients' private keys.
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${SKIFF_CERTS_DIR:?run scripts/dev.sh romm-up}/server.crt:/certs/server.crt:ro
+      - ${SKIFF_CERTS_DIR:?run scripts/dev.sh romm-up}/server.key:/certs/server.key:ro
+      - ${SKIFF_CERTS_DIR:?run scripts/dev.sh romm-up}/ca.crt:/certs/ca.crt:ro
+    # romm-lan publishes the TLS ports on the LAN; plain HTTP stays local unless asked for.
+    ports:
+      - ${ROMM_PLAIN_BIND_ADDRESS:-127.0.0.1}:8080:8080
+      - ${ROMM_BIND_ADDRESS:-127.0.0.1}:8443:8443
+      - ${ROMM_BIND_ADDRESS:-127.0.0.1}:8444:8444
+    depends_on:
+      romm:
+        condition: service_healthy
+
+volumes:
+  db:
+  library:
+  resources:
+  assets:

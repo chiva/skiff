@@ -1,0 +1,31 @@
+# Three ways in to the same RomM: plain HTTP (comparison only), HTTPS, and HTTPS that requires a
+# client certificate signed by the test CA (mTLS). Certificates come from gen-certs.sh.
+{
+	admin off
+	auto_https off
+	# A PSP that connects by IP address sends no SNI; this picks the test certificate for it.
+	default_sni localhost
+	# Only TCP ports are published, so do not advertise HTTP/3.
+	servers {
+		protocols h1 h2
+	}
+}
+
+:8080 {
+	reverse_proxy romm:8080
+}
+
+:8443 {
+	tls /certs/server.crt /certs/server.key
+	reverse_proxy romm:8080
+}
+
+:8444 {
+	tls /certs/server.crt /certs/server.key {
+		client_auth {
+			mode require_and_verify
+			trust_pool file /certs/ca.crt
+		}
+	}
+	reverse_proxy romm:8080
+}

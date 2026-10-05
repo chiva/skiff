@@ -20,6 +20,8 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   `mbedtls_platform_get_entropy()` with SP 800-90B health tests. On a PSP-1000 with ARK-5 its output
   never repeated across launches and power cycles, so nothing is mixed in; seeding Mbed TLS takes
   about 11 ms at startup. See [Architecture](architecture.md#randomness-for-tls).
+- **Test server** ✅: a disposable RomM 5.3 behind a TLS proxy, with client certificates
+  (`tests/integration/`), checked in CI. See [Testing](testing.md#integration-server).
 - **Network**: join a WPA/TKIP 2.4 GHz network through `sceUtilityNetconf`; HTTPS to RomM.
 - **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard and
   the network picker (`tests/prototype/ui_proto.c`; its headless run is in CI, the hardware run is
@@ -28,7 +30,7 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   - free memory after loading the network modules;
   - TLS handshake time with ECDSA vs RSA client certificates;
   - Wi-Fi throughput and Memory Stick write speed by buffer size;
-  - hashing speed for the algorithms RomM provides.
+  - hashing speed for the hashes RomM records per file (CRC32, MD5 and SHA-1).
 - **Resume**: a ranged download survives the Wi-Fi switch and a suspend.
 
 Output: `docs/development/hardware-findings.md` with the numbers and the decisions they settle.

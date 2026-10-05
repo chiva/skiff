@@ -26,6 +26,12 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   on a PSP-1000) and reaches RomM over TLS 1.3 through a proxy, with or without a client
   certificate (`tests/hardware/net_probe.c`). The picker also works from the UI loop. Certificate
   dates are checked against the PSP's real-time clock: the C library's `time()` has no date there.
+- **Transport layer** ✅: the network seam the app and `romm/` use (`include/skiff/transport.h`):
+  keep-alive, resuming with `Range` and `If-Range`, and one error code per failure, with the same
+  curl and Mbed TLS on the host as on the PSP. Tested on the host with a fake transport replaying
+  recorded RomM responses and against the test server in CI, and on a PSP-1000: a resumed download
+  matches byte for byte, and a clock reset to 2000 is reported as a wrong date (108). See
+  [Architecture](architecture.md#transport).
 - **UI stack** ✅: GU + intraFont with the firmware's Latin font, the on-screen keyboard and the
   network picker, confirmed on hardware (`tests/prototype/ui_proto.c`).
 - **Measure**:

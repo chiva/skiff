@@ -189,7 +189,8 @@ On a PSP:
 
 Each step is written to `result.txt` as it happens (dialog opened, shown, closed; any failing
 `sceUtility*` call with its code; connection, disconnection and unloading), so a failed run says
-where it stopped. The summary at the end has: font load times; heap used by the fonts; the first
+where it stopped. The summary at the end has: font load times; heap used by the Latin font alone
+and by both; the first
 frame read back (drawn pixels in a Latin and a Japanese-only line, both must be above zero); list
 frame time (mean, max, frames over the 16.7 ms budget); each dialog's outcome; and system memory
 before the network modules load, after they load and after they unload, with how much the

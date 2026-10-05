@@ -65,6 +65,8 @@
 #define COLOUR_DIM_TEXT 0xFFB0B0B0U
 #define COLOUR_SHADOW 0xFF000000U
 #define COLOUR_SELECTION 0xFF805020U
+/* Laid over the list while a system dialog is open, as games do, so the dialog stands out. */
+#define COLOUR_DIALOG_DIM 0xB0000000U
 /* A clear without the stencil bit leaves the frame buffer's alpha alone, so compare colour only. */
 #define COLOUR_RGB_MASK 0x00FFFFFFU
 
@@ -195,6 +197,7 @@ typedef struct proto_results {
     long long latin_load_us;
     long long japanese_load_us;
     memory_snapshot before_fonts;
+    memory_snapshot after_latin_font;
     memory_snapshot after_fonts;
     long latin_glyph_pixels;
     long japanese_glyph_pixels;
@@ -270,8 +273,10 @@ static int load_fonts(ui_state *ui, proto_results *results) {
     char line[SKIFF_SELFTEST_LINE_MAX];
     results->before_fonts = take_memory_snapshot();
     intraFontInit();
-    ui->latin = load_font(LATIN_FONT_PATH, INTRAFONT_CACHE_ASCII | INTRAFONT_STRING_UTF8,
+    /* Not INTRAFONT_CACHE_ASCII: that keeps only ASCII glyphs, and accented letters fall back. */
+    ui->latin = load_font(LATIN_FONT_PATH, INTRAFONT_CACHE_MED | INTRAFONT_STRING_UTF8,
                           &results->latin_load_us);
+    results->after_latin_font = take_memory_snapshot();
     ui->japanese = load_font(JAPANESE_FONT_PATH, INTRAFONT_CACHE_MED | INTRAFONT_STRING_UTF8,
                              &results->japanese_load_us);
     results->after_fonts = take_memory_snapshot();
@@ -284,6 +289,7 @@ static int load_fonts(ui_state *ui, proto_results *results) {
              results->japanese_load_us / US_PER_MS);
     skiff_psp_report_line(ui->report, line);
     report_memory(ui->report, "before fonts", &results->before_fonts);
+    report_memory(ui->report, "after Latin font", &results->after_latin_font);
     report_memory(ui->report, "after fonts", &results->after_fonts);
     if (ui->latin == NULL || ui->japanese == NULL) {
         return 0;
@@ -329,15 +335,26 @@ static void draw_rect(int x, int y, int width, int height, unsigned int colour) 
     sprite_vertex *vertices = sceGuGetMemory(2 * sizeof(sprite_vertex));
     vertices[0] = (sprite_vertex){colour, (short)x, (short)y, 0};
     vertices[1] = (sprite_vertex){colour, (short)(x + width), (short)(y + height), 0};
+    /* The GE reads RAM, not the CPU's data cache: without this it can draw last frame's vertices.
+     */
+    sceKernelDcacheWritebackRange(vertices, 2 * sizeof(sprite_vertex));
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, NULL,
                    vertices);
     sceGuEnable(GU_TEXTURE_2D);
 }
 
+/* Sets the style on the font and its fallback: the fallback draws characters with its own style. */
+static void set_style(intraFont *font, float size, unsigned int colour) {
+    for (intraFont *styled = font; styled != NULL;
+         styled = styled->altFont != font ? styled->altFont : NULL) {
+        intraFontSetStyle(styled, size, colour, COLOUR_SHADOW, 0.0f, INTRAFONT_ALIGN_LEFT);
+    }
+}
+
 static void print_text(intraFont *font, int x, int y, float size, unsigned int colour,
                        const char *text) {
-    intraFontSetStyle(font, size, colour, COLOUR_SHADOW, 0.0f, INTRAFONT_ALIGN_LEFT);
+    set_style(font, size, colour);
     intraFontPrint(font, (float)x, (float)y, text);
 }
 
@@ -362,8 +379,7 @@ static void draw_list(const ui_state *ui, const proto_results *results) {
     print_text(ui->latin, TEXT_LEFT, TITLE_BASELINE, TITLE_SIZE, COLOUR_TEXT, TITLE_TEXT);
     print_text(ui->latin, TEXT_LEFT, SAMPLE_BASELINE, SAMPLE_SIZE, COLOUR_TEXT, JAPANESE_SAMPLE);
     if (results->osk_typed_length > 0) {
-        intraFontSetStyle(ui->latin, ITEM_SIZE, COLOUR_DIM_TEXT, COLOUR_SHADOW, 0.0f,
-                          INTRAFONT_ALIGN_LEFT);
+        set_style(ui->latin, ITEM_SIZE, COLOUR_DIM_TEXT);
         intraFontPrintUCS2(ui->latin, (float)STATUS_LEFT, (float)TITLE_BASELINE, ui->osk_text);
     }
     if (results->net_ip[0] != '\0') {
@@ -462,6 +478,7 @@ static void run_dialog(ui_state *ui, const proto_results *results, const dialog_
     for (;;) {
         begin_frame();
         draw_list(ui, results);
+        draw_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOUR_DIALOG_DIM);
         end_frame();
         const int status = ops->get_status();
         const long long now = now_us();

@@ -229,21 +229,58 @@ static int term(skiff_psp_net *net, skiff_psp_net_stage layer, const char *call,
     return 1;
 }
 
-/* Puts back the clock from before skiff_psp_net_load(); a module failure stays the one reported. */
+/*
+ * Puts back the clock from before skiff_psp_net_load(). Done only once it reads back: with Wi-Fi
+ * up the firmware accepts the call and keeps its clock, so clock_changed stays set for a retry. An
+ * earlier failure stays the one reported.
+ */
 static int restore_clock(skiff_psp_net *net) {
     if (!net->clock_changed) {
         return 1;
     }
     const int result =
         scePowerSetClockFrequency(net->cpu_mhz_before, net->cpu_mhz_before, net->bus_mhz_before);
-    if (result < 0) {
-        if (net->failed_call == NULL) {
-            step(net, "scePowerSetClockFrequency (restore)", result);
-        }
+    sceKernelDelayThread(CLOCK_SETTLE_US);
+    net->clock_changed = scePowerGetCpuClockFrequency() != net->cpu_mhz_before ||
+                         scePowerGetBusClockFrequency() != net->bus_mhz_before;
+    if (net->clock_changed && net->failed_call == NULL) {
+        step(net, "scePowerSetClockFrequency (restore, clock kept)", result < 0 ? result : -1);
+    }
+    return !net->clock_changed;
+}
+
+/* Whether the layers may come down: never while the access point is connected. */
+static int access_point_released(skiff_psp_net *net) {
+    if (net->stage < SKIFF_PSP_NET_APCTL) {
+        return 1;
+    }
+    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+    if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
         return 0;
     }
-    net->clock_changed = 0;
+    net->apctl_state = state;
+    if (state != PSP_NET_APCTL_STATE_DISCONNECTED) {
+        step(net, "skiff_psp_net_unload (still connected)", -1);
+        return 0;
+    }
     return 1;
+}
+
+static int unload_layers(skiff_psp_net *net) {
+    return (net->stage < SKIFF_PSP_NET_APCTL ||
+            term(net, SKIFF_PSP_NET_APCTL, "sceNetApctlTerm", sceNetApctlTerm())) &&
+           (net->stage < SKIFF_PSP_NET_RESOLVER ||
+            term(net, SKIFF_PSP_NET_RESOLVER, "sceNetResolverTerm", sceNetResolverTerm())) &&
+           (net->stage < SKIFF_PSP_NET_INET ||
+            term(net, SKIFF_PSP_NET_INET, "sceNetInetTerm", sceNetInetTerm())) &&
+           (net->stage < SKIFF_PSP_NET_NET ||
+            term(net, SKIFF_PSP_NET_NET, "sceNetTerm", sceNetTerm())) &&
+           (net->stage < SKIFF_PSP_NET_INET_MODULE ||
+            term(net, SKIFF_PSP_NET_INET_MODULE, "sceUtilityUnloadNetModule(INET)",
+                 sceUtilityUnloadNetModule(PSP_NET_MODULE_INET))) &&
+           (net->stage < SKIFF_PSP_NET_COMMON_MODULE ||
+            term(net, SKIFF_PSP_NET_COMMON_MODULE, "sceUtilityUnloadNetModule(COMMON)",
+                 sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON)));
 }
 
 skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
@@ -251,32 +288,8 @@ skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
         return SKIFF_ERR_INVALID_ARG;
     }
     clear_failure(net);
-    if (net->stage >= SKIFF_PSP_NET_APCTL) {
-        int state = PSP_NET_APCTL_STATE_DISCONNECTED;
-        if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
-            return SKIFF_ERR_NET_UNAVAILABLE;
-        }
-        net->apctl_state = state;
-        if (state != PSP_NET_APCTL_STATE_DISCONNECTED) {
-            step(net, "skiff_psp_net_unload (still connected)", -1);
-            return SKIFF_ERR_NET_UNAVAILABLE;
-        }
-    }
-    const int ok =
-        (net->stage < SKIFF_PSP_NET_APCTL ||
-         term(net, SKIFF_PSP_NET_APCTL, "sceNetApctlTerm", sceNetApctlTerm())) &&
-        (net->stage < SKIFF_PSP_NET_RESOLVER ||
-         term(net, SKIFF_PSP_NET_RESOLVER, "sceNetResolverTerm", sceNetResolverTerm())) &&
-        (net->stage < SKIFF_PSP_NET_INET ||
-         term(net, SKIFF_PSP_NET_INET, "sceNetInetTerm", sceNetInetTerm())) &&
-        (net->stage < SKIFF_PSP_NET_NET ||
-         term(net, SKIFF_PSP_NET_NET, "sceNetTerm", sceNetTerm())) &&
-        (net->stage < SKIFF_PSP_NET_INET_MODULE ||
-         term(net, SKIFF_PSP_NET_INET_MODULE, "sceUtilityUnloadNetModule(INET)",
-              sceUtilityUnloadNetModule(PSP_NET_MODULE_INET))) &&
-        (net->stage < SKIFF_PSP_NET_COMMON_MODULE ||
-         term(net, SKIFF_PSP_NET_COMMON_MODULE, "sceUtilityUnloadNetModule(COMMON)",
-              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON)));
+    const int layers_down = access_point_released(net) && unload_layers(net);
+    /* Also after a refusal or a failed layer, so no exit path leaves the session clock behind. */
     const int clock_restored = restore_clock(net);
-    return ok && clock_restored ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
+    return layers_down && clock_restored ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
 }

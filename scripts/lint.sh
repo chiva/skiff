@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # Static analysis over first-party portable sources. Needs a configured host build tree for
-# compile_commands.json. PSP-only sources are skipped because host clang cannot see the PSP SDK or
-# the toolchain image's TLS stack; they are identified by including a PSP SDK header (<psp...>) or
-# an Mbed TLS one (<mbedtls/...>, <psa/...>) rather than by a hard-coded path, so a new PSP-only
-# file anywhere is excluded automatically.
+# compile_commands.json. Lints exactly the tracked sources the host build compiles, so PSP-only
+# files (which host clang cannot build without the PSP SDK) are excluded automatically, wherever
+# they live.
 # Usage: scripts/lint.sh <build-dir>
 set -euo pipefail
 
 readonly BUILD_DIR="${1:?usage: scripts/lint.sh <build-dir>}"
+readonly COMPILE_COMMANDS="$BUILD_DIR/compile_commands.json"
 
-# A command substitution rather than a process substitution, so a failing git aborts under set -e
-# instead of silently yielding an empty list.
+# Command substitutions rather than process substitutions, so a failing git or jq aborts under
+# set -e instead of silently yielding an empty list.
 tracked="$(git ls-files 'src/*.c' 'tests/*.c')"
+compiled="$(jq -r '.[].file' "$COMPILE_COMMANDS")"
 
 sources=()
 while IFS= read -r file; do
-  if grep -qE '^\s*#\s*include\s*<(psp|mbedtls/|psa/)' "$file"; then
-    continue
+  if grep -qxF "$PWD/$file" <<<"$compiled"; then
+    sources+=("$file")
   fi
-  sources+=("$file")
 done <<<"$tracked"
 
-if [[ ${#sources[@]} -eq 0 || -z "${sources[0]}" ]]; then
+if [[ ${#sources[@]} -eq 0 ]]; then
   echo "error: no first-party C sources found to lint" >&2
   exit 1
 fi

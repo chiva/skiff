@@ -99,6 +99,11 @@ mbedtls itself are compiled against the same configuration.
 curl is built with HTTP and HTTPS only, IPv4 only, and no optional dependencies (no HTTP/2, IDN,
 public-suffix list or compression).
 
+The host image builds the same two libraries with the same profile and options
+(`docker/toolchain/build-tls.sh`), so host unit and integration tests run Skiff's network code over
+the TLS stack the PSP uses. Host test binaries seed it from the operating system's `getrandom()`
+(`src/platform/host/tls_hooks.c`), which is never linked into an EBOOT.
+
 ### Verified sources
 
 Archives are pinned by SHA256; mbedtls is checked against its published checksums and curl against

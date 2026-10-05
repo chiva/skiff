@@ -25,7 +25,8 @@ Docker is the only requirement. `scripts/dev.sh help` lists every command.
 
 Building natively, without Docker, works too: install pspdev from its
 [releases](https://github.com/pspdev/pspdev/releases), set `PSPDEV`, put `$PSPDEV/bin` on
-`PATH`, replay the steps of `docker/toolchain.Dockerfile` against it, then
+`PATH`, run `docker/toolchain/build-tls.sh "$PSPDEV/psp" -DCMAKE_TOOLCHAIN_FILE=$PSPDEV/psp/share/pspdev.cmake`
+after removing pspdev's `curl`, `libzip` and `mbedtls` packages, then
 `cmake --preset psp && cmake --build --preset psp`.
 
 ## The Skiff toolchain image
@@ -41,6 +42,14 @@ changes, not pulled from a registry. Why it replaces pspdev's TLS packages: [TLS
 
 pspdev's `curl`, `mbedtls` and `libzip` (the only other package depending on pspdev's mbedtls) are
 removed first so no 2.28 header or archive can be picked up. Neither library needs a PSP patch.
+
+**One build script, two images.** `docker/toolchain/build-tls.sh` holds the versions, checksums,
+the Mbed TLS profile step and curl's options. The toolchain image runs it with pspdev's CMake
+toolchain file; the host image (`docker/host.Dockerfile`) runs it natively into `/opt/skiff-tls`, so
+host unit and integration tests link the same TLS code the EBOOTs do and see the same error codes
+and certificate verify flags. The host's link-time contracts live in
+`src/platform/host/tls_hooks.c` (entropy from the operating system's `getrandom()`, a monotonic
+clock); they are never linked into an EBOOT.
 
 **Mbed TLS profile.** `docker/toolchain/configure-mbedtls.sh` edits Mbed TLS's default config
 headers in place with `sed`, so the installed headers carry the profile and Skiff, curl and mbedtls
@@ -69,7 +78,8 @@ library's `time()` cannot serve. On a PSP-1000 it returned 36834 at 09:13 UTC: o
 which made every certificate look issued in the future.
 
 **Bumping a version.** Renovate opens a "TLS libraries" PR that fails the image's `sha256sum -c`
-on purpose. Verify the new archive, then update its `*_SHA256` argument:
+on purpose. Verify the new archive, then update its `*_SHA256` value in
+`docker/toolchain/build-tls.sh`:
 
 - Mbed TLS: compare with the SHA256 in the release notes
   (`gh release view mbedtls-<version> --repo Mbed-TLS/mbedtls`).

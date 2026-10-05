@@ -17,6 +17,12 @@ if(SKIFF_COVERAGE)
   target_link_options(skiff_core PUBLIC --coverage)
 endif()
 
+# What a host binary needs besides the libraries once it links Mbed TLS: the link-time contracts the
+# PSP's skiff_psp_tls and skiff_psp_entropy supply on hardware (src/platform/host/tls_hooks.c).
+add_library(skiff_host_tls OBJECT src/platform/host/tls_hooks.c)
+target_link_libraries(skiff_host_tls PUBLIC CURL::libcurl MbedTLS::mbedtls)
+skiff_set_warnings(skiff_host_tls)
+
 if(SKIFF_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

@@ -23,6 +23,8 @@ readonly INTEGRATION_CERTS="$REPO_ROOT/build/integration/certs"
 readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.crt client-rsa.key
   wrong-ca.crt client-wrong-ca.crt client-wrong-ca.key)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
+# The seeded file and the API token, for the probe's download checks through Skiff's transport.
+readonly INTEGRATION_SEED="$REPO_ROOT/build/integration/romm.json"
 readonly DEFAULT_NET_PROFILE=1
 
 readonly COMMAND="${1:?$USAGE}"
@@ -51,6 +53,25 @@ test_server_lan_ip() {
   tr ',' '\n' <"$san" | sed -n 's/^IP://p' | grep -v '^127\.' | tail -n 1 || true
 }
 
+# json_field <name>: a value from romm.json, a single line written by tests/integration/seed.py.
+# Plain sed rather than jq, which this host-only script cannot assume is installed.
+json_field() {
+  sed -nE "s/.*\"$1\": *\"?([^\",}]*)\"?[,}].*/\1/p" "$INTEGRATION_SEED"
+}
+
+# Percent-encodes a file name for a URL path.
+url_encode() {
+  local text="$1" encoded="" char i
+  for ((i = 0; i < ${#text}; i++)); do
+    char="${text:i:1}"
+    case "$char" in
+    [A-Za-z0-9._~-]) encoded+="$char" ;;
+    *) encoded+="$(printf '%%%02X' "'$char")" ;;
+    esac
+  done
+  printf '%s' "$encoded"
+}
+
 install_net_probe_config() {
   local dest="$GAME_DIR/$NET_PROBE_FOLDER" host profile="${SKIFF_NET_PROFILE:-$DEFAULT_NET_PROFILE}"
   host="$(test_server_lan_ip)"
@@ -73,7 +94,9 @@ install_net_probe_config() {
     plain_http=1
   fi
   printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
-    "plain_http=$plain_http" >"$dest/net-probe.ini"
+    "plain_http=$plain_http" "token=$(json_field token)" "rom_id=$(json_field rom_id)" \
+    "file_name=$(url_encode "$(json_field file_name)")" "size=$(json_field size)" \
+    >"$dest/net-probe.ini"
   remove_macos_metadata "$NET_PROBE_FOLDER"
   echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \
     "plain HTTP comparison $([[ $plain_http == 1 ]] && echo on || echo off)"

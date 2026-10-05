@@ -3,6 +3,8 @@
 #include <string.h>
 
 static const char *const ALLOWED_SCHEMES[] = {"http://", "https://"};
+/* Set only through has_range and if_range, so a resume can never skip its ETag check. */
+static const char *const RESERVED_HEADERS[] = {"range", "if-range"};
 
 static int has_line_break(const char *text) { return strpbrk(text, "\r\n") != NULL; }
 
@@ -42,6 +44,16 @@ static int range_is_valid(const skiff_http_request *request) {
            !has_line_break(request->if_range);
 }
 
+static int is_reserved_name(const char *name) {
+    for (size_t i = 0; i < sizeof RESERVED_HEADERS / sizeof RESERVED_HEADERS[0]; i++) {
+        if (strlen(name) == strlen(RESERVED_HEADERS[i]) &&
+            starts_with_ignoring_case(name, RESERVED_HEADERS[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int skiff_http_headers_valid(const skiff_http_header *headers, size_t count) {
     if (count > 0 && headers == NULL) {
         return 0;
@@ -50,7 +62,7 @@ int skiff_http_headers_valid(const skiff_http_header *headers, size_t count) {
         const char *name = headers[i].name;
         const char *value = headers[i].value;
         if (name == NULL || name[0] == '\0' || value == NULL || strchr(name, ':') != NULL ||
-            has_line_break(name) || has_line_break(value)) {
+            has_line_break(name) || has_line_break(value) || is_reserved_name(name)) {
             return 0;
         }
     }

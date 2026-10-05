@@ -23,6 +23,8 @@ typedef struct body_sink {
     size_t size;
     int chunks;
     skiff_err fail_with;
+    /* The status the response held when the first chunk arrived. */
+    long status_at_first_chunk;
 } body_sink;
 
 static fake_transport fake;
@@ -33,6 +35,9 @@ static unsigned char full_content[CONTENT_BYTES];
 
 static skiff_err collect(void *ctx, const unsigned char *data, size_t size) {
     body_sink *target = ctx;
+    if (target->chunks == 0) {
+        target->status_at_first_chunk = response.status;
+    }
     if (target->fail_with != SKIFF_OK) {
         return target->fail_with;
     }
@@ -209,6 +214,8 @@ static void test_recorded_refusal_maps_to_a_romm_error(void) {
     add("/api/roms", "romm/roms-unauthorized.http");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/roms"));
     TEST_ASSERT_EQUAL_INT64(401, response.status);
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(401, sink.status_at_first_chunk,
+                                    "a sink can refuse an error page before writing it");
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_UNAUTHORIZED, skiff_http_status_error(response.status));
 }
 

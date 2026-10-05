@@ -31,12 +31,17 @@ typedef struct body_sink {
     char bytes[BODY_MAX];
     size_t size;
     skiff_err fail_with;
+    /* The status the response held when the first chunk arrived. */
+    long status_at_first_chunk;
 } body_sink;
 
 static body_sink sink;
 
 static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size) {
     body_sink *target = ctx;
+    if (target->size == 0 && target->status_at_first_chunk == 0) {
+        target->status_at_first_chunk = response.status;
+    }
     if (target->fail_with != SKIFF_OK) {
         TEST_PRINTF("body callback refuses %zu bytes with %s", size,
                     skiff_err_name(target->fail_with));
@@ -177,6 +182,8 @@ static void test_http_error_status_is_a_response_not_a_failure(void) {
     create(&TEST_CONFIG);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
     TEST_ASSERT_EQUAL_INT64(404, response.status);
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(404, sink.status_at_first_chunk,
+                                    "a sink can refuse an error page before writing it");
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_NOT_FOUND, skiff_http_status_error(response.status));
 }
 

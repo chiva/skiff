@@ -103,6 +103,8 @@ static void test_header_injection_is_refused(void) {
     const skiff_http_header colon_name[] = {{"X-A: b", "v"}};
     const skiff_http_header empty_name[] = {{"", "v"}};
     const skiff_http_header null_value[] = {{"X-A", NULL}};
+    const skiff_http_header raw_range[] = {{"range", "bytes=1000-"}};
+    const skiff_http_header raw_if_range[] = {{"If-Range", "\"etag\""}};
     request.header_count = 1;
     request.headers = split_value;
     expect_refused("CRLF in a value");
@@ -114,6 +116,10 @@ static void test_header_injection_is_refused(void) {
     expect_refused("empty name");
     request.headers = null_value;
     expect_refused("NULL value");
+    request.headers = raw_range;
+    expect_refused("Range as a plain header would skip the ETag check");
+    request.headers = raw_if_range;
+    expect_refused("If-Range as a plain header");
     request.headers = NULL;
     expect_refused("count without headers");
 }

@@ -21,7 +21,10 @@ typedef struct skiff_http_header {
 } skiff_http_header;
 
 /* Receives the response body in chunks as it arrives. Any result other than SKIFF_OK stops the
- * transfer, and skiff_transport_perform() returns that result unchanged. */
+ * transfer, and skiff_transport_perform() returns that result unchanged. By the first call the
+ * status and headers are already in the skiff_http_response passed to skiff_transport_perform(), so
+ * a download sink must check them (200 or 206 with the expected Content-Range) before writing: an
+ * error page must never land in a partial file. */
 typedef skiff_err (*skiff_http_body_fn)(void *ctx, const unsigned char *data, size_t size);
 
 typedef struct skiff_http_request {
@@ -56,8 +59,9 @@ struct skiff_transport {
 
 /*
  * 1 if every header has a non-empty name and a value, the name has no ':' and neither has a CR or
- * LF (values come from config.ini and must not be able to inject header lines); 0 otherwise, or for
- * NULL headers with a non-zero count.
+ * LF (values come from config.ini and must not be able to inject header lines), and none is Range
+ * or If-Range, which only has_range and if_range may set; 0 otherwise, or for NULL headers with a
+ * non-zero count.
  */
 int skiff_http_headers_valid(const skiff_http_header *headers, size_t count);
 

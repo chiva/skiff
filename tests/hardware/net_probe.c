@@ -504,14 +504,22 @@ static int check_keep_alive(probe *p, const request_spec *spec) {
     return ok;
 }
 
-/* A download's bytes from RESUME_OFFSET on, hashed as they arrive. */
+/* A download's bytes from file offset RESUME_OFFSET on, hashed as they arrive. */
 typedef struct download_digest {
+    const skiff_http_response *response;
+    int started;
     unsigned long long position; /* file offset of the next byte */
     uint32_t hash;
 } download_digest;
 
+/* The status and headers are parsed before the first chunk: a 206 starts where its Content-Range
+ * says, anything else (a whole file, also after a stale If-Range) at byte 0. */
 static skiff_err digest_body(void *ctx, const unsigned char *data, size_t size) {
     download_digest *digest = ctx;
+    if (!digest->started) {
+        digest->started = 1;
+        digest->position = digest->response->has_content_range ? digest->response->range_start : 0;
+    }
     for (size_t i = 0; i < size; i++, digest->position++) {
         if (digest->position >= RESUME_OFFSET) {
             digest->hash = (digest->hash ^ data[i]) * FNV_PRIME;
@@ -524,7 +532,9 @@ static skiff_err digest_body(void *ctx, const unsigned char *data, size_t size) 
 static skiff_err transport_get(probe *p, skiff_transport *transport, const char *url, int resume,
                                const char *if_range, download_digest *digest,
                                skiff_http_response *response, long long *elapsed_us) {
-    digest->position = resume ? RESUME_OFFSET : 0;
+    digest->response = response;
+    digest->started = 0;
+    digest->position = 0;
     digest->hash = FNV_OFFSET_BASIS;
     const skiff_http_request request = {.url = url,
                                         .has_range = resume,

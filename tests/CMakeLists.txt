@@ -24,7 +24,14 @@ function(skiff_add_unit_test name)
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
+# A unit test that links Skiff's TLS stack, with the host's link-time contracts in place of the PSP's.
+function(skiff_add_tls_unit_test name)
+  skiff_add_unit_test(${name})
+  target_link_libraries(${name} PRIVATE skiff_host_tls)
+endfunction()
+
 skiff_add_unit_test(test_error)
 skiff_add_unit_test(test_version)
 skiff_add_unit_test(test_selftest)
 skiff_add_unit_test(test_entropy)
+skiff_add_tls_unit_test(test_host_tls)

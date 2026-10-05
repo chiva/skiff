@@ -31,13 +31,17 @@ All builds and checks run in containers. Docker is the only prerequisite.
 `scripts/dev.sh` accepts several commands: `scripts/dev.sh test asan lint psp selftest tls-probe kirk-probe`.
 CI runs these same commands, so the compiler matrix lives only in `HOST_COMPILERS` in `dev.sh`.
 PSP builds use the `skiff-toolchain` image (`docker/toolchain.Dockerfile`): pspdev, pinned as
-`tag@digest`, plus Mbed TLS 4.1 and curl 8.22 pinned by SHA256. CI job names are required status
-checks in the `main` ruleset: add steps or jobs, never rename existing ones.
+`tag@digest`, plus Mbed TLS 4.1 and curl 8.22 pinned by SHA256. The host image builds the same TLS
+stack from the same script (`docker/toolchain/build-tls.sh`), so versions and checksums live there.
+CI job names are required status checks in the `main` ruleset: add steps or jobs, never rename
+existing ones.
 
 ## Layout rules
 
 - `include/skiff/` public headers; `src/core/` and every other `src/` layer except `src/platform/`
   must compile and be unit-tested on the host.
+- `src/platform/host/` holds what host test binaries need in place of the PSP's platform code (the
+  Mbed TLS link-time contracts); it is never linked into an EBOOT.
 - `src/platform/psp/` is the only place allowed to include `psp*.h` or call `sce*`. The network
   stack (modules, access point, teardown) lives in `src/platform/psp/net_psp.c`; unload it only
   after a confirmed disconnect.
@@ -96,9 +100,11 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
   with the reason from `skiff_psp_entropy_status()`: `SKIFF_ERR_NET_NEEDS_ARK` or
   `SKIFF_ERR_NET_ENTROPY`. Never re-enable `MBEDTLS_PSA_BUILTIN_GET_ENTROPY` or
   `MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG`, and never implement the hook with `getentropy()`, `rand()` or
-  the clock. Only test binaries may stub it, and only with a stub that refuses. The real hook is
+  the clock. A PSP test EBOOT may stub it only with a stub that refuses. The real hook is
   `src/platform/psp/kirk_entropy.c` (KIRK through ARK); it has no fallback, so without ARK
-  networking refuses to start.
+  networking refuses to start. The one exception is host test binaries: `src/platform/host/`
+  implements the hook with the operating system's `getrandom()`, a sound source there (the ban on
+  `getentropy()` and the clock is about the PSP SDK). Never link it into an EBOOT.
 - Never log tokens, keys or full request headers.
 - Paths built from RomM data must be sanitised before touching the Memory Stick.
 

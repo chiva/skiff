@@ -78,11 +78,6 @@ add_library(skiff_psp_ark OBJECT src/platform/psp/ark_sysctrl.S)
 target_compile_options(skiff_psp_ark PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_include_directories(skiff_psp_ark PUBLIC src/platform/psp)
 
-# TLS stack from the Skiff toolchain image (docker/toolchain.Dockerfile). Imported targets put their
-# headers on the system include path, so our strict warnings do not apply to them.
-find_package(MbedTLS 4.1 CONFIG REQUIRED)
-find_package(CURL CONFIG REQUIRED)
-
 # What an EBOOT needs besides the libraries once it links Mbed TLS: the link-time contracts listed in
 # docs/development/toolchain.md, except the entropy hook, which each EBOOT supplies.
 add_library(skiff_psp_tls OBJECT src/platform/psp/mbedtls_time.c)

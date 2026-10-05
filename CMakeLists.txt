@@ -30,6 +30,12 @@ target_include_directories(
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 skiff_set_warnings(skiff_core)
 
+# Skiff's TLS stack, built with the same profile for both targets (docker/toolchain/build-tls.sh):
+# the toolchain image installs it into the PSP SDK, the host image into /opt/skiff-tls. Imported
+# targets put their headers on the system include path, so our strict warnings do not apply to them.
+find_package(MbedTLS 4.1 CONFIG REQUIRED)
+find_package(CURL CONFIG REQUIRED)
+
 if(PSP)
   include(SkiffPsp)
 else()

@@ -19,26 +19,26 @@
   "minimumReleaseAge": "3 days",
   "customManagers": [
     {
-      "description": "Mbed TLS in the toolchain image. The PR fails the image's sha256sum check until a maintainer verifies the new archive and updates MBEDTLS_SHA256 (docs/development/toolchain.md).",
+      "description": "Mbed TLS, built by docker/toolchain/build-tls.sh for the toolchain and host images. The PR fails the sha256sum check until a maintainer verifies the new archive and updates MBEDTLS_SHA256 (docs/development/toolchain.md).",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^docker/toolchain\\.Dockerfile$/"
+        "/^docker/toolchain/build-tls\\.sh$/"
       ],
       "matchStrings": [
-        "ARG MBEDTLS_VERSION=(?<currentValue>[\\d.]+)"
+        "MBEDTLS_VERSION=(?<currentValue>[\\d.]+)"
       ],
       "depNameTemplate": "Mbed-TLS/mbedtls",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^mbedtls-(?<version>[\\d.]+)$"
     },
     {
-      "description": "curl in the toolchain image. curl's own tags (curl-8_22_0) are not semver, so the official curlimages/curl image tags stand in as the release feed. The PR fails the sha256sum check until a maintainer verifies the signed archive and updates CURL_SHA256.",
+      "description": "curl, built by docker/toolchain/build-tls.sh for the toolchain and host images. curl's own tags (curl-8_22_0) are not semver, so the official curlimages/curl image tags stand in as the release feed. The PR fails the sha256sum check until a maintainer verifies the signed archive and updates CURL_SHA256.",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^docker/toolchain\\.Dockerfile$/"
+        "/^docker/toolchain/build-tls\\.sh$/"
       ],
       "matchStrings": [
-        "ARG CURL_VERSION=(?<currentValue>[\\d.]+)"
+        "CURL_VERSION=(?<currentValue>[\\d.]+)"
       ],
       "depNameTemplate": "curlimages/curl",
       "datasourceTemplate": "docker"

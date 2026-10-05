@@ -34,6 +34,10 @@ typedef struct skiff_psp_net {
     int sce_result;
     /* The last access-point state seen (PSP_NET_APCTL_STATE_*), to tell where a join stopped. */
     int apctl_state;
+    /* The furthest state a join reached, and the error the firmware reported for it (0 if none):
+     * written by the firmware's event handler, on its own thread. */
+    volatile int apctl_furthest_state;
+    volatile int apctl_error;
 } skiff_psp_net;
 
 /* Loads the modules and starts the libraries. SKIFF_ERR_NET_UNAVAILABLE if any step fails. */
@@ -42,7 +46,8 @@ skiff_err skiff_psp_net_load(skiff_psp_net *net);
 /*
  * Joins the access point of Network Settings profile `profile` (1 is the first) and waits for an IP
  * address, up to timeout_us. SKIFF_ERR_NET_UNAVAILABLE: the Wi-Fi switch is off, or there is no
- * such profile. SKIFF_ERR_NET_WIFI_JOIN: the join was refused or did not finish in time.
+ * such profile. SKIFF_ERR_NET_WIFI_JOIN: the join was refused or did not finish in time; sce_result
+ * then holds the firmware's error for it, when it reported one.
  */
 skiff_err skiff_psp_net_connect(skiff_psp_net *net, int profile, long long timeout_us);
 

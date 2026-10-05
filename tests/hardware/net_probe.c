@@ -181,10 +181,13 @@ static void report_check(probe *p, int ok, const char *text) {
 }
 
 static void report_net_failure(probe *p, const skiff_psp_net *net, skiff_err err) {
-    char line[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(line, sizeof line, "FAIL %s (%d): %s returned 0x%08X, access point state %d",
+    char line[LONG_LINE_MAX];
+    snprintf(line, sizeof line,
+             "FAIL %s (%d): %s returned 0x%08X, access point state %d (furthest %d, firmware "
+             "error 0x%08X)",
              skiff_err_name(err), (int)err, net->failed_call != NULL ? net->failed_call : "-",
-             (unsigned)net->sce_result, net->apctl_state);
+             (unsigned)net->sce_result, net->apctl_state, net->apctl_furthest_state,
+             (unsigned)net->apctl_error);
     skiff_psp_report_line(&p->report, line);
 }
 
@@ -612,6 +615,9 @@ static int run_with_ark(probe *p) {
     char text[SKIFF_SELFTEST_LINE_MAX];
     if (joined != SKIFF_OK) {
         report_net_failure(p, &net, joined);
+        snprintf(text, sizeof text, "Wi-Fi: profile %d gave up after %lld ms", p->config.profile,
+                 join_us / US_PER_MS);
+        skiff_psp_report_line(&p->report, text);
         tear_down(p, &net);
         return 0;
     }

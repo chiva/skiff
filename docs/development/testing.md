@@ -219,7 +219,7 @@ PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 - **Plain HTTP:** one request, for comparison, when the server publishes it on the LAN
   (`SKIFF_LAN_PLAIN_HTTP=1 scripts/dev.sh romm-lan`); skipped otherwise;
 - **Skiff's transport** (`skiff_net`, the layer the app uses): two heartbeats on one kept
-  connection, the seeded file downloaded whole (with its speed), resumed from byte 1000 with the
+  connection, the seeded file downloaded whole (with its speed, checked against the seeded CRC32), resumed from byte 1000 with the
   current ETag (206, the same bytes as the whole download) and with a stale one (the whole file
   again), and a request with the TLS clock forced back to 2000, which must fail with
   `SKIFF_ERR_NET_TLS_CLOCK` (108) before the real clock is put back;
@@ -233,7 +233,7 @@ On a PSP:
 2. `scripts/dev.sh romm-lan` on the computer, so the PSP can reach the server.
 3. PSP in USB mode: `scripts/memstick.sh install <mount>`. With a test server running, it writes
    `net-probe.ini` (the server's address, the profile (`SKIFF_NET_PROFILE`, default 1), and the
-   seeded file and API token from `build/integration/romm.json`) and copies the test CA and client
+   seeded file, its CRC32 and the API token from `build/integration/romm.json`) and copies the test CA and client
    certificates next to the probe. The token only opens that throwaway server; uninstall removes it
    with the folder. Eject.
 4. With the Wi-Fi switch on, run **Skiff network probe**; it returns to the XMB when done (under a

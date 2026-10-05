@@ -88,6 +88,8 @@ enum {
     CONTENT_URL_MAX = 320,
     DEFAULT_PROFILE = 1,
     DECIMAL = 10,
+    HEXADECIMAL = 16,
+    BITS_PER_BYTE = 8,
     HANDSHAKE_RUNS = 5,
     HTTP_PORT = 8080,
     HTTPS_PORT = 8443,
@@ -108,6 +110,10 @@ enum {
 /* FNV-1a, to compare the bytes of two downloads without keeping either in memory. */
 #define FNV_OFFSET_BASIS 2166136261U
 #define FNV_PRIME 16777619U
+/* CRC-32 (IEEE 802.3, reflected), what RomM records as crc_hash: checks the whole download against
+ * the seeded file, not just against itself. */
+#define CRC32_POLYNOMIAL 0xEDB88320U
+#define CRC32_INITIAL 0xFFFFFFFFU
 #define DISCONNECT_TIMEOUT_US (10LL * 1000 * 1000)
 
 typedef struct probe_config {
@@ -120,6 +126,8 @@ typedef struct probe_config {
     char rom_id[ROM_ID_MAX];
     char file_name[FILE_NAME_MAX]; /* URL-encoded */
     unsigned long long size;
+    uint32_t crc32;
+    int has_crc32;
 } probe_config;
 
 typedef struct memory_snapshot {
@@ -268,13 +276,18 @@ static int read_config(probe *p) {
             snprintf(p->config.file_name, sizeof p->config.file_name, "%s", value);
         } else if (strcmp(line, "size") == 0) {
             p->config.size = strtoull(value, NULL, DECIMAL);
+        } else if (strcmp(line, "crc32") == 0 && value[0] != '\0') {
+            char *end = NULL;
+            p->config.crc32 = (uint32_t)strtoul(value, &end, HEXADECIMAL);
+            p->config.has_crc32 = *end == '\0';
         }
     }
     fclose(file);
     char text[SKIFF_SELFTEST_LINE_MAX];
     const int ok = p->config.host[0] != '\0' && p->config.profile >= DEFAULT_PROFILE &&
                    p->config.token[0] != '\0' && p->config.rom_id[0] != '\0' &&
-                   p->config.file_name[0] != '\0' && p->config.size > RESUME_OFFSET;
+                   p->config.file_name[0] != '\0' && p->config.size > RESUME_OFFSET &&
+                   p->config.has_crc32;
     snprintf(text, sizeof text,
              "config: server %s, Network Settings profile %d, ROM %s (%llu bytes)",
              p->config.host[0] != '\0' ? p->config.host : "(missing)", p->config.profile,
@@ -512,7 +525,18 @@ typedef struct download_digest {
     unsigned long long position; /* file offset of the next byte */
     uint32_t whole;
     uint32_t suffix;
+    uint32_t crc32; /* running value; finish with crc32_value() */
 } download_digest;
+
+static uint32_t crc32_update(uint32_t crc, unsigned char byte) {
+    crc ^= byte;
+    for (int bit = 0; bit < BITS_PER_BYTE; bit++) {
+        crc = (crc & 1U) != 0 ? (crc >> 1) ^ CRC32_POLYNOMIAL : crc >> 1;
+    }
+    return crc;
+}
+
+static uint32_t crc32_value(const download_digest *digest) { return ~digest->crc32; }
 
 /* The status and headers are parsed before the first chunk: a 206 starts where its Content-Range
  * says, anything else (a whole file, also after a stale If-Range) at byte 0. */
@@ -524,6 +548,7 @@ static skiff_err digest_body(void *ctx, const unsigned char *data, size_t size) 
     }
     for (size_t i = 0; i < size; i++, digest->position++) {
         digest->whole = (digest->whole ^ data[i]) * FNV_PRIME;
+        digest->crc32 = crc32_update(digest->crc32, data[i]);
         if (digest->position >= RESUME_OFFSET) {
             digest->suffix = (digest->suffix ^ data[i]) * FNV_PRIME;
         }
@@ -540,6 +565,7 @@ static skiff_err transport_get(probe *p, skiff_transport *transport, const char 
     digest->position = 0;
     digest->whole = FNV_OFFSET_BASIS;
     digest->suffix = FNV_OFFSET_BASIS;
+    digest->crc32 = CRC32_INITIAL;
     const skiff_http_request request = {.url = url,
                                         .has_range = resume,
                                         .range_start = resume ? RESUME_OFFSET : 0,
@@ -622,17 +648,20 @@ static int run_transport_checks(probe *p, long long *download_us) {
     char etag[SKIFF_HTTP_ETAG_MAX];
     snprintf(etag, sizeof etag, "%s", response.etag);
     const download_digest whole_file = digest;
-    ok &= report_transport(p,
-                           err == SKIFF_OK && response.status == HTTP_OK &&
-                               response.body_bytes == config->size && etag[0] != '\0',
-                           "whole download", err, &response, *download_us);
+    ok &= report_transport(
+        p,
+        err == SKIFF_OK && response.status == HTTP_OK && response.body_bytes == config->size &&
+            etag[0] != '\0' && crc32_value(&digest) == config->crc32,
+        "whole download (CRC32 of the seeded file)", err, &response, *download_us);
     char text[LONG_LINE_MAX];
-    snprintf(text, sizeof text, "skiff_net download speed: %llu KB/s, ETag %s",
+    snprintf(text, sizeof text,
+             "skiff_net download speed: %llu KB/s, ETag %s, CRC32 %08lx (seeded %08lx)",
              *download_us > 0
                  ? (unsigned long long)(response.body_bytes * US_PER_MS * US_PER_MS /
                                         (unsigned long long)*download_us / BYTES_PER_KB)
                  : 0ULL,
-             etag[0] != '\0' ? etag : "(none)");
+             etag[0] != '\0' ? etag : "(none)", (unsigned long)crc32_value(&whole_file),
+             (unsigned long)config->crc32);
     skiff_psp_report_line(&p->report, text);
 
     err = transport_get(p, transport, content, 1, etag, &digest, &response, &elapsed_us);

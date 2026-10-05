@@ -96,6 +96,7 @@ install_net_probe_config() {
   printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
     "plain_http=$plain_http" "token=$(json_field token)" "rom_id=$(json_field rom_id)" \
     "file_name=$(url_encode "$(json_field file_name)")" "size=$(json_field size)" \
+    "crc32=$(json_field crc32)" \
     >"$dest/net-probe.ini"
   remove_macos_metadata "$NET_PROBE_FOLDER"
   echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \

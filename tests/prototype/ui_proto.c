@@ -102,6 +102,9 @@ enum {
     CHECK_JAPANESE_BASELINE = 140,
     GLYPH_BAND_ASCENT = 24,
     GLYPH_BAND_DESCENT = 8,
+    /* A filled rectangle drawn after text, where neither line reaches: every pixel must change. */
+    CHECK_RECT_TOP = 200,
+    CHECK_RECT_HEIGHT = 10,
 
     /* Held d-pad: first repeat after 20 frames, then every 4 (at 60 frames per second). */
     REPEAT_DELAY_FRAMES = 20,
@@ -201,6 +204,7 @@ typedef struct proto_results {
     memory_snapshot after_fonts;
     long latin_glyph_pixels;
     long japanese_glyph_pixels;
+    long rect_pixels;
     frame_stats frames;
     int headless;
     int controller_read_errors;
@@ -335,9 +339,13 @@ static void draw_rect(int x, int y, int width, int height, unsigned int colour) 
     sprite_vertex *vertices = sceGuGetMemory(2 * sizeof(sprite_vertex));
     vertices[0] = (sprite_vertex){colour, (short)x, (short)y, 0};
     vertices[1] = (sprite_vertex){colour, (short)(x + width), (short)(y + height), 0};
-    /* The GE reads RAM, not the CPU's data cache: without this it can draw last frame's vertices.
-     */
+    /* The GE reads RAM, not the CPU's data cache, so the vertices are written back first. */
     sceKernelDcacheWritebackRange(vertices, 2 * sizeof(sprite_vertex));
+    /*
+     * intraFont turns the depth test back on after every print, and there is no depth buffer: on
+     * hardware the test then discards the rectangle (PPSSPP lets it through).
+     */
+    sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, NULL,
                    vertices);
@@ -424,7 +432,10 @@ static void check_glyphs(ui_state *ui, proto_results *results) {
     print_text(ui->latin, TEXT_LEFT, CHECK_LATIN_BASELINE, SAMPLE_SIZE, COLOUR_TEXT, LATIN_SAMPLE);
     print_text(ui->latin, TEXT_LEFT, CHECK_JAPANESE_BASELINE, SAMPLE_SIZE, COLOUR_TEXT,
                JAPANESE_CHECK_TEXT);
+    draw_rect(0, CHECK_RECT_TOP, SCREEN_WIDTH, CHECK_RECT_HEIGHT, COLOUR_SELECTION);
     end_frame();
+    results->rect_pixels =
+        count_drawn_pixels(ui, CHECK_RECT_TOP, CHECK_RECT_TOP + CHECK_RECT_HEIGHT);
     results->latin_glyph_pixels = count_drawn_pixels(ui, CHECK_LATIN_BASELINE - GLYPH_BAND_ASCENT,
                                                      CHECK_LATIN_BASELINE + GLYPH_BAND_DESCENT);
     results->japanese_glyph_pixels =
@@ -882,6 +893,11 @@ static void run_list(ui_state *ui, proto_results *results) {
     }
 }
 
+/* The highlight and the dialog backdrop are such rectangles. */
+static int rect_drawn(const proto_results *results) {
+    return results->rect_pixels == (long)SCREEN_WIDTH * CHECK_RECT_HEIGHT;
+}
+
 static void report_results(skiff_psp_report *report, const proto_results *results) {
     char line[SKIFF_SELFTEST_LINE_MAX];
     snprintf(line, sizeof line, "fonts: heap +%u KB for both",
@@ -891,6 +907,10 @@ static void report_results(skiff_psp_report *report, const proto_results *result
     snprintf(line, sizeof line, "%s glyphs: Latin line %ld px, Japanese line %ld px",
              results->latin_glyph_pixels > 0 && results->japanese_glyph_pixels > 0 ? "OK" : "FAIL",
              results->latin_glyph_pixels, results->japanese_glyph_pixels);
+    skiff_psp_report_line(report, line);
+    snprintf(line, sizeof line, "%s rectangle after text: %ld of %d px drawn",
+             rect_drawn(results) ? "OK" : "FAIL", results->rect_pixels,
+             SCREEN_WIDTH * CHECK_RECT_HEIGHT);
     skiff_psp_report_line(report, line);
     if (results->frames.frames > 0) {
         snprintf(line, sizeof line,
@@ -944,7 +964,8 @@ static void report_results(skiff_psp_report *report, const proto_results *result
 
 static int passed(const proto_results *results) {
     const int rendered = results->latin_glyph_pixels > 0 && results->japanese_glyph_pixels > 0 &&
-                         results->frames.frames > 0 && results->controller_read_errors == 0;
+                         rect_drawn(results) && results->frames.frames > 0 &&
+                         results->controller_read_errors == 0;
     if (results->headless) {
         return rendered;
     }

@@ -66,6 +66,11 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
 - psp-gcc links `psputility`, `psprtc`, `pspnet_inet` and `pspnet_resolver` after everything else.
   Do not list them in `target_link_libraries`: a stub library linked twice splits its import stubs
   and psp-fixup-imports warns "stubs out of order" (the EBOOT may then not run).
+- intraFont turns `GU_DEPTH_TEST` back on after every print. Geometry drawn after text must disable
+  it first, or real hardware discards it against the uncleared depth buffer while PPSSPP draws it
+  (seen in the UI prototype: invisible highlight and dialog backdrop). Write vertices from
+  `sceGuGetMemory` back from the data cache (`sceKernelDcacheWritebackRange`) before drawing, as
+  intraFont does.
 - An EBOOT linking Mbed TLS must provide `mbedtls_platform_get_entropy()` and `mbedtls_ms_time()`
   (link-time contracts, see `docs/development/toolchain.md`).
 - ARK custom firmware functions are imported through hand-written stubs in

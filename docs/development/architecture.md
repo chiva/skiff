@@ -60,11 +60,19 @@ The UI draws with the PSP's GU directly and renders text with intraFont, rather 
 - Skiff needs the system dialogs, the network picker (`sceUtilityNetconf`) and the on-screen
   keyboard (`sceUtilityOsk`), which must run inside a GU render loop. Mixing them with SDL2's
   renderer is fragile.
-- intraFont draws with the fonts in the PSP firmware, covering Latin and Japanese, without spending
-  RAM on bundled fonts. RomM libraries contain Japanese titles.
-- `libintrafont` is packaged by pspdev.
+- intraFont draws with the fonts in the PSP firmware, so nothing is bundled. Skiff loads only the
+  Latin font (`ltn0.pgf`), which covers the accented letters English and Spanish need; a character
+  it lacks is drawn as a placeholder.
+- Japanese is not supported at first: intraFont loads a font file whole into the heap, and the
+  Japanese one costs megabytes on a 32 MB PSP. If players ask for it, `jpn0.pgf` becomes the Latin
+  font's fallback (`intraFontSetAltFont()`), loaded only when a string needs it. Text is UTF-8
+  throughout, so that change stays inside `ui/`.
+- `libintrafont` is packaged by pspdev. Its licence (CC BY-SA 3.0) ships with the release's
+  third-party licences once the app links it (`scripts/psp-packages.txt`).
 
-Phase 1 confirms this with a prototype on hardware before the UI layer is written.
+Phase 1 confirms this with a prototype on hardware before the UI layer is written
+(`tests/prototype/ui_proto.c`, see [Testing](testing.md#ui-prototype)). The prototype still draws a
+Japanese line and measures both fonts, so the cost of adding Japanese later is known.
 
 ## Errors and languages
 

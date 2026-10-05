@@ -17,10 +17,11 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
+| UI prototype, headless (fonts and frames) | `scripts/dev.sh ui-proto` (after `psp`) |
 | Test RomM behind TLS/mTLS (Docker Compose) | `scripts/dev.sh romm-up` (or `romm-lan` for a PSP), `romm-check`, `romm-down` → `build/integration/` |
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Icon PNGs from `assets/brand/` SVGs | `scripts/dev.sh icons` → `assets/{psp,github}/` (commit them) |
@@ -62,6 +63,14 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
   where `psp-create-license-directory` looks).
 - Mbed TLS's config lives in its installed headers (`docker/toolchain/configure-mbedtls.sh`); never
   pass `MBEDTLS_*CONFIG_FILE` defines to a consumer, or Skiff and libcurl disagree on struct layouts.
+- psp-gcc links `psputility`, `psprtc`, `pspnet_inet` and `pspnet_resolver` after everything else.
+  Do not list them in `target_link_libraries`: a stub library linked twice splits its import stubs
+  and psp-fixup-imports warns "stubs out of order" (the EBOOT may then not run).
+- intraFont turns `GU_DEPTH_TEST` back on after every print. Geometry drawn after text must disable
+  it first, or real hardware discards it against the uncleared depth buffer while PPSSPP draws it
+  (seen in the UI prototype: invisible highlight and dialog backdrop). Write vertices from
+  `sceGuGetMemory` back from the data cache (`sceKernelDcacheWritebackRange`) before drawing, as
+  intraFont does.
 - An EBOOT linking Mbed TLS must provide `mbedtls_platform_get_entropy()` and `mbedtls_ms_time()`
   (link-time contracts, see `docs/development/toolchain.md`).
 - ARK custom firmware functions are imported through hand-written stubs in

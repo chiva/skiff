@@ -110,3 +110,11 @@ skiff_set_warnings(skiff_psp_entropy)
 skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/security/kirk_probe.c)
 target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark skiff_psp_tls
                                                skiff_psp_entropy)
+
+# UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen
+# keyboard and the network picker (see tests/prototype/ui_proto.c). intraFont comes from pspdev's
+# packages; it draws through GU, so it goes before pspgu. psputility and pspnet_inet are left out:
+# psp-gcc already links them after everything else, and listing a stub library twice splits its
+# import stubs, which psp-fixup-imports rejects ("stubs out of order").
+skiff_add_psp_app(skiff_ui_proto "${SKIFF_PBP_TITLE} UI prototype" tests/prototype/ui_proto.c)
+target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check intrafont pspgu pspnet_apctl pspnet)

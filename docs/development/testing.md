@@ -7,7 +7,7 @@ the logic.
 | Tier | Where | In CI | Command |
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
-| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK probe (no ARK) | `scripts/dev.sh psp selftest tls-probe kirk-probe` |
+| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK probe (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe ui-proto` |
 | Integration server | Docker Compose | ✅ server checks | `scripts/dev.sh romm-up romm-check romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
@@ -29,14 +29,20 @@ Planned additions:
 
 `tests/emulator/run_eboot.sh <EBOOT> <NAME>` boots a check EBOOT in PPSSPPHeadless and passes only
 when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`),
-`skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)) and `skiff_kirk_probe`
-(`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)). PPSSPPHeadless only shows a
+`skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)), `skiff_kirk_probe`
+(`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)) and `skiff_ui_proto` (`UI PROTO HEADLESS`,
+see [UI prototype](#ui-prototype)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
 
 PPSSPP does not emulate the PSP's Wi-Fi hardware or real Memory Stick timing, so networking and
-storage behaviour must also be checked on hardware.
+storage behaviour must also be checked on hardware. Its timings mean nothing either: frame and load
+times count only from a PSP.
+
+`docker/ppsspp.Dockerfile` patches one line of PPSSPP: on Linux it refuses every program read of
+`flash0:` (where the firmware fonts live). The build fails if the patch stops applying, so a PPSSPP
+bump shows whether it is still needed.
 
 ## Integration server
 
@@ -110,8 +116,8 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    without freezing.
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
 
-The **Skiff KIRK probe** is installed too; run it only when working on entropy (see
-[KIRK probe](#kirk-probe)).
+The **Skiff KIRK probe** and the **Skiff UI prototype** are installed too; run them only when
+working on entropy (see [KIRK probe](#kirk-probe)) or the UI (see [UI prototype](#ui-prototype)).
 
 ### Over PSPLINK
 
@@ -159,6 +165,47 @@ compare against.
 Without ARK there is nothing to measure, so the probe checks instead that Skiff's hook refuses, TLS
 fails closed, and the reason reported is `SKIFF_ERR_NET_NEEDS_ARK` (`SKIFF KIRK PROBE NO ARK OK`).
 PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
+
+## UI prototype
+
+`tests/prototype/ui_proto.c` checks the UI stack chosen in
+[Architecture](architecture.md#ui-gu--intrafont) before the UI layer exists: GU draws a 20-item list
+with intraFont, using the firmware's Latin font with its Japanese font as fallback, and the
+on-screen keyboard and the network picker open from the render loop. It links the app's module info,
+so its memory figures are the app's.
+
+On a PSP:
+
+1. Run **Skiff UI prototype** and press a button within 10 seconds (otherwise it exits on its
+   own, as described below). Check that the title, the Japanese line and the first row (accented
+   Latin: `café, señor`) render, and that Up/Down move the highlight.
+2. Triangle opens the keyboard: type at least one character and confirm (cancelling fails the
+   run). The text appears top right.
+3. Square loads the network modules and opens the network picker: pick a connection that works
+   and let it connect (cancelling or a failed connection fails the run). The IP address appears top
+   right. When the picker closes, the prototype drops the connection, waits until it is gone, and
+   unloads the modules.
+4. HOME → Quit (or START) ends the run.
+
+Each step is written to `result.txt` as it happens (dialog opened, shown, closed; any failing
+`sceUtility*` call with its code; connection, disconnection and unloading), so a failed run says
+where it stopped. The summary at the end has: font load times; heap used by the Latin font alone
+and by both; the first
+frame read back (drawn pixels in a Latin and a Japanese-only line, both must be above zero); list
+frame time (mean, max, frames over the 16.7 ms budget); each dialog's outcome; and system memory
+before the network modules load, after they load and after they unload, with how much the
+unloading gave back (reported, not judged).
+
+It ends with `SKIFF UI PROTO OK` only if: both fonts rendered; the keyboard was shown, and text
+was typed and confirmed; the picker was shown and connected (an IP address was obtained); the
+connection was dropped and the modules unloaded; and no dialog call failed or timed out (a dialog
+left open for 5 minutes is closed and fails) and no controller read failed. Otherwise it ends with
+`SKIFF UI PROTO FAIL`.
+
+With no button pressed for 10 seconds of system time it exits on its own, checking only the fonts
+and the frames, and ends with `SKIFF UI PROTO HEADLESS OK`/`FAIL`. That is what CI runs
+(`scripts/dev.sh ui-proto`); the 10 seconds stay well inside the emulator script's 30-second limit.
+Switches (HOLD, Wi-Fi) and HOME do not count as a button press.
 
 ## Test data rules
 

@@ -23,7 +23,9 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
 - **Test server** ✅: a disposable RomM 5.3 behind a TLS proxy, with client certificates
   (`tests/integration/`), checked in CI. See [Testing](testing.md#integration-server).
 - **Network**: join a WPA/TKIP 2.4 GHz network through `sceUtilityNetconf`; HTTPS to RomM.
-- **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard.
+- **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard and
+  the network picker (`tests/prototype/ui_proto.c`; its headless run is in CI, the hardware run is
+  pending).
 - **Measure**:
   - free memory after loading the network modules;
   - TLS handshake time with ECDSA vs RSA client certificates;

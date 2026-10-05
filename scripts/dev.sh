@@ -45,6 +45,8 @@ Commands run in the order given and stop at the first failure.
   tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
   kirk-probe   Run the KIRK probe in PPSSPPHeadless, which has no ARK: TLS must refuse to start
                (needs `psp` first; the measurements need a real PSP)
+  ui-proto     Run the UI prototype in PPSSPPHeadless: with no input it renders, checks its fonts
+               and exits on its own (needs `psp` first; the dialogs need a real PSP)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
@@ -227,6 +229,9 @@ run_command() {
     ;;
   kirk-probe)
     run_emulator build/psp/pbp/skiff_kirk_probe/EBOOT.PBP "KIRK PROBE NO ARK"
+    ;;
+  ui-proto)
+    run_emulator build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS"
     ;;
   romm-up)
     romm_up 127.0.0.1

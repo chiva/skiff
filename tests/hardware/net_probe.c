@@ -30,6 +30,7 @@
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 #include <pspkernel.h>
+#include <psputility.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -149,10 +150,12 @@ typedef struct request_result {
     long verify_flags;
 } request_result;
 
-/* Response bytes kept for the heartbeat check; the rest is counted only. */
+/* Response bytes kept for the heartbeat check, and the request they belong to. */
 typedef struct body_buffer {
     char data[BODY_EXCERPT_MAX];
     size_t length;
+    CURL *curl;
+    request_result *result;
 } body_buffer;
 
 static memory_snapshot take_memory_snapshot(void) {
@@ -248,8 +251,14 @@ static int read_config(probe *p) {
     return ok;
 }
 
+static void read_tls_session(CURL *curl, request_result *result);
+
 static size_t keep_body(char *data, size_t size, size_t count, void *context) {
     body_buffer *body = context;
+    /* libcurl exposes the TLS session only while the transfer runs, so it is read here. */
+    if (body->result != NULL && body->result->tls_version[0] == '\0') {
+        read_tls_session(body->curl, body->result);
+    }
     const size_t bytes = size * count;
     const size_t room = sizeof body->data - 1 - body->length;
     const size_t kept = bytes < room ? bytes : room;
@@ -332,7 +341,6 @@ static void read_result(CURL *curl, const body_buffer *body, CURLcode code,
     result->total_us = (long long)total;
     result->body_ok = strstr(body->data, HEARTBEAT_MARKER) != NULL;
     curl_easy_getinfo(curl, CURLINFO_SSL_VERIFYRESULT, &result->verify_flags);
-    read_tls_session(curl, result);
 }
 
 static int request_ok(const request_result *result) {
@@ -384,7 +392,7 @@ static void run_request(probe *p, const request_spec *spec, request_result *resu
         result->code = CURLE_OUT_OF_MEMORY;
         return;
     }
-    body_buffer body = {{0}, 0};
+    body_buffer body = {{0}, 0, curl, result};
     char url[URL_MAX];
     if (!configure(p, curl, spec, &body, url)) {
         result->setup_failed = 1;
@@ -446,17 +454,19 @@ static int check_keep_alive(probe *p, const request_spec *spec) {
         report_check(p, 0, "keep-alive: curl_easy_init failed");
         return 0;
     }
-    body_buffer body = {{0}, 0};
-    char url[URL_MAX];
     request_result first;
     request_result second;
     memset(&first, 0, sizeof first);
     memset(&second, 0, sizeof second);
+    body_buffer body = {{0}, 0, curl, &first};
+    char url[URL_MAX];
     long new_connections = -1;
     const int configured = configure(p, curl, spec, &body, url);
     if (configured) {
         read_result(curl, &body, curl_easy_perform(curl), &first);
-        memset(&body, 0, sizeof body);
+        body.length = 0;
+        body.data[0] = '\0';
+        body.result = &second;
         read_result(curl, &body, curl_easy_perform(curl), &second);
         curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &new_connections);
     }
@@ -692,6 +702,19 @@ static void report_one_clock(probe *p, const char *label, time_t now) {
 static void report_clock(probe *p) {
     report_one_clock(p, "TLS clock (certificate dates)", (time_t)mbedtls_time(NULL));
     report_one_clock(p, "C library time()", time(NULL));
+    /* The RTC holds what the PSP takes for UTC: a wrong time zone setting shifts it. */
+    int zone_minutes = 0;
+    int daylight_saving = 0;
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    if (sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_TIMEZONE, &zone_minutes) >= 0 &&
+        sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_DAYLIGHTSAVINGS, &daylight_saving) >=
+            0) {
+        snprintf(line, sizeof line, "PSP time zone: UTC%+d min, daylight saving %s", zone_minutes,
+                 daylight_saving ? "on" : "off");
+    } else {
+        snprintf(line, sizeof line, "PSP time zone: unknown");
+    }
+    skiff_psp_report_line(&p->report, line);
 }
 
 int main(int argc, char *argv[]) {

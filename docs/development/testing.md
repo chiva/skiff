@@ -8,6 +8,7 @@ the logic.
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
 | Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK probe (no ARK) | `scripts/dev.sh psp selftest tls-probe kirk-probe` |
+| Integration server | Docker Compose | ✅ server checks | `scripts/dev.sh romm-up romm-check romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
 ## Unit tests
@@ -21,8 +22,8 @@ Planned additions:
 
 - **Contract tests**: recorded RomM 5.3 API responses in `tests/fixtures/romm/`, parsed by the real
   client code, so an API change shows up as a failing test rather than a crash on a PSP.
-- **Integration tests**: a disposable RomM in Docker Compose (`tests/integration/`) seeded with
-  homebrew fixtures, exercised by the host build of the client.
+- **Integration tests**: the host build of the client against the
+  [integration server](#integration-server).
 
 ## Emulator tests
 
@@ -36,6 +37,56 @@ PPSSPP image, which takes several minutes; later runs reuse it.
 
 PPSSPP does not emulate the PSP's Wi-Fi hardware or real Memory Stick timing, so networking and
 storage behaviour must also be checked on hardware.
+
+## Integration server
+
+`tests/integration/` runs a disposable RomM behind a TLS proxy, for the integration tests and for
+the PSP's network checks:
+
+- RomM 5.3.1 and MariaDB, with nothing published but the proxy. Every image is pinned by tag and
+  digest in `compose.yaml`.
+- Caddy in front, on three ports: `8080` plain HTTP (for comparison only), `8443` TLS, and `8444`
+  TLS that requires a client certificate signed by the test CA.
+- `gen-certs.sh` creates the test CA, the proxy's certificate (`localhost`, `proxy`, `127.0.0.1`,
+  plus the LAN address with `romm-lan`) and client certificates, ECDSA P-256 and RSA-2048, plus one
+  from an untrusted CA. They are kept while valid, so copies on a PSP keep working; the proxy's
+  certificate is reissued when its addresses change.
+- `seed.py` runs inside the RomM container. It creates the admin, writes a synthetic 1 MiB file to
+  the `psp` platform (the same bytes every run), scans it and creates an API token.
+
+| Command | What it does |
+|---|---|
+| `scripts/dev.sh romm-up` | Starts a fresh server on `127.0.0.1` (new secrets, empty volumes, about a minute) |
+| `scripts/dev.sh romm-lan` | The same with the TLS ports on the LAN, for a PSP; the address is detected, or set `SKIFF_LAN_IP`. Plain HTTP stays local unless `SKIFF_LAN_PLAIN_HTTP=1` |
+| `scripts/dev.sh romm-check` | Checks what the client relies on (below); ends with `SKIFF INTEGRATION SERVER OK` |
+| `scripts/dev.sh romm-down` | Stops it and deletes its volumes |
+
+There is one test RomM per machine, since the ports are fixed. The commands refuse to touch one
+that another checkout (a parallel worktree) started.
+
+`romm-check` (CI runs it on every PR) checks:
+
+- plain HTTP and HTTPS reach RomM, at the version pinned in `compose.yaml`;
+- TLS 1.2 and 1.3 both work over HTTP/1.1, and a client that sends no SNI (a PSP connecting by IP
+  address) still gets the test certificate;
+- a client without the test CA is refused;
+- the mTLS port refuses no certificate and the untrusted one, and accepts both test client
+  certificates;
+- the API refuses requests without the token and accepts it;
+- RomM reports the seeded file's size, CRC32, MD5 and SHA-1, and the download matches;
+- `Range` with the current ETag in `If-Range` resumes (206), and a stale ETag restarts with the
+  whole file (200).
+
+Everything generated lives in `build/integration/` (git-ignored):
+
+- `certs/`: copy `ca.crt` and a client certificate and key to the PSP;
+- `romm.env`: the secrets, including the web UI password for the user `skiff`;
+- `romm.json`: the seeded file's ID, size and hashes, and the API token.
+
+The keys and the token are test material for a server that only lives on your machine: never
+commit them, and do not reuse them anywhere else. The proxy container only gets the server's key
+and the CA certificate. With `romm-lan` the server is reachable by anyone on your network until
+`romm-down`.
 
 ## Hardware tier
 

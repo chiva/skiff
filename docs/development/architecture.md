@@ -106,6 +106,10 @@ Version policy: below the minimum supported RomM version, Skiff refuses to run
 refusing every untested release would break Skiff with each RomM update.
 
 JSON is parsed one page at a time with cJSON (packaged by pspdev); responses are never held whole.
+ROM lists are requested with `with_char_index`, `with_filter_values` and `with_rom_id_index` set
+to false: RomM includes those by default, and they grow with the whole library, not the page.
+RomM records CRC32, MD5 and SHA-1 for every file (`files[]` in a ROM), so the integrity check can
+use any of them.
 
 ## Downloads and storage
 

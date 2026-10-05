@@ -833,8 +833,11 @@ static int on_socket(void *context, curl_socket_t socket_fd, curlsocktype purpos
         actual = -1;
     }
     d->result->receive_buffer = actual;
-    /* A refused size would measure the default buffer under the wrong name: stop before connecting.
-     */
+    /* A size the stack refused, cut down, or will not report would be measured under the wrong
+     * name: stop before connecting. Some stacks round up, so more than asked is fine. */
+    if (d->spec->receive_buffer_bytes > 0 && actual < d->spec->receive_buffer_bytes) {
+        d->result->receive_buffer_refused = 1;
+    }
     return d->result->receive_buffer_refused ? CURL_SOCKOPT_ERROR : CURL_SOCKOPT_OK;
 }
 
@@ -982,7 +985,8 @@ static download_summary measure_download(bench *b, const download_spec *spec) {
         run_download(b, spec, &result);
         if (result.receive_buffer_refused) {
             char text[SKIFF_SELFTEST_LINE_MAX];
-            snprintf(text, sizeof text, "skip %s: the PSP refused SO_RCVBUF %d (now %d)", spec->id,
+            snprintf(text, sizeof text,
+                     "skip %s: the PSP did not apply SO_RCVBUF %d (reads back %d)", spec->id,
                      spec->receive_buffer_bytes, result.receive_buffer);
             say(b, text);
             log_item(b, spec->id, "refused=1");

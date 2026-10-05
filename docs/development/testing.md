@@ -297,7 +297,7 @@ On a PSP (plugged in, so the battery does not change the run; a full run takes a
    channel.
 
 A download that fails, or bytes that do not match the seeded file, fail the run; a socket buffer
-size the PSP refuses is reported and skipped. Without ARK, as in PPSSPP, TLS cannot start: the
+size the PSP refuses, cuts down or does not report back is reported and skipped. Without ARK, as in PPSSPP, TLS cannot start: the
 benchmark loads and unloads the network modules, checks that libcurl refuses to start, runs the
 CRC-32 and Memory Stick code on small sizes and ends with `SKIFF BENCH NO ARK OK`
 (`scripts/dev.sh bench`, run in CI).

@@ -266,8 +266,11 @@ run_command() {
     run_host_in_romm_network "tests/integration/transport-test.sh $INTEGRATION_DIR"
     ;;
   romm-record)
+    # The server exists only for the recording: stop it even when starting or recording fails.
+    trap romm_down EXIT
     SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
     run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
+    trap - EXIT
     romm_down
     ;;
   romm-down)

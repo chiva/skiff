@@ -25,7 +25,8 @@ readonly INTEGRATION_CERTS="$REPO_ROOT/build/integration/certs"
 readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.crt client-rsa.key
   wrong-ca.crt client-wrong-ca.crt client-wrong-ca.key)
 # The benchmark downloads from the same server: the same settings, and only the test CA. Optional
-# SKIFF_BENCH_RUNS and SKIFF_BENCH_SECTIONS become runs= and sections= (tests/hardware/bench.c).
+# SKIFF_BENCH_RUNS, SKIFF_BENCH_SECTIONS and SKIFF_BENCH_CLOCK_MHZ become runs=, sections= and
+# clock_mhz= (tests/hardware/bench.c).
 readonly BENCH_FOLDER="SkiffBench"
 readonly BENCH_FILES=(ca.crt)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
@@ -127,6 +128,9 @@ install_probe_configs() {
   fi
   if [[ -n "${SKIFF_BENCH_SECTIONS:-}" ]]; then
     bench_extra+="sections=$SKIFF_BENCH_SECTIONS"$'\n'
+  fi
+  if [[ -n "${SKIFF_BENCH_CLOCK_MHZ:-}" ]]; then
+    bench_extra+="clock_mhz=$SKIFF_BENCH_CLOCK_MHZ"$'\n'
   fi
   install_probe_config "$BENCH_FOLDER" bench.ini "${bench_extra%$'\n'}" "${BENCH_FILES[@]}"
 }

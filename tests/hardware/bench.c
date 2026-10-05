@@ -138,8 +138,9 @@ enum {
     TICKER_THREAD_PRIORITY = 0x18,
     TICKER_THREAD_STACK_BYTES = 0x1000,
     TICKER_INTERVAL_US = 1000 * 1000,
-    CLOCK_FAST_CPU_MHZ = 333,
+    CLOCK_FAST_CPU_MHZ = SKIFF_PROBE_CLOCK_FAST_MHZ,
     CLOCK_FAST_BUS_MHZ = 166,
+    CLOCK_SETTLE_US = 10 * 1000,
     /* For the time estimates printed before each section. */
     ASSUMED_KB_PER_S = 200,
 };
@@ -194,6 +195,9 @@ static const download_spec NET_SPECS[] = {
      .buffer_candidate = 1},
     {.id = "http-buf16k", .label = "plain HTTP, curl buffer 16 KB", .buffer_bytes = 16 * KB},
     {.id = "http-buf512k", .label = "plain HTTP, curl buffer 512 KB", .buffer_bytes = 512 * KB},
+    /* Not 128 KB: on a PSP-1000 (156 KB of system memory left once the network modules load) it
+     * broke the network stack, and every later connection failed until the modules were reloaded.
+     */
     {.id = "https-rcvbuf32k",
      .label = "HTTPS, SO_RCVBUF 32 KB",
      .https = 1,
@@ -202,10 +206,6 @@ static const download_spec NET_SPECS[] = {
      .label = "HTTPS, SO_RCVBUF 64 KB",
      .https = 1,
      .receive_buffer_bytes = 64 * KB},
-    {.id = "https-rcvbuf128k",
-     .label = "HTTPS, SO_RCVBUF 128 KB",
-     .https = 1,
-     .receive_buffer_bytes = 128 * KB},
     {.id = "tls13-aes128gcm",
      .label = "TLS 1.3, AES-128-GCM",
      .https = 1,
@@ -418,13 +418,24 @@ static int busy_percent(const bench *b, unsigned ticks, long long elapsed_us) {
     return (int)(PERCENT - (unsigned long long)ticks * PERCENT / expected);
 }
 
-static int set_clock(bench *b, int cpu_mhz, int bus_mhz) {
+/* Asks for a clock and checks that it took: the firmware (or a CFW setting) may accept the call
+ * and keep the old clock. A failure counts only when `required`; the probe before Wi-Fi only
+ * reports. */
+static int set_clock(bench *b, int cpu_mhz, int bus_mhz, int required) {
     const int result = scePowerSetClockFrequency(cpu_mhz, cpu_mhz, bus_mhz);
+    sceKernelDelayThread(CLOCK_SETTLE_US);
+    const int cpu_now = scePowerGetCpuClockFrequency();
+    const int bus_now = scePowerGetBusClockFrequency();
+    const int ok = result >= 0 && cpu_now == cpu_mhz;
     char text[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(text, sizeof text, "clock set to %d/%d MHz (now %d/%d)", cpu_mhz, bus_mhz,
-             scePowerGetCpuClockFrequency(), scePowerGetBusClockFrequency());
-    check(b, result >= 0, text);
-    return result >= 0;
+    snprintf(text, sizeof text, "clock %d/%d MHz requested: result 0x%08X, now %d/%d MHz%s",
+             cpu_mhz, bus_mhz, (unsigned)result, cpu_now, bus_now, ok ? "" : " (did not change)");
+    if (required) {
+        check(b, ok, text);
+    } else {
+        say(b, text);
+    }
+    return ok;
 }
 
 /* ---- Latency --------------------------------------------------------------------------------- */
@@ -1056,23 +1067,32 @@ static long long download_seconds(const bench *b, size_t downloads) {
 
 static void run_net(bench *b) {
     const size_t specs = sizeof NET_SPECS / sizeof NET_SPECS[0];
-    const size_t fast_specs = sizeof FAST_CLOCK_SPECS / sizeof FAST_CLOCK_SPECS[0];
     char section[SKIFF_SELFTEST_LINE_MAX];
     snprintf(section, sizeof section, "net (%u downloads x %d runs of %llu KB, at %d KB/s)",
-             (unsigned)(specs + fast_specs), b->config.runs, b->config.size / KB, ASSUMED_KB_PER_S);
-    say_estimate(b, section, download_seconds(b, specs + fast_specs));
+             (unsigned)specs, b->config.runs, b->config.size / KB, ASSUMED_KB_PER_S);
+    say_estimate(b, section, download_seconds(b, specs));
     calibrate_idle(b);
     measure_specs(b, NET_SPECS, specs);
     char text[SKIFF_SELFTEST_LINE_MAX];
     snprintf(text, sizeof text, "best curl buffer for HTTPS: %ld KB (%llu KB/s)",
              b->best_buffer_bytes / KB, b->best_buffer_kb_per_s);
     say(b, text);
-    if (set_clock(b, CLOCK_FAST_CPU_MHZ, CLOCK_FAST_BUS_MHZ)) {
+}
+
+/* HTTPS and plain HTTP at 333 MHz. On a PSP-1000 the clock does not change while Wi-Fi is on, so
+ * this measures something only when clock_mhz=333 set it before the network modules loaded (and it
+ * survived the join); otherwise it fails rather than label 222 MHz results as 333. */
+static void run_clock(bench *b) {
+    const size_t fast_specs = sizeof FAST_CLOCK_SPECS / sizeof FAST_CLOCK_SPECS[0];
+    say_estimate(b, "clock (downloads at 333 MHz)", download_seconds(b, fast_specs));
+    const int was_fast = scePowerGetCpuClockFrequency() == CLOCK_FAST_CPU_MHZ;
+    if (was_fast || set_clock(b, CLOCK_FAST_CPU_MHZ, CLOCK_FAST_BUS_MHZ, 1)) {
         calibrate_idle(b);
         measure_specs(b, FAST_CLOCK_SPECS, fast_specs);
     }
-    /* Back to where the run started, whatever happened. */
-    set_clock(b, b->initial_cpu_mhz, b->initial_bus_mhz);
+    if (!was_fast) {
+        set_clock(b, b->initial_cpu_mhz, b->initial_bus_mhz, 1);
+    }
     calibrate_idle(b);
 }
 
@@ -1319,6 +1339,9 @@ static void run_sections(bench *b) {
     if (wants(b, SKIFF_PROBE_SECTION_NET)) {
         run_net(b);
     }
+    if (wants(b, SKIFF_PROBE_SECTION_CLOCK)) {
+        run_clock(b);
+    }
     if (wants(b, SKIFF_PROBE_SECTION_MS)) {
         run_memory_stick_blocks(b);
         run_memory_stick_download(b);
@@ -1346,6 +1369,17 @@ static void run_with_ark(bench *b) {
     if (!prepare_requests(b)) {
         b->failures++;
         return;
+    }
+    if (b->config.clock_mhz != 0) {
+        /* Before Wi-Fi starts, where the clock can still change; the environment line after
+         * joining shows whether it survived the join. */
+        if (!set_clock(b, b->config.clock_mhz, b->config.clock_mhz / 2, 1)) {
+            return;
+        }
+    } else if (set_clock(b, CLOCK_FAST_CPU_MHZ, CLOCK_FAST_BUS_MHZ, 0)) {
+        /* Whether the clock can change at all before Wi-Fi starts: tells a CFW setting that pins
+         * it apart from a limit while the radio is on. */
+        set_clock(b, b->initial_cpu_mhz, b->initial_bus_mhz, 1);
     }
     skiff_psp_net net;
     if (!skiff_probe_load_network(&b->report, &net)) {
@@ -1404,6 +1438,9 @@ int main(int argc, char *argv[]) {
         run_without_ark(&b);
     }
 
+    if (scePowerGetCpuClockFrequency() != b.initial_cpu_mhz) {
+        set_clock(&b, b.initial_cpu_mhz, b.initial_bus_mhz, 1);
+    }
     /* HOME → Quit ends the run between downloads: whatever is missing makes it incomplete. */
     if (skiff_psp_exit_requested()) {
         check(&b, 0, "stopped from the HOME menu: the results are incomplete");

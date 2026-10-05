@@ -24,7 +24,8 @@ typedef struct section_name {
 static const section_name SECTION_NAMES[] = {
     {"latency", SKIFF_PROBE_SECTION_LATENCY}, {"cpu", SKIFF_PROBE_SECTION_CPU},
     {"net", SKIFF_PROBE_SECTION_NET},         {"ms", SKIFF_PROBE_SECTION_MS},
-    {"app", SKIFF_PROBE_SECTION_APP},         {"all", SKIFF_PROBE_SECTION_ALL},
+    {"app", SKIFF_PROBE_SECTION_APP},         {"clock", SKIFF_PROBE_SECTION_CLOCK},
+    {"all", SKIFF_PROBE_SECTION_ALL},
 };
 
 void skiff_probe_config_defaults(skiff_probe_config *config) {
@@ -120,6 +121,14 @@ static int apply(skiff_probe_config *config, const char *key, const char *value)
     if (strcmp(key, "runs") == 0) {
         const int ok = parse_bounded(value, 1, SKIFF_PROBE_RUNS_MAX, &number);
         config->runs = ok ? (int)number : config->runs;
+        return ok;
+    }
+    if (strcmp(key, "clock_mhz") == 0) {
+        const int ok =
+            parse_bounded(value, SKIFF_PROBE_CLOCK_DEFAULT_MHZ, SKIFF_PROBE_CLOCK_FAST_MHZ,
+                          &number) &&
+            (number == SKIFF_PROBE_CLOCK_DEFAULT_MHZ || number == SKIFF_PROBE_CLOCK_FAST_MHZ);
+        config->clock_mhz = ok ? (int)number : config->clock_mhz;
         return ok;
     }
     if (strcmp(key, "sections") == 0) {

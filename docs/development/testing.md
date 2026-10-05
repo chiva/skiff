@@ -265,12 +265,17 @@ order (each can be chosen with `sections=` in `bench.ini`):
   download;
 - **net:** the seeded file downloaded `runs=` times (default 3, median, min and max) for each of:
   curl buffer 16 to 512 KB; plain HTTP at 16 and 512 KB (only when the server publishes it on the
-  LAN); `SO_RCVBUF` 32, 64 and 128 KB; TLS 1.3 and TLS 1.2, each forcing AES-128-GCM and
-  ChaCha20-Poly1305; and HTTPS and plain HTTP at 333 MHz. Speed counts from the first chunk of the body to the
+  LAN); `SO_RCVBUF` 32 and 64 KB (128 KB broke the network stack on a PSP-1000); TLS 1.3 and TLS 1.2, each forcing AES-128-GCM and
+  ChaCha20-Poly1305. Speed counts from the first chunk of the body to the
   last (no TCP or TLS setup, no wait for the first byte). A thread at the lowest priority counts
   while the CPU is idle, so each download also reports how busy the CPU was over the same window: if TLS is the limit, HTTPS runs near 100% and gets
   faster at 333 MHz while plain HTTP does not. Every download is checked against the seeded size
   and CRC-32;
+- **clock:** HTTPS and plain HTTP at 333 MHz. On a PSP-1000 the clock does not change while Wi-Fi
+  is on (the call succeeds, the clock stays at 222 MHz), so set it before the network modules load
+  with `clock_mhz=333` (`SKIFF_BENCH_CLOCK_MHZ`); if it is not 333 MHz the section fails rather
+  than report 222 MHz results as 333. Without `clock_mhz`, a probe before joining reports whether
+  the clock can change at all;
 - **ms:** Memory Stick write and read-back speed with 16 to 512 KB blocks (16 MiB each, compared
   byte for byte, then deleted), then the download written to the Memory Stick in 128 KB blocks as
   it arrives, with the best curl buffer from **net**;

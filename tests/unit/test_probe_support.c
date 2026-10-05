@@ -93,6 +93,22 @@ static void test_all_selects_every_section(void) {
     TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SECTION_ALL, config.sections);
 }
 
+static void test_reads_the_clock_and_its_section(void) {
+    TEST_ASSERT_EQUAL_INT(0, config.clock_mhz);
+    read_text("clock_mhz=333\nsections=clock\n");
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_CLOCK_FAST_MHZ, config.clock_mhz);
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SECTION_CLOCK, config.sections);
+    read_text("clock_mhz=222\n");
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_CLOCK_DEFAULT_MHZ, config.clock_mhz);
+    TEST_ASSERT_EQUAL_INT(0, config.invalid_values);
+}
+
+static void test_a_clock_other_than_222_or_333_is_invalid(void) {
+    read_text("clock_mhz=300\nclock_mhz=100\nclock_mhz=fast\n");
+    TEST_ASSERT_EQUAL_INT(0, config.clock_mhz);
+    TEST_ASSERT_EQUAL_INT(3, config.invalid_values);
+}
+
 static void test_unusable_values_keep_the_default_and_are_counted(void) {
     read_text("runs=0\nruns=10\nruns=two\nprofile=0\nprofile=1x\nsize=-1\nsize=\n"
               "crc32=xyz\nsections=net,disk\nsections=\n");
@@ -218,6 +234,8 @@ int main(void) {
     RUN_TEST(test_ignores_comments_blank_lines_crlf_and_unknown_keys);
     RUN_TEST(test_reads_runs_and_sections);
     RUN_TEST(test_all_selects_every_section);
+    RUN_TEST(test_reads_the_clock_and_its_section);
+    RUN_TEST(test_a_clock_other_than_222_or_333_is_invalid);
     RUN_TEST(test_unusable_values_keep_the_default_and_are_counted);
     RUN_TEST(test_an_empty_crc32_is_absent_not_invalid);
     RUN_TEST(test_a_crc32_wider_than_32_bits_is_invalid);

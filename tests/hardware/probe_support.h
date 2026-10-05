@@ -21,6 +21,9 @@ enum {
     SKIFF_PROBE_DEFAULT_PROFILE = 1,
     SKIFF_PROBE_DEFAULT_RUNS = 3,
     SKIFF_PROBE_RUNS_MAX = 9,
+    /* The CPU clocks "clock_mhz=" accepts: the homebrew default and the PSP's highest. */
+    SKIFF_PROBE_CLOCK_DEFAULT_MHZ = 222,
+    SKIFF_PROBE_CLOCK_FAST_MHZ = 333,
 };
 
 /* What a probe measures, chosen with "sections=" (comma-separated names, or "all"). */
@@ -30,7 +33,8 @@ typedef enum skiff_probe_section {
     SKIFF_PROBE_SECTION_NET = 1U << 2,
     SKIFF_PROBE_SECTION_MS = 1U << 3,
     SKIFF_PROBE_SECTION_APP = 1U << 4,
-    SKIFF_PROBE_SECTION_ALL = (1U << 5) - 1,
+    SKIFF_PROBE_SECTION_CLOCK = 1U << 5,
+    SKIFF_PROBE_SECTION_ALL = (1U << 6) - 1,
 } skiff_probe_section;
 
 typedef struct skiff_probe_config {
@@ -48,6 +52,8 @@ typedef struct skiff_probe_config {
     /* Repetitions per measurement, 1 to SKIFF_PROBE_RUNS_MAX. */
     int runs;
     unsigned sections;
+    /* CPU clock to set before the network modules load, or 0 to leave it. */
+    int clock_mhz;
     /* Lines whose value could not be used; the default stays in place for them. */
     int invalid_values;
 } skiff_probe_config;

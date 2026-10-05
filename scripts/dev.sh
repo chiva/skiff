@@ -53,6 +53,8 @@ Commands run in the order given and stop at the first failure.
                load and unload, and TLS must refuse (needs `psp` first; the requests need a PSP)
   ui-proto     Run the UI prototype in PPSSPPHeadless: with no input it renders, checks its fonts
                and exits on its own (needs `psp` first; the dialogs need a real PSP)
+  bench        Run the benchmark in PPSSPPHeadless, which has no ARK: TLS must refuse, the CRC-32
+               and Memory Stick code runs on small sizes (needs `psp` first; numbers need a PSP)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
@@ -246,6 +248,9 @@ run_command() {
     ;;
   ui-proto)
     run_emulator build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS"
+    ;;
+  bench)
+    run_emulator build/psp/pbp/skiff_bench/EBOOT.PBP "BENCH NO ARK"
     ;;
   romm-up)
     romm_up 127.0.0.1

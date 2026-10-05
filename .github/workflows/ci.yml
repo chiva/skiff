@@ -116,6 +116,11 @@ jobs:
         run: >-
           docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
           tests/emulator/run_eboot.sh build/psp/pbp/skiff_net_probe/EBOOT.PBP "NET PROBE NO ARK"
+      # Without ARK the benchmark checks that TLS refuses, then runs its CRC-32 and Memory Stick code.
+      - name: Run the benchmark EBOOT (no ARK, CRC-32 and Memory Stick code only)
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
+          tests/emulator/run_eboot.sh build/psp/pbp/skiff_bench/EBOOT.PBP "BENCH NO ARK"
       # Nobody presses a button in PPSSPPHeadless, so the UI prototype checks its fonts and frames, then
       # exits on its own; the keyboard and network picker need a real PSP.
       - name: Run the UI prototype EBOOT (headless, fonts and frames)

@@ -124,7 +124,8 @@ jobs:
           tests/emulator/run_eboot.sh build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS"
 
   # The disposable RomM behind a TLS proxy (tests/integration/) that the network probe and the
-  # integration tests use: started and checked through scripts/dev.sh, as locally.
+  # integration tests use: started and checked through scripts/dev.sh, as locally. romm-test then
+  # runs the host build's transport against it (TLS, mTLS, the PSP-clock rule, resuming).
   integration:
     name: Integration server (RomM behind TLS)
     runs-on: ubuntu-24.04
@@ -133,7 +134,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: scripts/dev.sh romm-up romm-check
+      - run: scripts/dev.sh romm-up romm-check romm-test
       - name: Show the server logs
         if: failure()
         run: >-

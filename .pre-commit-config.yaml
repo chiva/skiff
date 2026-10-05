@@ -12,9 +12,12 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
     hooks:
+      # Recorded HTTP responses (tests/fixtures/) are replayed byte for byte: CRLF headers, bodies
+      # without a final newline, binary payloads.
       - id: trailing-whitespace
-        exclude: \.md$
+        exclude: (\.md$|^tests/fixtures/)
       - id: end-of-file-fixer
+        exclude: ^tests/fixtures/
       - id: check-yaml
       - id: check-json
       - id: check-merge-conflict
@@ -23,6 +26,7 @@ repos:
         exclude: ^tests/fixtures/
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: ^tests/fixtures/
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: a9a8a861f30ed207ead7d5a3b7e8032283ba5da7 # frozen: v23.1.2

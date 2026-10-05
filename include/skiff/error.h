@@ -27,6 +27,7 @@
       "The PSP's date and time are wrong; set them in Settings to connect securely")               \
     X(SKIFF_ERR_NET_NEEDS_ARK, 109, "Networking needs ARK custom firmware (ARK-4 or ARK-5)")       \
     X(SKIFF_ERR_NET_WIFI_JOIN, 110, "Could not join the Wi-Fi network")                            \
+    X(SKIFF_ERR_NET_CONNECTION_LOST, 111, "The connection to the RomM server was lost")            \
     X(SKIFF_ERR_ROMM_UNAUTHORIZED, 200, "RomM rejected the login; pair this PSP again")            \
     X(SKIFF_ERR_ROMM_FORBIDDEN, 201, "Your RomM user is not allowed to do this")                   \
     X(SKIFF_ERR_ROMM_NOT_FOUND, 202, "RomM could not find that item")                              \

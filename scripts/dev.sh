@@ -17,6 +17,10 @@ readonly COMPOSE_FILE="$REPO_ROOT/tests/integration/compose.yaml"
 readonly COMPOSE_PROJECT="skiff-romm"
 readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
 readonly ROMM_ADMIN_USER="skiff"
+# The fake transport's recorded RomM responses (tests/support/fake_transport.h), and the size of the
+# synthetic file seeded while recording them, kept small so the fixture stays small.
+readonly FIXTURES_DIR="tests/fixtures/romm"
+readonly FIXTURE_PAYLOAD_BYTES=4096
 
 # Bind mounts for every container. In a git worktree, .git is a file pointing at the main
 # repository's .git directory by absolute host path; mounting that directory read-only at the same
@@ -52,6 +56,10 @@ Commands run in the order given and stop at the first failure.
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
+  romm-test    Run the host build's transport against the running test RomM (TLS, mTLS, clock,
+               keep-alive, ranged downloads)
+  romm-record  Start a fresh test RomM with a small seeded file, record the fake transport's
+               fixtures into tests/fixtures/romm/, and stop it
   romm-down    Stop the test RomM and delete its data
   icons        Render the icon PNGs from the SVG masters in assets/brand/
   clean        Remove build/ and dist/
@@ -167,6 +175,7 @@ romm_up() {
   (
     umask 077
     compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
+      ${SKIFF_PAYLOAD_BYTES:+-e SKIFF_PAYLOAD_BYTES="$SKIFF_PAYLOAD_BYTES"} \
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
@@ -252,6 +261,14 @@ run_command() {
     ;;
   romm-check)
     run_host_in_romm_network "tests/integration/check.sh $INTEGRATION_DIR"
+    ;;
+  romm-test)
+    run_host_in_romm_network "tests/integration/transport-test.sh $INTEGRATION_DIR"
+    ;;
+  romm-record)
+    SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
+    run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
+    romm_down
     ;;
   romm-down)
     romm_down

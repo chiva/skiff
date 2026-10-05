@@ -1,5 +1,9 @@
 {
-  "Exclude": ["\\.(c|h|in)$", "^LICENSE$"],
+  "Exclude": [
+    "\\.(c|h|in)$",
+    "^LICENSE$",
+    "^tests/fixtures/"
+  ],
   "Disable": {
     "IndentSize": true,
     "MaxLineLength": true

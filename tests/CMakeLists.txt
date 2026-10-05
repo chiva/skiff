@@ -16,22 +16,43 @@ get_target_property(unity_include_dirs unity INTERFACE_INCLUDE_DIRECTORIES)
 set_target_properties(unity PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
                                        "${unity_include_dirs}")
 
+# Test doubles shared by the unit and integration tests (tests/support/).
+find_package(Threads REQUIRED)
+add_library(skiff_test_support STATIC support/fake_transport.c support/local_http_server.c)
+target_link_libraries(skiff_test_support PUBLIC skiff_core Threads::Threads)
+target_include_directories(skiff_test_support PUBLIC support)
+target_compile_definitions(skiff_test_support
+                           PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+skiff_set_warnings(skiff_test_support)
+
 function(skiff_add_unit_test name)
   add_executable(${name} unit/${name}.c)
-  target_link_libraries(${name} PRIVATE skiff_core unity)
+  target_link_libraries(${name} PRIVATE skiff_core skiff_test_support unity)
   target_include_directories(${name} PRIVATE "${PROJECT_BINARY_DIR}/generated")
   skiff_set_warnings(${name})
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
-# A unit test that links Skiff's TLS stack, with the host's link-time contracts in place of the PSP's.
+# A unit test that links Skiff's network layer and TLS stack, with the host's link-time contracts in
+# place of the PSP's.
 function(skiff_add_tls_unit_test name)
   skiff_add_unit_test(${name})
-  target_link_libraries(${name} PRIVATE skiff_host_tls)
+  target_link_libraries(${name} PRIVATE skiff_net skiff_host_tls)
 endfunction()
 
 skiff_add_unit_test(test_error)
 skiff_add_unit_test(test_version)
 skiff_add_unit_test(test_selftest)
 skiff_add_unit_test(test_entropy)
+skiff_add_unit_test(test_http)
+skiff_add_unit_test(test_transport)
+skiff_add_unit_test(test_fake_transport)
 skiff_add_tls_unit_test(test_host_tls)
+skiff_add_tls_unit_test(test_net_errors)
+skiff_add_tls_unit_test(test_curl_transport)
+
+# Runs against the integration RomM, not under ctest: scripts/dev.sh romm-test
+# (tests/integration/transport-test.sh). Built with every host build so it always compiles.
+add_executable(test_transport_romm integration/test_transport_romm.c)
+target_link_libraries(test_transport_romm PRIVATE skiff_net skiff_host_tls unity)
+skiff_set_warnings(test_transport_romm)

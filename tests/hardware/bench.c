@@ -1305,7 +1305,7 @@ static void run_without_ark(bench *b) {
     b->config.runs = 1;
     report_environment(b);
     skiff_psp_net net;
-    const int loaded = skiff_probe_load_network(&b->report, &net);
+    const int loaded = skiff_probe_load_network(&b->report, &net, SKIFF_PSP_NET_CPU_MHZ_UNCHANGED);
     b->failures += loaded ? 0 : 1;
     const CURLcode curl_status = curl_global_init(CURL_GLOBAL_DEFAULT);
     char text[SKIFF_SELFTEST_LINE_MAX];
@@ -1314,11 +1314,7 @@ static void run_without_ark(bench *b) {
     if (curl_status == CURLE_OK) {
         curl_global_cleanup();
     }
-    const skiff_err unload = skiff_psp_net_unload(&net);
-    if (unload != SKIFF_OK) {
-        skiff_probe_report_net_failure(&b->report, &net, unload);
-        b->failures++;
-    }
+    b->failures += skiff_probe_unload_network(&b->report, &net) ? 0 : 1;
     run_cpu(b);
     run_memory_stick_blocks(b);
 }
@@ -1370,19 +1366,16 @@ static void run_with_ark(bench *b) {
         b->failures++;
         return;
     }
-    if (b->config.clock_mhz != 0) {
-        /* Before Wi-Fi starts, where the clock can still change; the environment line after
-         * joining shows whether it survived the join. */
-        if (!set_clock(b, b->config.clock_mhz, b->config.clock_mhz / 2, 1)) {
-            return;
-        }
-    } else if (set_clock(b, CLOCK_FAST_CPU_MHZ, CLOCK_FAST_BUS_MHZ, 0)) {
+    if (b->config.clock_mhz == SKIFF_PSP_NET_CPU_MHZ_UNCHANGED &&
+        set_clock(b, CLOCK_FAST_CPU_MHZ, CLOCK_FAST_BUS_MHZ, 0)) {
         /* Whether the clock can change at all before Wi-Fi starts: tells a CFW setting that pins
          * it apart from a limit while the radio is on. */
         set_clock(b, b->initial_cpu_mhz, b->initial_bus_mhz, 1);
     }
+    /* clock_mhz is set as the app sets it, before Wi-Fi starts; the environment line after
+     * joining shows whether it survived the join. */
     skiff_psp_net net;
-    if (!skiff_probe_load_network(&b->report, &net)) {
+    if (!skiff_probe_load_network(&b->report, &net, b->config.clock_mhz)) {
         b->failures++;
         skiff_psp_net_unload(&net);
         return;

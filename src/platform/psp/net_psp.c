@@ -5,6 +5,7 @@
 #include <pspnet_apctl.h>
 #include <pspnet_inet.h>
 #include <pspnet_resolver.h>
+#include <psppower.h>
 #include <psputility.h>
 #include <pspwlan.h>
 #include <stdio.h>
@@ -21,6 +22,8 @@ enum {
     APCTL_POLL_US = 50 * 1000,
     FIRST_PROFILE = 1,
     WLAN_SWITCH_OFF = 0,
+    /* Before reading the clock back after a change. */
+    CLOCK_SETTLE_US = 10 * 1000,
 };
 
 /* Records a failed call; returns whether `result` is a success. */
@@ -38,7 +41,28 @@ static void clear_failure(skiff_psp_net *net) {
     net->sce_result = 0;
 }
 
-skiff_err skiff_psp_net_load(skiff_psp_net *net) {
+static void read_clock(skiff_psp_net *net) {
+    net->cpu_mhz = scePowerGetCpuClockFrequency();
+    net->bus_mhz = scePowerGetBusClockFrequency();
+}
+
+/* Best effort: the network works at any clock, so a refused change only shows in net->cpu_mhz. */
+static void set_session_clock(skiff_psp_net *net, int cpu_mhz) {
+    read_clock(net);
+    net->cpu_mhz_before = net->cpu_mhz;
+    net->bus_mhz_before = net->bus_mhz;
+    const int bus_mhz = cpu_mhz / 2;
+    if (cpu_mhz == SKIFF_PSP_NET_CPU_MHZ_UNCHANGED ||
+        (cpu_mhz == net->cpu_mhz && bus_mhz == net->bus_mhz) ||
+        scePowerSetClockFrequency(cpu_mhz, cpu_mhz, bus_mhz) < 0) {
+        return;
+    }
+    net->stage = SKIFF_PSP_NET_CLOCK;
+    sceKernelDelayThread(CLOCK_SETTLE_US);
+    read_clock(net);
+}
+
+skiff_err skiff_psp_net_load(skiff_psp_net *net, int cpu_mhz) {
     if (net == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
@@ -47,6 +71,10 @@ skiff_err skiff_psp_net_load(skiff_psp_net *net) {
     net->apctl_furthest_state = PSP_NET_APCTL_STATE_DISCONNECTED;
     net->apctl_error = 0;
     clear_failure(net);
+    if (cpu_mhz < SKIFF_PSP_NET_CPU_MHZ_UNCHANGED || cpu_mhz > SKIFF_PSP_NET_CPU_MHZ) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    set_session_clock(net, cpu_mhz);
     if (!step(net, "sceUtilityLoadNetModule(COMMON)",
               sceUtilityLoadNetModule(PSP_NET_MODULE_COMMON))) {
         return SKIFF_ERR_NET_UNAVAILABLE;
@@ -230,6 +258,10 @@ skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
               sceUtilityUnloadNetModule(PSP_NET_MODULE_INET))) &&
         (net->stage < SKIFF_PSP_NET_COMMON_MODULE ||
          term(net, SKIFF_PSP_NET_COMMON_MODULE, "sceUtilityUnloadNetModule(COMMON)",
-              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON)));
+              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON))) &&
+        (net->stage < SKIFF_PSP_NET_CLOCK ||
+         term(net, SKIFF_PSP_NET_CLOCK, "scePowerSetClockFrequency (restore)",
+              scePowerSetClockFrequency(net->cpu_mhz_before, net->cpu_mhz_before,
+                                        net->bus_mhz_before)));
     return ok ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
 }

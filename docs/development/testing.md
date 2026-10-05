@@ -65,8 +65,9 @@ the PSP's network checks:
 
 - RomM 5.3.1 and MariaDB, with nothing published but the proxy. Every image is pinned by tag and
   digest in `compose.yaml`.
-- Caddy in front, on three ports: `8080` plain HTTP (for comparison only), `8443` TLS, and `8444`
-  TLS that requires a client certificate signed by the test CA.
+- Caddy in front, on four ports: `8080` plain HTTP (for comparison only), `8443` TLS, `8444` TLS
+  that requires a client certificate signed by the test CA, and `8445` TLS 1.2 with AES-128-GCM
+  only (a server without ChaCha20, for the transport's fallback; not published on the LAN).
 - `gen-certs.sh` creates the test CA, the proxy's certificate (`localhost`, `proxy`, `127.0.0.1`,
   plus the LAN address with `romm-lan`) and client certificates, ECDSA P-256 and RSA-2048, plus one
   from an untrusted CA. They are kept while valid, so copies on a PSP keep working; the proxy's
@@ -243,7 +244,8 @@ On a PSP:
    one line to `net-log.txt` (join time, TLS version and cipher, the median handshake times, the
    transport's download time, the lowest free system memory and the highest heap use).
 
-A failed join or unload names the firmware call and its result. `net_psp` refuses to unload the
+The probe loads the network modules at 333 MHz, as the app does, and fails if the clock did not
+change. A failed join or unload names the firmware call and its result. `net_psp` refuses to unload the
 network modules while the access point is connected, and stops at the first layer that fails to
 come down. Without ARK, as in PPSSPP, TLS cannot start: the
 probe loads and unloads the network modules, checks that libcurl refuses to start, and ends with
@@ -272,10 +274,11 @@ order (each can be chosen with `sections=` in `bench.ini`):
   faster at 333 MHz while plain HTTP does not. Every download is checked against the seeded size
   and CRC-32;
 - **clock:** HTTPS and plain HTTP at 333 MHz. On a PSP-1000 the clock does not change while Wi-Fi
-  is on (the call succeeds, the clock stays at 222 MHz), so set it before the network modules load
-  with `clock_mhz=333` (`SKIFF_BENCH_CLOCK_MHZ`); if it is not 333 MHz the section fails rather
-  than report 222 MHz results as 333. Without `clock_mhz`, a probe before joining reports whether
-  the clock can change at all;
+  is on (the call succeeds, the clock stays at 222 MHz), so set it with `clock_mhz=333`
+  (`SKIFF_BENCH_CLOCK_MHZ`), which the network layer applies before its modules load, as in the
+  app; if it is not 333 MHz the run fails rather than report 222 MHz results as 333. Without
+  `clock_mhz` the benchmark keeps the clock it started with (222 MHz from the XMB), and a probe
+  before joining reports whether the clock can change at all;
 - **ms:** Memory Stick write and read-back speed with 16 to 512 KB blocks (16 MiB each, compared
   byte for byte, then deleted), then the download written to the Memory Stick in 128 KB blocks as
   it arrives, with the best curl buffer from **net**;

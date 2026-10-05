@@ -1,7 +1,8 @@
 /*
  * The host build's curl transport against the integration RomM behind Caddy (tests/integration/),
  * over the TLS stack the PSP links. It checks what the hermetic unit tests cannot: certificate
- * trust, the PSP-clock rule (108), client certificates, keep-alive and resuming a real download.
+ * trust, the PSP-clock rule (108), client certificates, the fallback to AES-GCM, keep-alive and
+ * resuming a real download.
  *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh) inside the compose
  * network, with the server's details in SKIFF_IT_* environment variables. Not a ctest test: it
@@ -22,6 +23,8 @@ enum { URL_MAX = 512, PATH_MAX_LENGTH = 256, RESUME_OFFSET = 1000 };
 #define TLS_SITE "https://proxy:8443"
 #define MTLS_SITE "https://proxy:8444"
 #define PLAIN_SITE "http://proxy:8080"
+/* TLS 1.2 with AES-128-GCM only (tests/integration/Caddyfile). */
+#define AES_ONLY_SITE "https://proxy:8445"
 #define HEARTBEAT "/api/heartbeat"
 #define CLOCK_RESET_TO_2000 ((mbedtls_time_t)946684800)
 #define CLOCK_IN_2100 ((mbedtls_time_t)4102444800LL)
@@ -190,6 +193,14 @@ static void test_client_certificate_from_an_untrusted_ca(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_TLS_CLIENT_CERT, get(MTLS_SITE HEARTBEAT));
 }
 
+/* Skiff offers ChaCha20-Poly1305 first (tests/unit/test_host_tls.c); a server without it must
+ * still be reachable through AES-GCM. */
+static void test_server_without_chacha20_is_reached_over_aes_gcm(void) {
+    connect_with(NULL);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(AES_ONLY_SITE HEARTBEAT));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+}
+
 static void test_plain_http(void) {
     connect_with(NULL);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(PLAIN_SITE HEARTBEAT));
@@ -283,6 +294,7 @@ int main(void) {
     RUN_TEST(test_client_certificates);
     RUN_TEST(test_mtls_site_without_a_client_certificate);
     RUN_TEST(test_client_certificate_from_an_untrusted_ca);
+    RUN_TEST(test_server_without_chacha20_is_reached_over_aes_gcm);
     RUN_TEST(test_plain_http);
     RUN_TEST(test_unknown_host);
     RUN_TEST(test_closed_port);

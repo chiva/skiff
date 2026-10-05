@@ -643,7 +643,7 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
     results->net_disconnect_ok = 0;
     results->net_before_load = take_memory_snapshot();
     skiff_psp_net net;
-    const skiff_err loaded = skiff_psp_net_load(&net);
+    const skiff_err loaded = skiff_psp_net_load(&net, SKIFF_PSP_NET_CPU_MHZ_UNCHANGED);
     results->net_after_load = take_memory_snapshot();
     log_step(ui,
              loaded == SKIFF_OK ? "network: modules loaded" : "FAIL network: modules not loaded");

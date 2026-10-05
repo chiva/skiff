@@ -174,7 +174,11 @@ static int set_optional_string(CURL *curl, CURLoption option, const char *value)
     return value == NULL || curl_easy_setopt(curl, option, value) == CURLE_OK;
 }
 
-/* Options that hold for every request; curl copies the strings. */
+/*
+ * Options that hold for every request; curl copies the strings. No cipher list: Mbed TLS's default
+ * order offers ChaCha20-Poly1305 first, which a PSP decrypts eight times faster than AES-GCM, and
+ * keeps every other suite for servers without it (pinned by tests/unit/test_host_tls.c).
+ */
 static int configure(curl_transport *transport, const skiff_curl_config *config) {
     CURL *curl = transport->curl;
     const long connect_timeout =

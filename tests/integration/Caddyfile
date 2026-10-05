@@ -1,5 +1,6 @@
-# Three ways in to the same RomM: plain HTTP (comparison only), HTTPS, and HTTPS that requires a
-# client certificate signed by the test CA (mTLS). Certificates come from gen-certs.sh.
+# Four ways in to the same RomM: plain HTTP (comparison only), HTTPS, HTTPS that requires a client
+# certificate signed by the test CA (mTLS), and HTTPS limited to TLS 1.2 with AES-128-GCM (a server
+# without ChaCha20, which Skiff prefers). Certificates come from gen-certs.sh.
 {
 	admin off
 	auto_https off
@@ -26,6 +27,16 @@
 			mode require_and_verify
 			trust_pool file /certs/ca.crt
 		}
+	}
+	reverse_proxy romm:8080
+}
+
+# Not published: only the integration tests use it. Go cannot restrict TLS 1.3 suites, so this site
+# stops at TLS 1.2.
+:8445 {
+	tls /certs/server.crt /certs/server.key {
+		protocols tls1.2 tls1.2
+		ciphers TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 	}
 	reverse_proxy romm:8080
 }

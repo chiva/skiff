@@ -646,7 +646,7 @@ static int append_log(probe *p, const char *ip, long long join_us, const tls_fin
 static int run_without_ark(probe *p) {
     skiff_psp_report_line(&p->report, "no ARK: TLS cannot start; checking that it refuses");
     skiff_psp_net net;
-    const int loaded = skiff_probe_load_network(&p->report, &net);
+    const int loaded = skiff_probe_load_network(&p->report, &net, SKIFF_PSP_NET_CPU_MHZ);
     const CURLcode curl_status = curl_global_init(CURL_GLOBAL_DEFAULT);
     char text[SKIFF_SELFTEST_LINE_MAX];
     snprintf(text, sizeof text, "curl_global_init() refuses without entropy: %d", (int)curl_status);
@@ -654,11 +654,8 @@ static int run_without_ark(probe *p) {
     if (curl_status == CURLE_OK) {
         curl_global_cleanup();
     }
-    const skiff_err unload = skiff_psp_net_unload(&net);
-    if (unload != SKIFF_OK) {
-        skiff_probe_report_net_failure(&p->report, &net, unload);
-    }
-    return loaded && curl_status != CURLE_OK && unload == SKIFF_OK;
+    const int unloaded = skiff_probe_unload_network(&p->report, &net);
+    return loaded && curl_status != CURLE_OK && unloaded;
 }
 
 static int run_with_ark(probe *p) {
@@ -666,7 +663,7 @@ static int run_with_ark(probe *p) {
         return 0;
     }
     skiff_psp_net net;
-    if (!skiff_probe_load_network(&p->report, &net)) {
+    if (!skiff_probe_load_network(&p->report, &net, SKIFF_PSP_NET_CPU_MHZ)) {
         skiff_psp_net_unload(&net);
         return 0;
     }

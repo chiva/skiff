@@ -11,11 +11,21 @@
  * both in reverse; tearing the modules down under a live connection can hang the PSP, so unload
  * only after a disconnect that succeeded. Each call records the firmware call that failed and its
  * result, for logs and bug reports.
+ *
+ * Loading can also raise the CPU clock for the session, and unloading puts it back. TLS is
+ * CPU-bound on a PSP: on a PSP-1000 HTTPS downloads went from about 350 KB/s at 222 MHz to about
+ * 470 KB/s at 333 MHz. The clock has to change before the modules load, because with Wi-Fi on the
+ * firmware accepts the call and keeps the old clock.
  */
+
+/* The clock while online (bus at half), and what to pass to keep the current one. */
+#define SKIFF_PSP_NET_CPU_MHZ 333
+#define SKIFF_PSP_NET_CPU_MHZ_UNCHANGED 0
 
 /* How far skiff_psp_net_load() got; skiff_psp_net_unload() undoes exactly that much. */
 typedef enum skiff_psp_net_stage {
     SKIFF_PSP_NET_NONE,
+    SKIFF_PSP_NET_CLOCK,
     SKIFF_PSP_NET_COMMON_MODULE,
     SKIFF_PSP_NET_INET_MODULE,
     SKIFF_PSP_NET_NET,
@@ -38,10 +48,23 @@ typedef struct skiff_psp_net {
      * written by the firmware's event handler, on its own thread. */
     volatile int apctl_furthest_state;
     volatile int apctl_error;
+    /* The CPU and bus clock in MHz after skiff_psp_net_load(), for logs: not what was asked for
+     * when the firmware kept its clock. */
+    int cpu_mhz;
+    int bus_mhz;
+    /* The clock skiff_psp_net_unload() puts back (stage SKIFF_PSP_NET_CLOCK and above). */
+    int cpu_mhz_before;
+    int bus_mhz_before;
 } skiff_psp_net;
 
-/* Loads the modules and starts the libraries. SKIFF_ERR_NET_UNAVAILABLE if any step fails. */
-skiff_err skiff_psp_net_load(skiff_psp_net *net);
+/*
+ * Sets the CPU clock to cpu_mhz (SKIFF_PSP_NET_CPU_MHZ, or SKIFF_PSP_NET_CPU_MHZ_UNCHANGED to leave
+ * it), then loads the modules and starts the libraries. A clock the firmware refuses or ignores is
+ * not an error: compare cpu_mhz afterwards. SKIFF_ERR_INVALID_ARG for a NULL net or a cpu_mhz
+ * outside 0 to SKIFF_PSP_NET_CPU_MHZ; SKIFF_ERR_NET_UNAVAILABLE if a module or library fails to
+ * start.
+ */
+skiff_err skiff_psp_net_load(skiff_psp_net *net, int cpu_mhz);
 
 /*
  * Joins the access point of Network Settings profile `profile` (1 is the first) and waits for an IP
@@ -61,7 +84,8 @@ skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size);
 skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us);
 
 /*
- * Undoes skiff_psp_net_load() in reverse, down to stage NONE. Refuses while the access point is not
+ * Undoes skiff_psp_net_load() in reverse, the clock last, down to stage NONE. Refuses while the
+ * access point is not
  * disconnected, and stops at the first step that fails: stage then names the layer still live, so
  * the caller can retry or leave the rest to the process exit. SKIFF_ERR_NET_UNAVAILABLE on either.
  */

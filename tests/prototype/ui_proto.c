@@ -685,6 +685,12 @@ static int disconnect(const ui_state *ui) {
     return 0;
 }
 
+static void leave_modules_loaded(const ui_state *ui, proto_results *results, const char *reason) {
+    log_step(ui, reason);
+    results->net_unload_ok = 0;
+    results->net_after_unload = take_memory_snapshot();
+}
+
 static void open_network_picker(ui_state *ui, proto_results *results) {
     static const dialog_ops netconf_ops = {"network picker", sceUtilityNetconfGetStatus,
                                            sceUtilityNetconfUpdate, sceUtilityNetconfShutdownStart};
@@ -722,16 +728,21 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
                                                     : "network: no IP address");
         }
         /*
-         * A picker that never closed still uses APCTL and the inet modules; tearing them down under
-         * it can hang the EBOOT before it reports. Leave them to the process exit and fail.
+         * A picker that never closed, or a connection not proven gone, still uses APCTL and the
+         * inet modules; tearing them down under it can hang the EBOOT before it reports. Leave them
+         * to the process exit and fail.
          */
         if (results->netconf.started && !results->netconf.closed) {
-            log_step(ui, "FAIL network: picker still open, leaving the modules loaded");
-            results->net_unload_ok = 0;
-            results->net_after_unload = take_memory_snapshot();
+            leave_modules_loaded(ui, results,
+                                 "FAIL network: picker still open, leaving the modules loaded");
             return;
         }
         results->net_disconnect_ok = disconnect(ui);
+        if (!results->net_disconnect_ok) {
+            leave_modules_loaded(ui, results,
+                                 "FAIL network: not disconnected, leaving the modules loaded");
+            return;
+        }
     }
     results->net_unload_ok = unload_net_modules(stage);
     results->net_after_unload = take_memory_snapshot();

@@ -106,7 +106,8 @@ static suite_order default_order(int tls13, const char *cipher) {
 }
 
 /*
- * The curl transport sets no cipher list, so it offers Mbed TLS's default order. On a PSP-1000
+ * The curl transport sets no cipher list, so it offers Mbed TLS's default order (the integration
+ * test checks the suite it then negotiates with Caddy). On a PSP-1000
  * ChaCha20-Poly1305 decrypts at 3 MB/s and AES-128-GCM at 0.37 MB/s, which halves HTTPS downloads
  * (about 350 against 175 KB/s), so ChaCha20 must come first for both TLS versions; AES-GCM must
  * still be offered for servers without ChaCha20. A server that honours the client's order, or that

@@ -25,7 +25,6 @@
 /* How far skiff_psp_net_load() got; skiff_psp_net_unload() undoes exactly that much. */
 typedef enum skiff_psp_net_stage {
     SKIFF_PSP_NET_NONE,
-    SKIFF_PSP_NET_CLOCK,
     SKIFF_PSP_NET_COMMON_MODULE,
     SKIFF_PSP_NET_INET_MODULE,
     SKIFF_PSP_NET_NET,
@@ -52,9 +51,12 @@ typedef struct skiff_psp_net {
      * when the firmware kept its clock. */
     int cpu_mhz;
     int bus_mhz;
-    /* The clock skiff_psp_net_unload() puts back (stage SKIFF_PSP_NET_CLOCK and above). */
+    /* The clock before skiff_psp_net_load(), which skiff_psp_net_unload() puts back while
+     * clock_changed is set. Kept apart from stage: the clock is restored even when a layer fails to
+     * come down. */
     int cpu_mhz_before;
     int bus_mhz_before;
+    int clock_changed;
 } skiff_psp_net;
 
 /*
@@ -84,8 +86,9 @@ skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size);
 skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us);
 
 /*
- * Undoes skiff_psp_net_load() in reverse, the clock last, down to stage NONE. Refuses while the
- * access point is not
+ * Undoes skiff_psp_net_load() in reverse, down to stage NONE, then puts the clock back (also when a
+ * layer failed to come down, though with Wi-Fi still up the firmware may keep the session clock).
+ * Refuses while the access point is not
  * disconnected, and stops at the first step that fails: stage then names the layer still live, so
  * the caller can retry or leave the rest to the process exit. SKIFF_ERR_NET_UNAVAILABLE on either.
  */

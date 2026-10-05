@@ -57,7 +57,7 @@ static void set_session_clock(skiff_psp_net *net, int cpu_mhz) {
         scePowerSetClockFrequency(cpu_mhz, cpu_mhz, bus_mhz) < 0) {
         return;
     }
-    net->stage = SKIFF_PSP_NET_CLOCK;
+    net->clock_changed = 1;
     sceKernelDelayThread(CLOCK_SETTLE_US);
     read_clock(net);
 }
@@ -70,6 +70,7 @@ skiff_err skiff_psp_net_load(skiff_psp_net *net, int cpu_mhz) {
     net->apctl_state = PSP_NET_APCTL_STATE_DISCONNECTED;
     net->apctl_furthest_state = PSP_NET_APCTL_STATE_DISCONNECTED;
     net->apctl_error = 0;
+    net->clock_changed = 0;
     clear_failure(net);
     if (cpu_mhz < SKIFF_PSP_NET_CPU_MHZ_UNCHANGED || cpu_mhz > SKIFF_PSP_NET_CPU_MHZ) {
         return SKIFF_ERR_INVALID_ARG;
@@ -228,6 +229,23 @@ static int term(skiff_psp_net *net, skiff_psp_net_stage layer, const char *call,
     return 1;
 }
 
+/* Puts back the clock from before skiff_psp_net_load(); a module failure stays the one reported. */
+static int restore_clock(skiff_psp_net *net) {
+    if (!net->clock_changed) {
+        return 1;
+    }
+    const int result =
+        scePowerSetClockFrequency(net->cpu_mhz_before, net->cpu_mhz_before, net->bus_mhz_before);
+    if (result < 0) {
+        if (net->failed_call == NULL) {
+            step(net, "scePowerSetClockFrequency (restore)", result);
+        }
+        return 0;
+    }
+    net->clock_changed = 0;
+    return 1;
+}
+
 skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
     if (net == NULL) {
         return SKIFF_ERR_INVALID_ARG;
@@ -258,10 +276,7 @@ skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
               sceUtilityUnloadNetModule(PSP_NET_MODULE_INET))) &&
         (net->stage < SKIFF_PSP_NET_COMMON_MODULE ||
          term(net, SKIFF_PSP_NET_COMMON_MODULE, "sceUtilityUnloadNetModule(COMMON)",
-              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON))) &&
-        (net->stage < SKIFF_PSP_NET_CLOCK ||
-         term(net, SKIFF_PSP_NET_CLOCK, "scePowerSetClockFrequency (restore)",
-              scePowerSetClockFrequency(net->cpu_mhz_before, net->cpu_mhz_before,
-                                        net->bus_mhz_before)));
-    return ok ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
+              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON)));
+    const int clock_restored = restore_clock(net);
+    return ok && clock_restored ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
 }

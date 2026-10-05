@@ -132,6 +132,8 @@ static void test_headers_on_the_wire_and_partial_response(void) {
     TEST_ASSERT_EQUAL_UINT64(1005, response.range_total);
     TEST_ASSERT_EQUAL_STRING("hello", sink.bytes);
     TEST_ASSERT_EQUAL_UINT64(5, response.body_bytes);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", response.tls_version, "plain HTTP has no TLS session");
+    TEST_ASSERT_EQUAL_STRING("", response.tls_cipher);
 
     stop_server();
     TEST_PRINTF("request on the wire:\n%s", server.requests[0]);

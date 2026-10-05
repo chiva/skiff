@@ -205,7 +205,8 @@ excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
 The `transport` interface (`include/skiff/transport.h`) takes a URL, headers, `Range`/`If-Range`
 and a body callback, and fills a small response record: status, ETag, Content-Length and
-Content-Range, read by one header parser shared with the fake transport. Custom headers from
+Content-Range, read by one header parser shared with the fake transport, plus the TLS version and
+cipher suite of the connection, for logs. Custom headers from
 `config.ini` are sent on every request and may not contain line breaks. Only URLs with an
 explicit `http://` or `https://` are sent: curl would guess plain HTTP for a bare address and send
 the token in the clear, so a server address without a scheme is a configuration error (402). The curl transport
@@ -234,8 +235,9 @@ Skiff sets no cipher list. Mbed TLS's default order offers ChaCha20-Poly1305 fir
 eight times faster than AES-128-GCM (3 MB/s against 0.37 MB/s), and with AES-GCM HTTPS downloads
 drop from about 350 to 175 KB/s. Servers that honour the client's order pick ChaCha20, and so do
 Go's (Caddy, Traefik), which read a client listing ChaCha20 first as one without AES hardware.
-`tests/unit/test_host_tls.c` pins that order, so an Mbed TLS update cannot change it silently, and
-the integration tests reach a TLS 1.2 server that offers only AES-128-GCM.
+`tests/unit/test_host_tls.c` pins that order, so an Mbed TLS update cannot change it silently. The
+integration tests check that the transport negotiates ChaCha20 with Caddy and still reaches a TLS
+1.2 server that offers only AES-128-GCM.
 
 For mTLS, client keys should be ECDSA P-256: on a PSP-1000, a TLS 1.3 handshake took 0.59 s
 without a client certificate, 0.69 s with an ECDSA P-256 one and 2.07 s with RSA-2048 (median of

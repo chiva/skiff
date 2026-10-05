@@ -180,7 +180,10 @@ typedef struct dialog_outcome {
     int reached_visible;
     int closed;
     int timed_out;
-    /* First failing sceUtility*Update / *ShutdownStart return, 0 if none failed. */
+    /*
+     * First failing sceUtility*Update return, and the last failing *ShutdownStart return (cleared
+     * once a retry is accepted); 0 if none failed.
+     */
     int update_error;
     int shutdown_error;
     /* pspUtilityDialogCommon.result once closed. */
@@ -432,14 +435,18 @@ static void log_dialog_error(const ui_state *ui, const dialog_ops *ops, const ch
     log_step(ui, line);
 }
 
-/* Asks the dialog to close; returns when the run gives up waiting for it. */
-static long long request_close(const ui_state *ui, const dialog_ops *ops, dialog_outcome *outcome) {
+/* Asks the dialog to close; returns 1 once the system accepts, so a refusal is retried. */
+static int request_close(const ui_state *ui, const dialog_ops *ops, dialog_outcome *outcome) {
     const int result = ops->shutdown_start();
-    if (result < 0 && outcome->shutdown_error == 0) {
+    if (result < 0) {
+        if (outcome->shutdown_error != result) {
+            log_dialog_error(ui, ops, "ShutdownStart", result);
+        }
         outcome->shutdown_error = result;
-        log_dialog_error(ui, ops, "ShutdownStart", result);
+        return 0;
     }
-    return now_us() + DIALOG_CLOSE_GRACE_US;
+    outcome->shutdown_error = 0;
+    return 1;
 }
 
 /*
@@ -451,6 +458,7 @@ static void run_dialog(ui_state *ui, const proto_results *results, const dialog_
                        dialog_outcome *outcome) {
     const long long deadline = now_us() + DIALOG_TIMEOUT_US;
     long long give_up_at = 0; /* set once the dialog has been asked to close */
+    int shutdown_accepted = 0;
     for (;;) {
         begin_frame();
         draw_list(ui, results);
@@ -468,16 +476,20 @@ static void run_dialog(ui_state *ui, const proto_results *results, const dialog_
                 outcome->timed_out = now >= deadline;
                 log_step(ui, outcome->timed_out ? "dialog: timed out, closing it"
                                                 : "dialog: HOME -> Quit, closing it");
-                give_up_at = request_close(ui, ops, outcome);
-            } else if (give_up_at == 0) {
-                const int result = ops->update(DIALOG_UPDATE_SPEED);
-                if (result < 0 && outcome->update_error == 0) {
-                    outcome->update_error = result;
-                    log_dialog_error(ui, ops, "Update", result);
-                }
+                give_up_at = now + DIALOG_CLOSE_GRACE_US;
+                shutdown_accepted = request_close(ui, ops, outcome);
             }
-        } else if (status == PSP_UTILITY_DIALOG_QUIT && give_up_at == 0) {
-            give_up_at = request_close(ui, ops, outcome);
+            /* Kept running while closing too: the dialog only reaches QUIT through updates. */
+            const int result = ops->update(DIALOG_UPDATE_SPEED);
+            if (result < 0 && outcome->update_error == 0) {
+                outcome->update_error = result;
+                log_dialog_error(ui, ops, "Update", result);
+            }
+        } else if (status == PSP_UTILITY_DIALOG_QUIT && !shutdown_accepted) {
+            if (give_up_at == 0) {
+                give_up_at = now + DIALOG_CLOSE_GRACE_US;
+            }
+            shutdown_accepted = request_close(ui, ops, outcome);
         }
         /* INIT and FINISHED: the system is still bringing it up or tearing it down. */
         const long long limit = give_up_at != 0 ? give_up_at : deadline + DIALOG_CLOSE_GRACE_US;
@@ -708,6 +720,16 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
             }
             log_step(ui, results->net_ip[0] != '\0' ? "network: connected, IP obtained"
                                                     : "network: no IP address");
+        }
+        /*
+         * A picker that never closed still uses APCTL and the inet modules; tearing them down under
+         * it can hang the EBOOT before it reports. Leave them to the process exit and fail.
+         */
+        if (results->netconf.started && !results->netconf.closed) {
+            log_step(ui, "FAIL network: picker still open, leaving the modules loaded");
+            results->net_unload_ok = 0;
+            results->net_after_unload = take_memory_snapshot();
+            return;
         }
         results->net_disconnect_ok = disconnect(ui);
     }

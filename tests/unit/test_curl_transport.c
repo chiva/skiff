@@ -274,6 +274,8 @@ static void test_bad_addresses_are_configuration_errors(void) {
     create(&TEST_CONFIG);
     snprintf(url, sizeof url, "ftp://127.0.0.1/");
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
+    snprintf(url, sizeof url, "127.0.0.1/api/heartbeat");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
     snprintf(url, sizeof url, "http://[::1/");
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
 }

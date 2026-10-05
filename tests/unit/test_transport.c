@@ -66,6 +66,31 @@ static void test_null_and_missing_arguments(void) {
     expect_refused("empty URL");
 }
 
+static void expect_bad_address(const char *url) {
+    request.url = url;
+    TEST_PRINTF("bad address: %s", url);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_CONFIG_INVALID_VALUE,
+                                  skiff_transport_perform(&transport.base, &request, &response),
+                                  url);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, transport.performs, "nothing may be sent");
+}
+
+static void test_only_explicit_http_and_https_are_sent(void) {
+    expect_bad_address("romm.example/api/heartbeat");
+    expect_bad_address("romm.example:8443/api/heartbeat");
+    expect_bad_address("ftp://romm.example/");
+    expect_bad_address("http:/romm.example/");
+    expect_bad_address("https:romm.example/");
+    static const char *const ACCEPTED[] = {"http://romm.example/", "https://romm.example/",
+                                           "HTTPS://romm.example/", "Http://romm.example/"};
+    for (size_t i = 0; i < sizeof ACCEPTED / sizeof ACCEPTED[0]; i++) {
+        request.url = ACCEPTED[i];
+        TEST_ASSERT_EQUAL_INT_MESSAGE(
+            SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response), ACCEPTED[i]);
+    }
+    TEST_ASSERT_EQUAL_INT(4, transport.performs);
+}
+
 static void test_transport_without_ops_is_refused(void) {
     skiff_transport bare = {NULL};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
@@ -122,6 +147,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_valid_request_reaches_the_transport_with_a_reset_response);
     RUN_TEST(test_null_and_missing_arguments);
+    RUN_TEST(test_only_explicit_http_and_https_are_sent);
     RUN_TEST(test_transport_without_ops_is_refused);
     RUN_TEST(test_header_injection_is_refused);
     RUN_TEST(test_valid_headers_pass);

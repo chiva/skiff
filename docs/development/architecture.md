@@ -201,7 +201,9 @@ excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 The `transport` interface (`include/skiff/transport.h`) takes a URL, headers, `Range`/`If-Range`
 and a body callback, and fills a small response record: status, ETag, Content-Length and
 Content-Range, read by one header parser shared with the fake transport. Custom headers from
-`config.ini` are sent on every request and may not contain line breaks. The curl transport
+`config.ini` are sent on every request and may not contain line breaks. Only URLs with an
+explicit `http://` or `https://` are sent: curl would guess plain HTTP for a bare address and send
+the token in the clear, so a server address without a scheme is a configuration error (402). The curl transport
 (`include/skiff/curl_transport.h`) keeps one handle, and so one connection, per session. It sets no
 limit on a whole transfer, since a download can take an hour; a connection that delivers nothing for
 30 seconds (`SKIFF_CURL_STALL_TIMEOUT_S`) counts as a timeout instead.

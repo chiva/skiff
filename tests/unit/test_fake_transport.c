@@ -216,7 +216,7 @@ static void test_unknown_path_is_404(void) {
     add("/api/heartbeat", "romm/heartbeat.http");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/nothing"));
     TEST_ASSERT_EQUAL_INT64(404, response.status);
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("romm.test"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test"));
     TEST_ASSERT_EQUAL_INT64(404, response.status);
 }
 

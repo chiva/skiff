@@ -25,7 +25,7 @@ typedef struct skiff_http_header {
 typedef skiff_err (*skiff_http_body_fn)(void *ctx, const unsigned char *data, size_t size);
 
 typedef struct skiff_http_request {
-    /* GET only for now; POST arrives with pairing. */
+    /* GET only for now; POST arrives with pairing. Must start with http:// or https://. */
     const char *url;
     /* Sent on this request after the transport's own default headers. */
     const skiff_http_header *headers;
@@ -66,7 +66,8 @@ int skiff_http_headers_valid(const skiff_http_header *headers, size_t count);
  * response->status set; map it with skiff_http_status_error(). Otherwise returns the network
  * failure (1xx codes), the body callback's error, or SKIFF_ERR_INVALID_ARG for a NULL argument, a
  * missing URL, invalid headers (skiff_http_headers_valid()), or an if_range that is set without
- * has_range or contains a line break. The response is reset first,
+ * has_range or contains a line break, and SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an
+ * explicit http:// or https:// (curl would guess plain HTTP). The response is reset first,
  * so after a failure it holds whatever arrived before it. The connection stays usable after any
  * failure.
  */

@@ -71,6 +71,12 @@ turn_on MBEDTLS_PSA_DRIVER_GET_ENTROPY
 # mbedtls_ms_time() (src/platform/psp/mbedtls_time.c); TLS 1.3 uses it to age session tickets.
 turn_on MBEDTLS_PLATFORM_MS_TIME_ALT
 
+# Certificate dates are checked against mbedtls_time(), which defaults to the C library's time().
+# On the PSP that returns only the time of day (measured on a PSP-1000: 36834 at 09:13 UTC), so every
+# certificate looked issued in the future. With TIME_ALT, src/platform/psp/mbedtls_time.c installs a
+# clock read from the PSP's real-time clock before main() runs.
+turn_on MBEDTLS_PLATFORM_TIME_ALT
+
 # Persistent PSA keys: Skiff keeps none, and the file backend would write into the working directory.
 turn_off MBEDTLS_PSA_CRYPTO_STORAGE_C
 turn_off MBEDTLS_PSA_ITS_FILE_C

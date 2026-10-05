@@ -75,7 +75,10 @@ checks in the `main` ruleset: add steps or jobs, never rename existing ones.
   `sceGuGetMemory` back from the data cache (`sceKernelDcacheWritebackRange`) before drawing, as
   intraFont does.
 - An EBOOT linking Mbed TLS must provide `mbedtls_platform_get_entropy()` and `mbedtls_ms_time()`
-  (link-time contracts, see `docs/development/toolchain.md`).
+  (link-time contracts, see `docs/development/toolchain.md`), and link `skiff_psp_tls`, whose
+  constructor gives Mbed TLS the real-time clock for certificate dates.
+- `time()` on the PSP returns only the time of day (the date is lost). Never use it for anything
+  date-related: read `sceRtcGetCurrentTick` (UTC) instead.
 - ARK custom firmware functions are imported through hand-written stubs in
   `src/platform/psp/ark_sysctrl.S` (pspsdk ships none). A NID is the first four bytes of SHA-1 of the
   function name, read little-endian; an import from a library that is not loaded returns

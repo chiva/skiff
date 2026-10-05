@@ -26,6 +26,7 @@
  */
 #include <curl/curl.h>
 #include <malloc.h>
+#include <mbedtls/platform_time.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 #include <pspkernel.h>
@@ -672,18 +673,25 @@ static int run_with_ark(probe *p) {
     return ok;
 }
 
-/* Certificates are valid between two dates, checked against this clock (time(), in UTC). */
-static void report_clock(probe *p) {
-    const time_t now = time(NULL);
+static void report_one_clock(probe *p, const char *label, time_t now) {
     struct tm utc;
     char clock_text[CLOCK_TEXT_MAX] = "unknown";
     if (gmtime_r(&now, &utc) != NULL) {
         strftime(clock_text, sizeof clock_text, "%Y-%m-%d %H:%M:%S", &utc);
     }
     char line[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(line, sizeof line, "PSP clock for certificate dates: %s UTC (time() = %lld)",
-             clock_text, (long long)now);
+    snprintf(line, sizeof line, "%s: %s UTC (%lld)", label, clock_text, (long long)now);
     skiff_psp_report_line(&p->report, line);
+}
+
+/*
+ * Certificates are valid between two dates, checked against Mbed TLS's clock (the PSP's real-time
+ * clock, src/platform/psp/mbedtls_time.c). The C library's time() is shown next to it: on the PSP
+ * it carries only the time of day.
+ */
+static void report_clock(probe *p) {
+    report_one_clock(p, "TLS clock (certificate dates)", (time_t)mbedtls_time(NULL));
+    report_one_clock(p, "C library time()", time(NULL));
 }
 
 int main(int argc, char *argv[]) {

@@ -908,10 +908,10 @@ static void close_download_file(const bench *b, download *d) {
     if (d->result->code == CURLE_OK) {
         mark_progress(d);
     }
+    /* A file left behind would hold the whole payload on the player's Memory Stick. */
     char path[SKIFF_PROBE_PATH_MAX];
-    if (skiff_probe_sibling(b->program_path, MS_TEST_FILE, path)) {
-        sceIoRemove(path);
-    }
+    d->result->write_failed |=
+        !skiff_probe_sibling(b->program_path, MS_TEST_FILE, path) || sceIoRemove(path) < 0;
 }
 
 /* One download on a fresh connection (a full handshake), hashed as it arrives. */
@@ -1114,24 +1114,25 @@ static int memory_stick_block(bench *b, const char *path, const unsigned char *p
     }
     same = file >= 0 && sceIoClose(file) >= 0 && same;
     const long long read_us = now_us() - start;
-    sceIoRemove(path);
+    const int removed = sceIoRemove(path) >= 0;
 
     const unsigned long long bytes = (unsigned long long)blocks * block;
     char text[SKIFF_SELFTEST_LINE_MAX];
     snprintf(text, sizeof text,
-             "Memory Stick, %d KB blocks: write %llu KB/s, read %llu KB/s (%llu KB, data %s)",
+             "Memory Stick, %d KB blocks: write %llu KB/s, read %llu KB/s (%llu KB, data %s, %s)",
              block_bytes / KB, skiff_probe_kb_per_s(bytes, write_us),
              skiff_probe_kb_per_s(bytes, read_us), bytes / KB,
-             same ? "read back intact" : "NOT read back intact");
-    check(b, ok && same, text);
+             same ? "read back intact" : "NOT read back intact",
+             removed ? "deleted" : "NOT deleted");
+    check(b, ok && same && removed, text);
     char id[SKIFF_SELFTEST_LINE_MAX];
     char values[SKIFF_SELFTEST_LINE_MAX];
     snprintf(id, sizeof id, "ms-%dk", block_bytes / KB);
     snprintf(values, sizeof values, "write_kbs=%llu read_kbs=%llu bytes=%llu ok=%d",
              skiff_probe_kb_per_s(bytes, write_us), skiff_probe_kb_per_s(bytes, read_us), bytes,
-             ok && same);
+             ok && same && removed);
     log_item(b, id, values);
-    return ok && same;
+    return ok && same && removed;
 }
 
 static void run_memory_stick_blocks(bench *b) {
@@ -1160,6 +1161,8 @@ static void run_memory_stick_blocks(bench *b) {
         !skiff_probe_sibling(b->program_path, MS_TEST_FILE, path)) {
         check(b, 0, "Memory Stick: no memory for the blocks, or no path for the test file");
     } else {
+        /* A file an earlier run could not delete would skew the free space and the first write. */
+        sceIoRemove(path);
         for (int i = 0; i < largest; i++) {
             pattern[i] = (unsigned char)(i * 7 + (i >> 9));
         }

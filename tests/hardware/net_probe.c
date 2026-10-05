@@ -27,10 +27,12 @@
 #include <curl/curl.h>
 #include <malloc.h>
 #include <mbedtls/ssl.h>
+#include <mbedtls/x509_crt.h>
 #include <pspkernel.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "skiff/selftest.h"
 
@@ -69,6 +71,8 @@ enum {
     CONFIG_LINE_MAX = 160,
     BODY_EXCERPT_MAX = 256,
     TLS_NAME_MAX = 64,
+    VERIFY_INFO_MAX = 160,
+    CLOCK_TEXT_MAX = 32,
     /* Request and run-log lines carry labels, curl's message and TLS names: longer than a check. */
     LONG_LINE_MAX = 512,
     DEFAULT_PROFILE = 1,
@@ -140,6 +144,8 @@ typedef struct request_result {
     int body_ok;
     char tls_version[TLS_NAME_MAX];
     char cipher[TLS_NAME_MAX];
+    /* Why the server's certificate was rejected (Mbed TLS's verify flags), when it was. */
+    long verify_flags;
 } request_result;
 
 /* Response bytes kept for the heartbeat check; the rest is counted only. */
@@ -324,6 +330,7 @@ static void read_result(CURL *curl, const body_buffer *body, CURLcode code,
     result->tls_us = app > tcp ? (long long)(app - tcp) : 0;
     result->total_us = (long long)total;
     result->body_ok = strstr(body->data, HEARTBEAT_MARKER) != NULL;
+    curl_easy_getinfo(curl, CURLINFO_SSL_VERIFYRESULT, &result->verify_flags);
     read_tls_session(curl, result);
 }
 
@@ -358,6 +365,14 @@ static void log_request(probe *p, const request_spec *spec, const request_result
              result->status, result->tcp_us / US_PER_MS, result->tls_us / US_PER_MS,
              result->total_us / US_PER_MS, result->tls_version, result->cipher);
     skiff_psp_report_line(&p->report, line);
+    if (result->code == CURLE_PEER_FAILED_VERIFICATION && result->verify_flags != 0) {
+        char info[VERIFY_INFO_MAX];
+        mbedtls_x509_crt_verify_info(info, sizeof info, "", (uint32_t)result->verify_flags);
+        trim_line(info);
+        snprintf(line, sizeof line, "     certificate rejected (flags 0x%08lX): %s",
+                 (unsigned long)result->verify_flags, info);
+        skiff_psp_report_line(&p->report, line);
+    }
 }
 
 /* One fresh connection (a full handshake). */
@@ -657,6 +672,20 @@ static int run_with_ark(probe *p) {
     return ok;
 }
 
+/* Certificates are valid between two dates, checked against this clock (time(), in UTC). */
+static void report_clock(probe *p) {
+    const time_t now = time(NULL);
+    struct tm utc;
+    char clock_text[CLOCK_TEXT_MAX] = "unknown";
+    if (gmtime_r(&now, &utc) != NULL) {
+        strftime(clock_text, sizeof clock_text, "%Y-%m-%d %H:%M:%S", &utc);
+    }
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(line, sizeof line, "PSP clock for certificate dates: %s UTC (time() = %lld)",
+             clock_text, (long long)now);
+    skiff_psp_report_line(&p->report, line);
+}
+
 int main(int argc, char *argv[]) {
     probe p;
     memset(&p, 0, sizeof p);
@@ -664,6 +693,7 @@ int main(int argc, char *argv[]) {
     skiff_psp_install_exit_callback();
     skiff_psp_report_open(&p.report, p.program_path);
     skiff_psp_report_line(&p.report, "Skiff network probe");
+    report_clock(&p);
 
     const int has_ark = skiff_psp_entropy_status() != SKIFF_ERR_NET_NEEDS_ARK;
     const int passed = has_ark ? run_with_ark(&p) : run_without_ark(&p);

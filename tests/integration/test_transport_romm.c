@@ -1,7 +1,8 @@
 /*
  * The host build's curl transport against the integration RomM behind Caddy (tests/integration/),
  * over the TLS stack the PSP links. It checks what the hermetic unit tests cannot: certificate
- * trust, the PSP-clock rule (108), client certificates, keep-alive and resuming a real download.
+ * trust, the PSP-clock rule (108), client certificates, the cipher suite negotiated and the
+ * fallback to AES-GCM, keep-alive and resuming a real download.
  *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh) inside the compose
  * network, with the server's details in SKIFF_IT_* environment variables. Not a ctest test: it
@@ -22,6 +23,12 @@ enum { URL_MAX = 512, PATH_MAX_LENGTH = 256, RESUME_OFFSET = 1000 };
 #define TLS_SITE "https://proxy:8443"
 #define MTLS_SITE "https://proxy:8444"
 #define PLAIN_SITE "http://proxy:8080"
+/* TLS 1.2 with AES-128-GCM only (tests/integration/Caddyfile). */
+#define AES_ONLY_SITE "https://proxy:8445"
+#define TLS13 "TLSv1.3"
+#define TLS12 "TLSv1.2"
+#define TLS13_CHACHA20 "TLS1-3-CHACHA20-POLY1305-SHA256"
+#define AES_128_GCM "AES-128-GCM"
 #define HEARTBEAT "/api/heartbeat"
 #define CLOCK_RESET_TO_2000 ((mbedtls_time_t)946684800)
 #define CLOCK_IN_2100 ((mbedtls_time_t)4102444800LL)
@@ -117,9 +124,10 @@ static skiff_err get_with(const char *url, int has_range, const char *if_range) 
                                         .body_ctx = &body};
     body.size = 0;
     const skiff_err err = skiff_transport_perform(transport, &request, &response);
-    TEST_PRINTF("GET %s -> %s (%d), HTTP %ld, %llu body bytes, %ld new connection(s)", url,
-                skiff_err_name(err), (int)err, response.status,
-                (unsigned long long)response.body_bytes, response.new_connections);
+    TEST_PRINTF(
+        "GET %s -> %s (%d), HTTP %ld, %llu body bytes, %ld new connection(s), TLS '%s' '%s'", url,
+        skiff_err_name(err), (int)err, response.status, (unsigned long long)response.body_bytes,
+        response.new_connections, response.tls_version, response.tls_cipher);
     return err;
 }
 
@@ -148,6 +156,19 @@ static void test_https_heartbeat_through_the_test_ca(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(TLS_SITE HEARTBEAT));
     TEST_ASSERT_EQUAL_INT64(200, response.status);
     TEST_ASSERT_NOT_NULL(memchr(body.bytes, '{', body.size));
+}
+
+/*
+ * What the transport offers, seen from a server: Go's TLS stack (Caddy) on a machine with AES
+ * hardware picks AES-GCM unless the client lists ChaCha20 first, which it takes as a client without
+ * AES hardware. So ChaCha20 here means the transport's ClientHello put it first, as a PSP needs
+ * (tests/unit/test_host_tls.c has the speeds).
+ */
+static void test_chacha20_is_negotiated_over_tls_1_3(void) {
+    connect_with(NULL);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(TLS_SITE HEARTBEAT));
+    TEST_ASSERT_EQUAL_STRING(TLS13, response.tls_version);
+    TEST_ASSERT_EQUAL_STRING(TLS13_CHACHA20, response.tls_cipher);
 }
 
 static void test_server_untrusted_without_the_ca(void) {
@@ -190,6 +211,16 @@ static void test_client_certificate_from_an_untrusted_ca(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_TLS_CLIENT_CERT, get(MTLS_SITE HEARTBEAT));
 }
 
+/* Skiff offers ChaCha20-Poly1305 first (tests/unit/test_host_tls.c); a server without it must
+ * still be reachable through AES-GCM. */
+static void test_server_without_chacha20_is_reached_over_aes_gcm(void) {
+    connect_with(NULL);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(AES_ONLY_SITE HEARTBEAT));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_ASSERT_EQUAL_STRING(TLS12, response.tls_version);
+    TEST_ASSERT_NOT_NULL(strstr(response.tls_cipher, AES_128_GCM));
+}
+
 static void test_plain_http(void) {
     connect_with(NULL);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(PLAIN_SITE HEARTBEAT));
@@ -212,6 +243,8 @@ static void test_keep_alive_pays_the_handshake_once(void) {
     TEST_ASSERT_EQUAL_INT64(1, response.new_connections);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(TLS_SITE HEARTBEAT));
     TEST_ASSERT_EQUAL_INT64(0, response.new_connections);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(TLS13_CHACHA20, response.tls_cipher,
+                                     "a kept connection still reports its cipher suite");
 }
 
 static void test_token_is_required(void) {
@@ -277,12 +310,14 @@ int main(void) {
 
     UNITY_BEGIN();
     RUN_TEST(test_https_heartbeat_through_the_test_ca);
+    RUN_TEST(test_chacha20_is_negotiated_over_tls_1_3);
     RUN_TEST(test_server_untrusted_without_the_ca);
     RUN_TEST(test_psp_clock_reset_to_2000_is_reported_as_the_clock);
     RUN_TEST(test_clock_in_the_future_is_reported_as_untrusted);
     RUN_TEST(test_client_certificates);
     RUN_TEST(test_mtls_site_without_a_client_certificate);
     RUN_TEST(test_client_certificate_from_an_untrusted_ca);
+    RUN_TEST(test_server_without_chacha20_is_reached_over_aes_gcm);
     RUN_TEST(test_plain_http);
     RUN_TEST(test_unknown_host);
     RUN_TEST(test_closed_port);

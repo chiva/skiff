@@ -1,11 +1,13 @@
 /*
  * The host build links the same TLS stack as the EBOOTs (docker/toolchain/build-tls.sh) with the
  * host's link-time contracts (src/platform/host/tls_hooks.c). These checks prove the pieces fit:
- * libcurl runs over Mbed TLS 4.1, PSA crypto seeds from the hook, and the clocks behave.
+ * libcurl runs over Mbed TLS 4.1, PSA crypto seeds from the hook, the clocks behave, and the cipher
+ * order suits the PSP.
  */
 #include <curl/curl.h>
 #include <mbedtls/platform.h>
 #include <mbedtls/platform_time.h>
+#include <mbedtls/ssl.h>
 #include <psa/crypto.h>
 #include <string.h>
 #include <time.h>
@@ -17,6 +19,17 @@ enum { RANDOM_BYTES = 64, ENTROPY_REQUEST_BYTES = 128, BITS_PER_BYTE = 8 };
 #define EXPECTED_TLS_BACKEND "mbedTLS/4.1."
 /* Allowed gap between Mbed TLS's wall clock and time(): the default must be time() itself. */
 #define WALL_CLOCK_TOLERANCE_S 2
+/* Mbed TLS names its TLS 1.3 suites with this prefix; every other suite is TLS 1.2. */
+#define TLS13_SUITE_PREFIX "TLS1-3-"
+#define CHACHA20_POLY1305 "CHACHA20-POLY1305"
+#define AES_128_GCM "AES-128-GCM"
+
+/* The first suite of one TLS version in Mbed TLS's default order, and whether it offers one with
+ * `cipher` at all. */
+typedef struct suite_order {
+    const char *first;
+    int offers_cipher;
+} suite_order;
 
 void setUp(void) {}
 
@@ -79,6 +92,42 @@ static void test_certificate_clock_defaults_to_time(void) {
     TEST_ASSERT_INT64_WITHIN(WALL_CLOCK_TOLERANCE_S, now, tls_now);
 }
 
+static suite_order default_order(int tls13, const char *cipher) {
+    suite_order order = {NULL, 0};
+    for (const int *id = mbedtls_ssl_list_ciphersuites(); *id != 0; id++) {
+        const char *name = mbedtls_ssl_get_ciphersuite_name(*id);
+        if ((strncmp(name, TLS13_SUITE_PREFIX, strlen(TLS13_SUITE_PREFIX)) == 0) != tls13) {
+            continue;
+        }
+        order.first = order.first != NULL ? order.first : name;
+        order.offers_cipher |= strstr(name, cipher) != NULL;
+    }
+    return order;
+}
+
+/*
+ * The curl transport sets no cipher list, so it offers Mbed TLS's default order (the integration
+ * test checks the suite it then negotiates with Caddy). On a PSP-1000
+ * ChaCha20-Poly1305 decrypts at 3 MB/s and AES-128-GCM at 0.37 MB/s, which halves HTTPS downloads
+ * (about 350 against 175 KB/s), so ChaCha20 must come first for both TLS versions; AES-GCM must
+ * still be offered for servers without ChaCha20. A server that honours the client's order, or that
+ * takes a client listing ChaCha20 first as one without AES hardware (Go's, so Caddy and Traefik),
+ * then picks ChaCha20.
+ */
+static void test_chacha20_is_offered_first_with_aes_gcm_after(void) {
+    for (int tls13 = 1; tls13 >= 0; tls13--) {
+        const suite_order chacha = default_order(tls13, CHACHA20_POLY1305);
+        const suite_order aes = default_order(tls13, AES_128_GCM);
+        TEST_PRINTF("TLS 1.%d: first suite %s, AES-128-GCM offered: %s", tls13 ? 3 : 2,
+                    chacha.first != NULL ? chacha.first : "(none)",
+                    aes.offers_cipher ? "yes" : "no");
+        TEST_ASSERT_NOT_NULL(chacha.first);
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(chacha.first, CHACHA20_POLY1305),
+                                     "ChaCha20-Poly1305 must be the first suite offered");
+        TEST_ASSERT_TRUE_MESSAGE(aes.offers_cipher, "AES-128-GCM must stay offered as a fallback");
+    }
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_libcurl_uses_mbedtls_4_1);
@@ -88,5 +137,6 @@ int main(void) {
     RUN_TEST(test_hook_refuses_requests_it_cannot_satisfy);
     RUN_TEST(test_millisecond_clock_is_monotonic);
     RUN_TEST(test_certificate_clock_defaults_to_time);
+    RUN_TEST(test_chacha20_is_offered_first_with_aes_gcm_after);
     return UNITY_END();
 }

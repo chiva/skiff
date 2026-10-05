@@ -103,6 +103,21 @@ for type in ecdsa rsa; do
   ok "mTLS site accepts the $type client certificate"
 done
 
+# AES-only site: TLS 1.2 with AES-128-GCM and nothing else, so the transport's fallback from
+# ChaCha20 is tested against a server that really lacks it.
+aes_only() {
+  curl -sS -o /dev/null -w '%{http_code}' --cacert "$CERTS/ca.crt" "$@" \
+    "https://$PROXY:8445/api/heartbeat" 2>/dev/null || true
+}
+[[ "$(aes_only --tlsv1.2 --tls-max 1.2 --ciphers ECDHE-ECDSA-AES128-GCM-SHA256)" == "$HTTP_OK" ]] ||
+  fail "the AES-only site refused AES-128-GCM over TLS 1.2"
+ok "AES-only site accepts AES-128-GCM over TLS 1.2"
+[[ "$(aes_only --tlsv1.3)" != "$HTTP_OK" ]] || fail "the AES-only site accepted TLS 1.3"
+ok "AES-only site refuses TLS 1.3"
+[[ "$(aes_only --tls-max 1.2 --ciphers ECDHE-ECDSA-CHACHA20-POLY1305)" != "$HTTP_OK" ]] ||
+  fail "the AES-only site accepted ChaCha20-Poly1305"
+ok "AES-only site refuses ChaCha20-Poly1305"
+
 # API token: required, and enough to browse and download.
 status="$(tls_status /api/roms)"
 [[ "$status" == "$HTTP_UNAUTHORIZED" || "$status" == "$HTTP_FORBIDDEN" ]] ||

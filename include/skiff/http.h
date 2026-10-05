@@ -17,6 +17,9 @@
 /* Room for an ETag and its terminator. A longer ETag is treated as absent, never truncated: a cut
  * ETag sent in If-Range would never match, and a resumed download would silently restart. */
 #define SKIFF_HTTP_ETAG_MAX 128
+/* Room for an Mbed TLS version or cipher suite name, such as
+ * "TLS-ECDHE-ECDSA-WITH-CHACHA20-POLY1305-SHA256", and its terminator. */
+#define SKIFF_HTTP_TLS_NAME_MAX 64
 
 typedef struct skiff_http_response {
     long status;
@@ -33,6 +36,11 @@ typedef struct skiff_http_response {
     uint64_t body_bytes;
     /* Connections the transport opened for this request: 0 when it reused a kept-alive one. */
     long new_connections;
+    /* The TLS version and cipher suite of the connection that carried the response, in Mbed TLS's
+     * names ("TLSv1.3", "TLS1-3-CHACHA20-POLY1305-SHA256"), for logs and bug reports. Empty without
+     * TLS and from the fake transport. */
+    char tls_version[SKIFF_HTTP_TLS_NAME_MAX];
+    char tls_cipher[SKIFF_HTTP_TLS_NAME_MAX];
 } skiff_http_response;
 
 /* Clears every field. Does nothing for NULL. */

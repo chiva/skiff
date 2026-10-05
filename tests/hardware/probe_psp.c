@@ -2,6 +2,7 @@
 
 #include <malloc.h>
 #include <mbedtls/ssl.h>
+#include <psppower.h>
 #include <pspsysmem.h>
 #include <stdio.h>
 
@@ -90,34 +91,65 @@ int skiff_probe_load_config(skiff_psp_report *report, const char *program_path,
     return 1;
 }
 
-int skiff_probe_load_network(skiff_psp_report *report, skiff_psp_net *net) {
+/* The clock the network modules loaded at; a FAIL line when it is not the one asked for. */
+static int report_session_clock(skiff_psp_report *report, const skiff_psp_net *net, int cpu_mhz) {
+    char text[SKIFF_SELFTEST_LINE_MAX];
+    if (cpu_mhz == SKIFF_PSP_NET_CPU_MHZ_UNCHANGED) {
+        snprintf(text, sizeof text, "clock while online: %d/%d MHz (left as it was)", net->cpu_mhz,
+                 net->bus_mhz);
+        skiff_probe_report_check(report, 1, text);
+        return 1;
+    }
+    const int ok = net->cpu_mhz == cpu_mhz;
+    snprintf(text, sizeof text, "clock while online: %d/%d MHz (asked for %d, was %d/%d)%s",
+             net->cpu_mhz, net->bus_mhz, cpu_mhz, net->cpu_mhz_before, net->bus_mhz_before,
+             ok ? "" : ": the firmware kept its clock");
+    skiff_probe_report_check(report, ok, text);
+    return ok;
+}
+
+int skiff_probe_load_network(skiff_psp_report *report, skiff_psp_net *net, int cpu_mhz) {
     const skiff_probe_memory before = skiff_probe_memory_now();
     skiff_probe_report_memory(report, "before the network modules", &before);
-    const skiff_err err = skiff_psp_net_load(net);
+    const skiff_err err = skiff_psp_net_load(net, cpu_mhz);
     if (err != SKIFF_OK) {
         skiff_probe_report_net_failure(report, net, err);
         return 0;
     }
     const skiff_probe_memory after = skiff_probe_memory_now();
     skiff_probe_report_memory(report, "after the network modules load", &after);
-    return 1;
+    return report_session_clock(report, net, cpu_mhz);
 }
 
-int skiff_probe_tear_down(skiff_psp_report *report, skiff_psp_net *net, long long timeout_us) {
-    skiff_err err = skiff_psp_net_disconnect(net, timeout_us);
-    if (err != SKIFF_OK) {
-        skiff_probe_report_net_failure(report, net, err);
-        skiff_probe_report_check(report, 0,
-                                 "network: not disconnected, leaving the modules loaded");
-        return 0;
-    }
-    err = skiff_psp_net_unload(net);
+int skiff_probe_unload_network(skiff_psp_report *report, skiff_psp_net *net) {
+    const skiff_err err = skiff_psp_net_unload(net);
     if (err != SKIFF_OK) {
         skiff_probe_report_net_failure(report, net, err);
         return 0;
     }
     const skiff_probe_memory after = skiff_probe_memory_now();
     skiff_probe_report_memory(report, "after the network modules unload", &after);
+    const int cpu_mhz = scePowerGetCpuClockFrequency();
+    const int bus_mhz = scePowerGetBusClockFrequency();
+    const int restored = cpu_mhz == net->cpu_mhz_before && bus_mhz == net->bus_mhz_before;
+    char text[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(text, sizeof text, "clock after unloading: %d/%d MHz (%d/%d before loading)", cpu_mhz,
+             bus_mhz, net->cpu_mhz_before, net->bus_mhz_before);
+    skiff_probe_report_check(report, restored, text);
+    return restored;
+}
+
+int skiff_probe_tear_down(skiff_psp_report *report, skiff_psp_net *net, long long timeout_us) {
+    const skiff_err err = skiff_psp_net_disconnect(net, timeout_us);
+    if (err != SKIFF_OK) {
+        skiff_probe_report_net_failure(report, net, err);
+        skiff_probe_report_check(report, 0,
+                                 "network: not disconnected, leaving the modules loaded");
+        return 0;
+    }
+    if (!skiff_probe_unload_network(report, net)) {
+        return 0;
+    }
     skiff_probe_report_check(report, 1, "network: disconnected and modules unloaded");
     return 1;
 }

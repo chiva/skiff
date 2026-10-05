@@ -55,8 +55,18 @@ int skiff_probe_existing_sibling(skiff_psp_report *report, const char *program_p
 int skiff_probe_load_config(skiff_psp_report *report, const char *program_path,
                             const char *file_name, skiff_probe_config *config);
 
-/* Loads the network modules, reporting free memory before and after; 0 (and a FAIL line) if not. */
-int skiff_probe_load_network(skiff_psp_report *report, skiff_psp_net *net);
+/*
+ * Loads the network modules at cpu_mhz (as skiff_psp_net_load()), reporting free memory before and
+ * after and the clock. 0 (and a FAIL line) if they did not load, or the clock is not cpu_mhz; the
+ * caller then unloads what did.
+ */
+int skiff_probe_load_network(skiff_psp_report *report, skiff_psp_net *net, int cpu_mhz);
+
+/*
+ * Unloads the network modules (the access point must be disconnected), reporting free memory and
+ * that the clock is back to what it was before loading; 0 (and a FAIL line) if either is not.
+ */
+int skiff_probe_unload_network(skiff_psp_report *report, skiff_psp_net *net);
 
 /* Disconnects, then unloads only if the disconnect is proven: never under a live connection. */
 int skiff_probe_tear_down(skiff_psp_report *report, skiff_psp_net *net, long long timeout_us);

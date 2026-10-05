@@ -19,6 +19,11 @@ With **mTLS** (mutual TLS), the PSP proves its identity with a certificate befor
 the request. Even if someone steals the RomM token, they cannot use it without the certificate
 and its key.
 
+> [!TIP]
+> If your reverse proxy lets you choose cipher suites, keep **ChaCha20-Poly1305** enabled. The PSP
+> downloads about twice as fast with it as with AES-GCM. The default settings of Caddy, Traefik
+> and nginx already allow it.
+
 ## HTTPS with a public certificate
 
 Nothing to do on the PSP. Skiff ships a list of trusted certificate authorities and checks the

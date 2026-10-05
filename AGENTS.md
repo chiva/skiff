@@ -46,8 +46,8 @@ existing ones.
 - `src/platform/host/` holds what host test binaries need in place of the PSP's platform code (the
   Mbed TLS link-time contracts); it is never linked into an EBOOT.
 - `src/platform/psp/` is the only place allowed to include `psp*.h` or call `sce*`. The network
-  stack (modules, access point, teardown) lives in `src/platform/psp/net_psp.c`; unload it only
-  after a confirmed disconnect.
+  stack (CPU clock, modules, access point, teardown) lives in `src/platform/psp/net_psp.c`; unload
+  it only after a confirmed disconnect.
 - Errors: return `skiff_err` from `include/skiff/error.h`. Add codes to `SKIFF_ERROR_TABLE` at the end
   of their group; never renumber (codes appear in user bug reports).
 - The self-test (`src/core/selftest.c`) runs on host, emulator and hardware. Each new layer adds

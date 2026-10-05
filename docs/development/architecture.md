@@ -53,6 +53,11 @@ them.
   dim to save battery. A power callback catches suspend: on resume the Wi-Fi connection is gone, so
   the job reconnects and resumes from the `.part` file instead of failing.
 - The Wi-Fi switch and the HOME menu are ordinary interruptions with the same resume path.
+- **Clock**: TLS is CPU-bound on a PSP (the CPU is 80–85% busy during an HTTPS download), so the
+  network layer runs the CPU at 333 MHz while the network is up and puts the previous clock back
+  when it unloads (`skiff_psp_net_load()`, `SKIFF_PSP_NET_CPU_MHZ`). On a PSP-1000 that took HTTPS
+  downloads from about 350 to 470 KB/s. The clock has to change before the network modules load:
+  with Wi-Fi on, the firmware accepts the call and keeps 222 MHz.
 
 ## UI: GU + intraFont
 
@@ -200,7 +205,8 @@ excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
 The `transport` interface (`include/skiff/transport.h`) takes a URL, headers, `Range`/`If-Range`
 and a body callback, and fills a small response record: status, ETag, Content-Length and
-Content-Range, read by one header parser shared with the fake transport. Custom headers from
+Content-Range, read by one header parser shared with the fake transport, plus the TLS version and
+cipher suite of the connection, for logs. Custom headers from
 `config.ini` are sent on every request and may not contain line breaks. Only URLs with an
 explicit `http://` or `https://` are sent: curl would guess plain HTTP for a bare address and send
 the token in the clear, so a server address without a scheme is a configuration error (402). The curl transport
@@ -223,6 +229,15 @@ Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
 
 An HTTP response is not a network failure: callers map its status with `skiff_http_status_error()`
 (401, 403, 404 → 200–202; 408 and 504 → 103; 502 → 102; other 5xx → 203).
+
+Skiff sets no cipher list. Mbed TLS's default order offers ChaCha20-Poly1305 first for both TLS
+1.3 and 1.2, and keeps AES-GCM and the rest for servers without it. On a PSP-1000 ChaCha20 decrypts
+eight times faster than AES-128-GCM (3 MB/s against 0.37 MB/s), and with AES-GCM HTTPS downloads
+drop from about 350 to 175 KB/s. Servers that honour the client's order pick ChaCha20, and so do
+Go's (Caddy, Traefik), which read a client listing ChaCha20 first as one without AES hardware.
+`tests/unit/test_host_tls.c` pins that order, so an Mbed TLS update cannot change it silently. The
+integration tests check that the transport negotiates ChaCha20 with Caddy and still reaches a TLS
+1.2 server that offers only AES-128-GCM.
 
 For mTLS, client keys should be ECDSA P-256: on a PSP-1000, a TLS 1.3 handshake took 0.59 s
 without a client certificate, 0.69 s with an ECDSA P-256 one and 2.07 s with RSA-2048 (median of

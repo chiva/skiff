@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 #include <mbedtls/platform_time.h>
+#include <mbedtls/ssl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@ typedef struct curl_transport {
 
 /* State of one request, shared with curl's callbacks. */
 typedef struct transfer {
+    CURL *curl;
     const skiff_http_request *request;
     skiff_http_response *response;
     skiff_err body_error;
@@ -34,11 +36,31 @@ skiff_err skiff_net_global_init(void) {
 
 void skiff_net_global_cleanup(void) { curl_global_cleanup(); }
 
+/* The connection's TLS version and cipher suite, once per request. curl exposes the session only
+ * while a transfer runs, so this is read from the header callback. */
+static void read_tls_session(const transfer *current) {
+    skiff_http_response *response = current->response;
+    const struct curl_tlssessioninfo *session = NULL;
+    if (response->tls_cipher[0] != '\0' ||
+        curl_easy_getinfo(current->curl, CURLINFO_TLS_SSL_PTR, &session) != CURLE_OK ||
+        session == NULL || session->backend != CURLSSLBACKEND_MBEDTLS ||
+        session->internals == NULL) {
+        return;
+    }
+    const mbedtls_ssl_context *ssl = session->internals;
+    const char *version = mbedtls_ssl_get_version(ssl);
+    const char *cipher = mbedtls_ssl_get_ciphersuite(ssl);
+    snprintf(response->tls_version, sizeof response->tls_version, "%s",
+             version != NULL ? version : "");
+    snprintf(response->tls_cipher, sizeof response->tls_cipher, "%s", cipher != NULL ? cipher : "");
+}
+
 /* curl's callback signature takes a non-const buffer. */
 // cppcheck-suppress constParameterCallback
 static size_t on_header(char *buffer, size_t size, size_t count, void *userdata) {
     transfer *current = userdata;
     const size_t length = size * count;
+    read_tls_session(current);
     skiff_http_response_parse_header(current->response, buffer, length);
     return length;
 }
@@ -134,7 +156,7 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
 static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *request,
                               skiff_http_response *response) {
     curl_transport *transport = (curl_transport *)base;
-    transfer current = {request, response, SKIFF_OK};
+    transfer current = {transport->curl, request, response, SKIFF_OK};
     struct curl_slist *headers = NULL;
     skiff_err err = build_headers(transport, request, &headers);
     if (err != SKIFF_OK) {
@@ -174,7 +196,11 @@ static int set_optional_string(CURL *curl, CURLoption option, const char *value)
     return value == NULL || curl_easy_setopt(curl, option, value) == CURLE_OK;
 }
 
-/* Options that hold for every request; curl copies the strings. */
+/*
+ * Options that hold for every request; curl copies the strings. No cipher list: Mbed TLS's default
+ * order offers ChaCha20-Poly1305 first, which a PSP decrypts eight times faster than AES-GCM, and
+ * keeps every other suite for servers without it (pinned by tests/unit/test_host_tls.c).
+ */
 static int configure(curl_transport *transport, const skiff_curl_config *config) {
     CURL *curl = transport->curl;
     const long connect_timeout =

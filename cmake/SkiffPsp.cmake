@@ -106,13 +106,14 @@ skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/securit
 target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark skiff_psp_tls
                                                skiff_psp_entropy)
 
-# The PSP's network stack (src/platform/psp/net_psp.c): modules, access-point connection, teardown.
-# psputility, pspnet_inet and pspnet_resolver are left out: psp-gcc already links them after
-# everything else, and listing a stub library twice splits its import stubs, which
-# psp-fixup-imports rejects ("stubs out of order").
+# The PSP's network stack (src/platform/psp/net_psp.c): CPU clock, modules, access-point connection,
+# teardown. psputility, pspnet_inet and pspnet_resolver are left out: psp-gcc already links them
+# after everything else, and listing a stub library twice splits its import stubs, which
+# psp-fixup-imports rejects ("stubs out of order"). psppower is not among them, so it is listed
+# here (and only here: its users get it through this library).
 add_library(skiff_psp_net OBJECT src/platform/psp/net_psp.c)
 target_compile_options(skiff_psp_net PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
-target_link_libraries(skiff_psp_net PUBLIC skiff_core pspnet_apctl pspnet pspwlan)
+target_link_libraries(skiff_psp_net PUBLIC skiff_core pspnet_apctl pspnet pspwlan psppower)
 target_include_directories(skiff_psp_net PUBLIC src/platform/psp)
 skiff_set_warnings(skiff_psp_net)
 
@@ -138,12 +139,11 @@ target_link_libraries(skiff_net_probe PRIVATE skiff_net skiff_probe_support skif
 # Benchmark (Phase 1 hardware spike, W6): download speed by curl and socket buffer, TLS version and
 # cipher, plain HTTP and CPU clock, with the CPU's busy share; hash and cipher speed; Memory Stick
 # speed; first-request latency after joining (see tests/hardware/bench.c). zlib's CRC-32 is one of
-# the candidates for the integrity check. psppower is not among the libraries psp-gcc adds itself.
+# the candidates for the integrity check.
 find_package(ZLIB REQUIRED)
 skiff_add_psp_app(skiff_bench "${SKIFF_PBP_TITLE} benchmark" tests/hardware/bench.c)
 target_link_libraries(skiff_bench PRIVATE skiff_net skiff_probe_support skiff_psp_check skiff_psp_net
-                                          skiff_psp_ark skiff_psp_tls skiff_psp_entropy ZLIB::ZLIB
-                                          psppower)
+                                          skiff_psp_ark skiff_psp_tls skiff_psp_entropy ZLIB::ZLIB)
 
 # UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen
 # keyboard and the network picker (see tests/prototype/ui_proto.c). intraFont comes from pspdev's

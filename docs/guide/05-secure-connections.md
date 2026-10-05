@@ -49,7 +49,8 @@ the PSP, tell the proxy to require it, and copy the certificate to the PSP.
 
 ### 1. Create the certificates (on your computer)
 
-Use **ECDSA P-256** keys, not RSA: they are much faster for the PSP's 333 MHz processor.
+Use **ECDSA P-256** keys, not RSA: they are much faster for the PSP's 333 MHz processor. On a
+PSP-1000 each new secure connection takes about 0.7 s with an ECDSA key and 2 s with an RSA key.
 
 ```bash
 # A certificate authority that only signs device certificates. Keep skiff-ca.key private.

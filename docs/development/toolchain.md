@@ -62,6 +62,12 @@ that links Mbed TLS must provide both or it does not link:
 | `mbedtls_platform_get_entropy()` | `src/platform/psp/kirk_entropy.c` (KIRK through ARK) | the only seed for all TLS randomness; see [Architecture](architecture.md#randomness-for-tls) |
 | `mbedtls_ms_time()` | `src/platform/psp/mbedtls_time.c` | monotonic milliseconds for TLS 1.3 ticket ages |
 
+The same file installs the clock that certificate dates are checked against
+(`MBEDTLS_PLATFORM_TIME_ALT`, set with `mbedtls_platform_set_time()` from a constructor, so it is in
+place before `main()`): UTC seconds from the PSP's real-time clock (`sceRtcGetCurrentTick`). The C
+library's `time()` cannot serve. On a PSP-1000 it returned 36834 at 09:13 UTC: only the time of day,
+which made every certificate look issued in the future.
+
 **Bumping a version.** Renovate opens a "TLS libraries" PR that fails the image's `sha256sum -c`
 on purpose. Verify the new archive, then update its `*_SHA256` argument:
 

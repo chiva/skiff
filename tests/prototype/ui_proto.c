@@ -31,9 +31,6 @@
 #include <pspge.h>
 #include <pspgu.h>
 #include <pspkernel.h>
-#include <pspnet.h>
-#include <pspnet_apctl.h>
-#include <pspnet_inet.h>
 #include <psputility.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -42,6 +39,7 @@
 #include "skiff/selftest.h"
 
 #include "lifecycle.h"
+#include "net_psp.h"
 #include "report.h"
 
 #define PROTO_OK_MARKER "SKIFF UI PROTO OK"
@@ -125,18 +123,6 @@ enum {
     DIALOG_UPDATE_SPEED = 1,
     /* pspUtilityDialogCommon.result: 0 when the player confirmed, 1 when they cancelled. */
     DIALOG_RESULT_CONFIRMED = 0,
-
-    /* sceNet pool and threads, as pspsdk's net samples size them. */
-    NET_POOL_BYTES = 128 * 1024,
-    NET_CALLOUT_PRIORITY = 42,
-    NET_CALLOUT_STACK_BYTES = 4 * 1024,
-    NET_INTERRUPT_PRIORITY = 42,
-    NET_INTERRUPT_STACK_BYTES = 4 * 1024,
-    APCTL_STACK_BYTES = 0x8000,
-    APCTL_PRIORITY = 48,
-    /* SceNetApctlInfo.ip: a dotted IPv4 address. */
-    NET_IP_MAX = 16,
-    DISCONNECT_POLL_US = 50 * 1000,
 };
 
 /*
@@ -213,7 +199,7 @@ typedef struct proto_results {
     int osk_typed_length;
     int net_attempted;
     dialog_outcome netconf;
-    char net_ip[NET_IP_MAX];
+    char net_ip[SKIFF_PSP_NET_IP_MAX];
     int net_disconnect_ok;
     int net_unload_ok;
     memory_snapshot net_before_load;
@@ -614,103 +600,30 @@ static int keyboard_ok(const proto_results *results) {
 }
 
 /* How far load_net_modules() got, so teardown undoes exactly that. */
-typedef enum net_stage {
-    NET_STAGE_NONE,
-    NET_STAGE_COMMON_MODULE,
-    NET_STAGE_INET_MODULE,
-    NET_STAGE_NET,
-    NET_STAGE_INET,
-    NET_STAGE_APCTL,
-} net_stage;
-
-static int net_step(const ui_state *ui, const char *name, int result) {
+/* A failed net_psp call: the firmware call and its result, as it happens. */
+static void log_net_failure(const ui_state *ui, const skiff_psp_net *net, skiff_err err) {
     char line[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(line, sizeof line, "%snetwork: %s 0x%08X", result >= 0 ? "" : "FAIL ", name,
-             (unsigned)result);
+    snprintf(line, sizeof line, "FAIL network: %s (%s returned 0x%08X)", skiff_err_name(err),
+             net->failed_call != NULL ? net->failed_call : "-", (unsigned)net->sce_result);
     log_step(ui, line);
-    return result >= 0;
-}
-
-static net_stage load_net_modules(const ui_state *ui) {
-    if (!net_step(ui, "sceUtilityLoadNetModule(COMMON)",
-                  sceUtilityLoadNetModule(PSP_NET_MODULE_COMMON))) {
-        return NET_STAGE_NONE;
-    }
-    if (!net_step(ui, "sceUtilityLoadNetModule(INET)",
-                  sceUtilityLoadNetModule(PSP_NET_MODULE_INET))) {
-        return NET_STAGE_COMMON_MODULE;
-    }
-    if (!net_step(ui, "sceNetInit",
-                  sceNetInit(NET_POOL_BYTES, NET_CALLOUT_PRIORITY, NET_CALLOUT_STACK_BYTES,
-                             NET_INTERRUPT_PRIORITY, NET_INTERRUPT_STACK_BYTES))) {
-        return NET_STAGE_INET_MODULE;
-    }
-    if (!net_step(ui, "sceNetInetInit", sceNetInetInit())) {
-        return NET_STAGE_NET;
-    }
-    if (!net_step(ui, "sceNetApctlInit", sceNetApctlInit(APCTL_STACK_BYTES, APCTL_PRIORITY))) {
-        return NET_STAGE_INET;
-    }
-    return NET_STAGE_APCTL;
-}
-
-/* Undoes load_net_modules() in reverse; every step runs even if an earlier one fails. */
-static int unload_net_modules(net_stage stage) {
-    int ok = 1;
-    if (stage >= NET_STAGE_APCTL) {
-        ok &= sceNetApctlTerm() >= 0;
-    }
-    if (stage >= NET_STAGE_INET) {
-        ok &= sceNetInetTerm() >= 0;
-    }
-    if (stage >= NET_STAGE_NET) {
-        ok &= sceNetTerm() >= 0;
-    }
-    if (stage >= NET_STAGE_INET_MODULE) {
-        ok &= sceUtilityUnloadNetModule(PSP_NET_MODULE_INET) >= 0;
-    }
-    if (stage >= NET_STAGE_COMMON_MODULE) {
-        ok &= sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON) >= 0;
-    }
-    return ok;
 }
 
 /*
- * Drops the connection the picker made, if any, and waits until APCTL reports it gone: tearing the
- * modules down under a live connection is what the app must never do.
+ * Drops the connection the picker made, if any, and waits until it is gone: tearing the modules
+ * down under a live connection is what the app must never do.
  */
-static int disconnect(const ui_state *ui) {
-    char line[SKIFF_SELFTEST_LINE_MAX];
-    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
-    int result = sceNetApctlGetState(&state);
-    if (result < 0) {
-        snprintf(line, sizeof line, "FAIL network: sceNetApctlGetState 0x%08X", (unsigned)result);
-        log_step(ui, line);
-        return 0;
-    }
-    if (state == PSP_NET_APCTL_STATE_DISCONNECTED) {
-        log_step(ui, "network: not connected, nothing to disconnect");
-        return 1;
-    }
-    result = sceNetApctlDisconnect();
-    if (!net_step(ui, "sceNetApctlDisconnect", result)) {
-        return 0;
-    }
+static int disconnect(const ui_state *ui, skiff_psp_net *net) {
     const long long start_us = now_us();
-    while (now_us() - start_us < DISCONNECT_TIMEOUT_US) {
-        result = sceNetApctlGetState(&state);
-        if (result >= 0 && state == PSP_NET_APCTL_STATE_DISCONNECTED) {
-            snprintf(line, sizeof line, "network: disconnected in %lld ms",
-                     (now_us() - start_us) / US_PER_MS);
-            log_step(ui, line);
-            return 1;
-        }
-        sceKernelDelayThread(DISCONNECT_POLL_US);
+    const skiff_err err = skiff_psp_net_disconnect(net, DISCONNECT_TIMEOUT_US);
+    if (err != SKIFF_OK) {
+        log_net_failure(ui, net, err);
+        return 0;
     }
-    snprintf(line, sizeof line, "FAIL network: still in APCTL state %d (0x%08X) after %lld s",
-             state, (unsigned)result, DISCONNECT_TIMEOUT_US / US_PER_S);
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(line, sizeof line, "network: disconnected after %lld ms",
+             (now_us() - start_us) / US_PER_MS);
     log_step(ui, line);
-    return 0;
+    return 1;
 }
 
 static void leave_modules_loaded(const ui_state *ui, proto_results *results, const char *reason) {
@@ -729,10 +642,14 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
     results->net_ip[0] = '\0';
     results->net_disconnect_ok = 0;
     results->net_before_load = take_memory_snapshot();
-    const net_stage stage = load_net_modules(ui);
+    skiff_psp_net net;
+    const skiff_err loaded = skiff_psp_net_load(&net);
     results->net_after_load = take_memory_snapshot();
-
-    if (stage == NET_STAGE_APCTL) {
+    log_step(ui,
+             loaded == SKIFF_OK ? "network: modules loaded" : "FAIL network: modules not loaded");
+    if (loaded != SKIFF_OK) {
+        log_net_failure(ui, &net, loaded);
+    } else {
         memset(&params, 0, sizeof params);
         fill_dialog_common(&params.base, sizeof params);
         params.action = PSP_NETCONF_ACTION_CONNECTAP;
@@ -745,12 +662,8 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
             run_dialog(ui, results, &netconf_ops, &results->netconf);
             results->netconf.result = params.base.result;
             log_dialog(ui, "network picker", &results->netconf);
-            SceNetApctlInfo info;
-            const int got_ip = params.base.result == DIALOG_RESULT_CONFIRMED
-                                   ? sceNetApctlGetInfo(PSP_NET_APCTL_INFO_IP, &info)
-                                   : -1;
-            if (got_ip >= 0) {
-                snprintf(results->net_ip, sizeof results->net_ip, "%s", info.ip);
+            if (params.base.result == DIALOG_RESULT_CONFIRMED) {
+                skiff_psp_net_ip(&net, results->net_ip, sizeof results->net_ip);
             }
             log_step(ui, results->net_ip[0] != '\0' ? "network: connected, IP obtained"
                                                     : "network: no IP address");
@@ -765,14 +678,18 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
                                  "FAIL network: picker still open, leaving the modules loaded");
             return;
         }
-        results->net_disconnect_ok = disconnect(ui);
+        results->net_disconnect_ok = disconnect(ui, &net);
         if (!results->net_disconnect_ok) {
             leave_modules_loaded(ui, results,
                                  "FAIL network: not disconnected, leaving the modules loaded");
             return;
         }
     }
-    results->net_unload_ok = unload_net_modules(stage);
+    const skiff_err unloaded = skiff_psp_net_unload(&net);
+    if (unloaded != SKIFF_OK) {
+        log_net_failure(ui, &net, unloaded);
+    }
+    results->net_unload_ok = unloaded == SKIFF_OK;
     results->net_after_unload = take_memory_snapshot();
     log_step(ui, results->net_unload_ok ? "network: modules unloaded"
                                         : "FAIL network: modules not unloaded cleanly");

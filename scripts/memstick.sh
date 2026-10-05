@@ -11,10 +11,19 @@ readonly USAGE="usage: scripts/memstick.sh install|results|uninstall <memory-sti
 readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
-readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto)
-readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto)
+readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe)
+readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe)
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt)
+# The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
+# address (from its certificate's addresses), the test CA and the client certificates. The keys are
+# test material for that throwaway server; uninstall removes them with the folder.
+readonly NET_PROBE_FOLDER="SkiffNetProbe"
+readonly INTEGRATION_CERTS="$REPO_ROOT/build/integration/certs"
+readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.crt client-rsa.key
+  wrong-ca.crt client-wrong-ca.crt client-wrong-ca.key)
+readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
+readonly DEFAULT_NET_PROFILE=1
 
 readonly COMMAND="${1:?$USAGE}"
 readonly MOUNT="${2:?$USAGE}"
@@ -35,6 +44,41 @@ remove_macos_metadata() {
   fi
 }
 
+# The LAN address romm-lan put in the server certificate; empty if it only serves localhost.
+test_server_lan_ip() {
+  local san="$INTEGRATION_CERTS/server.san"
+  [[ -f "$san" ]] || return 0
+  tr ',' '\n' <"$san" | sed -n 's/^IP://p' | grep -v '^127\.' | tail -n 1 || true
+}
+
+install_net_probe_config() {
+  local dest="$GAME_DIR/$NET_PROBE_FOLDER" host profile="${SKIFF_NET_PROFILE:-$DEFAULT_NET_PROFILE}"
+  host="$(test_server_lan_ip)"
+  if [[ -z "$host" ]]; then
+    # A previous install's address and certificates would point the probe at another server.
+    rm -f "$dest/net-probe.ini"
+    for file in "${NET_PROBE_FILES[@]}"; do
+      rm -f "$dest/$file"
+    done
+    echo "note: no LAN test server; run scripts/dev.sh romm-lan and install again before running" \
+      "the network probe" >&2
+    return
+  fi
+  for file in "${NET_PROBE_FILES[@]}"; do
+    cp "$INTEGRATION_CERTS/$file" "$dest/$file"
+  done
+  # Plain HTTP reaches the LAN only when romm-lan ran with SKIFF_LAN_PLAIN_HTTP=1.
+  local plain_http=0
+  if grep -qx 'ROMM_PLAIN_BIND_ADDRESS=0.0.0.0' "$INTEGRATION_ENV" 2>/dev/null; then
+    plain_http=1
+  fi
+  printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
+    "plain_http=$plain_http" >"$dest/net-probe.ini"
+  remove_macos_metadata "$NET_PROBE_FOLDER"
+  echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \
+    "plain HTTP comparison $([[ $plain_http == 1 ]] && echo on || echo off)"
+}
+
 install_eboots() {
   for i in "${!TARGETS[@]}"; do
     local source="$BUILD_PBP_DIR/${TARGETS[$i]}/EBOOT.PBP"
@@ -50,6 +94,7 @@ install_eboots() {
     remove_macos_metadata "${FOLDERS[$i]}"
     echo "installed ${TARGETS[$i]} -> PSP/GAME/${FOLDERS[$i]}"
   done
+  install_net_probe_config
   sync
   echo "Eject the Memory Stick, then run each Skiff entry from Game > Memory Stick."
 }

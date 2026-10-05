@@ -111,10 +111,25 @@ skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/securit
 target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark skiff_psp_tls
                                                skiff_psp_entropy)
 
+# The PSP's network stack (src/platform/psp/net_psp.c): modules, access-point connection, teardown.
+# psputility, pspnet_inet and pspnet_resolver are left out: psp-gcc already links them after
+# everything else, and listing a stub library twice splits its import stubs, which
+# psp-fixup-imports rejects ("stubs out of order").
+add_library(skiff_psp_net OBJECT src/platform/psp/net_psp.c)
+target_compile_options(skiff_psp_net PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_net PUBLIC skiff_core pspnet_apctl pspnet pspwlan)
+target_include_directories(skiff_psp_net PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_net)
+
+# Network probe (Phase 1 hardware spike): joins Wi-Fi through a saved profile and runs HTTPS and mTLS
+# requests against the test RomM (tests/integration). Without ARK (PPSSPP, CI) it checks that TLS
+# refuses while the network modules still load and unload.
+skiff_add_psp_app(skiff_net_probe "${SKIFF_PBP_TITLE} network probe" tests/hardware/net_probe.c)
+target_link_libraries(skiff_net_probe PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ark
+                                              skiff_psp_tls skiff_psp_entropy)
+
 # UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen
 # keyboard and the network picker (see tests/prototype/ui_proto.c). intraFont comes from pspdev's
-# packages; it draws through GU, so it goes before pspgu. psputility and pspnet_inet are left out:
-# psp-gcc already links them after everything else, and listing a stub library twice splits its
-# import stubs, which psp-fixup-imports rejects ("stubs out of order").
+# packages; it draws through GU, so it goes before pspgu.
 skiff_add_psp_app(skiff_ui_proto "${SKIFF_PBP_TITLE} UI prototype" tests/prototype/ui_proto.c)
-target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check intrafont pspgu pspnet_apctl pspnet)
+target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net intrafont pspgu)

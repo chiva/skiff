@@ -7,7 +7,7 @@ the logic.
 | Tier | Where | In CI | Command |
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
-| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK probe (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe ui-proto` |
+| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK and network probes (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe net-probe ui-proto` |
 | Integration server | Docker Compose | ✅ server checks | `scripts/dev.sh romm-up romm-check romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
@@ -30,8 +30,9 @@ Planned additions:
 `tests/emulator/run_eboot.sh <EBOOT> <NAME>` boots a check EBOOT in PPSSPPHeadless and passes only
 when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`),
 `skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)), `skiff_kirk_probe`
-(`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)) and `skiff_ui_proto` (`UI PROTO HEADLESS`,
-see [UI prototype](#ui-prototype)). PPSSPPHeadless only shows a
+(`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)), `skiff_net_probe` (`NET PROBE NO ARK`, see
+[Network probe](#network-probe)) and `skiff_ui_proto` (`UI PROTO HEADLESS`, see
+[UI prototype](#ui-prototype)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -116,8 +117,9 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    without freezing.
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
 
-The **Skiff KIRK probe** and the **Skiff UI prototype** are installed too; run them only when
-working on entropy (see [KIRK probe](#kirk-probe)) or the UI (see [UI prototype](#ui-prototype)).
+The **Skiff KIRK probe**, **Skiff network probe** and **Skiff UI prototype** are installed too;
+run them only when working on entropy (see [KIRK probe](#kirk-probe)), networking (see
+[Network probe](#network-probe)) or the UI (see [UI prototype](#ui-prototype)).
 
 ### Over PSPLINK
 
@@ -165,6 +167,48 @@ compare against.
 Without ARK there is nothing to measure, so the probe checks instead that Skiff's hook refuses, TLS
 fails closed, and the reason reported is `SKIFF_ERR_NET_NEEDS_ARK` (`SKIFF KIRK PROBE NO ARK OK`).
 PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
+
+## Network probe
+
+`tests/hardware/net_probe.c` makes the first HTTPS requests from a PSP, against the
+[integration server](#integration-server). It uses Skiff's network layer
+(`src/platform/psp/net_psp.c`) and its real entropy hook, and checks:
+
+- **Wi-Fi:** it joins the access point of a saved Network Settings profile, without the network
+  picker, and reports the time and the IP address;
+- **HTTPS:** the heartbeat request is trusted through the test CA, and runs over TLS 1.3, or TLS 1.2
+  with an ECDHE key exchange (version and cipher suite are reported). A client that trusts a
+  different CA must fail to verify the server's certificate;
+- **Client certificates:** the mTLS port refuses a request without one and one from an untrusted CA
+  (TCP connects, then TLS ends before any HTTP response). It accepts the ECDSA P-256 and RSA-2048
+  test certificates. A missing certificate file fails the run as a setup error, never as a refusal;
+- **Handshake times:** the median of 5 fresh connections for HTTPS and for each client certificate
+  type;
+- **Keep-alive:** a second request on the same connection needs no new handshake;
+- **Plain HTTP:** one request, for comparison, when the server publishes it on the LAN
+  (`SKIFF_LAN_PLAIN_HTTP=1 scripts/dev.sh romm-lan`); skipped otherwise;
+- **Memory:** free system memory and heap use before and after the network modules load, after
+  joining, at their worst while the requests run, and after unloading.
+
+On a PSP:
+
+1. Make sure a Network Settings profile can join your access point (Settings → Network Settings,
+   [Wi-Fi guide](../guide/02-wifi.md)), and note its position in the list (the first is 1).
+2. `scripts/dev.sh romm-lan` on the computer, so the PSP can reach the server.
+3. PSP in USB mode: `scripts/memstick.sh install <mount>`. With a test server running, it writes
+   `net-probe.ini` (the server's address and the profile, `SKIFF_NET_PROFILE`, default 1) and copies
+   the test CA and client certificates next to the probe. Eject.
+4. With the Wi-Fi switch on, run **Skiff network probe**; it returns to the XMB when done (under a
+   minute).
+5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF NET PROBE OK`. Each run also appends
+   one line to `net-log.txt` (join time, TLS version and cipher, the median handshake times, the
+   lowest free system memory and the highest heap use).
+
+A failed join or unload names the firmware call and its result. `net_psp` refuses to unload the
+network modules while the access point is connected, and stops at the first layer that fails to
+come down. Without ARK, as in PPSSPP, TLS cannot start: the
+probe loads and unloads the network modules, checks that libcurl refuses to start, and ends with
+`SKIFF NET PROBE NO ARK OK` (`scripts/dev.sh net-probe`, run in CI).
 
 ## UI prototype
 

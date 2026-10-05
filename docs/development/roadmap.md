@@ -22,13 +22,17 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   about 11 ms at startup. See [Architecture](architecture.md#randomness-for-tls).
 - **Test server** ✅: a disposable RomM 5.3 behind a TLS proxy, with client certificates
   (`tests/integration/`), checked in CI. See [Testing](testing.md#integration-server).
-- **Network**: join a WPA/TKIP 2.4 GHz network through `sceUtilityNetconf`; HTTPS to RomM.
-- **UI stack**: confirm GU + intraFont with a prototype that also opens the on-screen keyboard and
-  the network picker (`tests/prototype/ui_proto.c`; its headless run is in CI, the hardware run is
-  pending).
+- **Network** ✅: Skiff joins a saved Network Settings profile without the network picker (7.4 s
+  on a PSP-1000) and reaches RomM over TLS 1.3 through a proxy, with or without a client
+  certificate (`tests/hardware/net_probe.c`). The picker also works from the UI loop. Certificate
+  dates are checked against the PSP's real-time clock: the C library's `time()` has no date there.
+- **UI stack** ✅: GU + intraFont with the firmware's Latin font, the on-screen keyboard and the
+  network picker, confirmed on hardware (`tests/prototype/ui_proto.c`).
 - **Measure**:
-  - free memory after loading the network modules;
-  - TLS handshake time with ECDSA vs RSA client certificates;
+  - free memory after loading the network modules ✅: they take 600 KB of system memory, leaving
+    164 KB (148 KB once connected); TLS itself uses heap, not system memory;
+  - TLS handshake time ✅: 0.59 s, 0.69 s with an ECDSA P-256 client certificate, 2.07 s with
+    RSA-2048;
   - Wi-Fi throughput and Memory Stick write speed by buffer size;
   - hashing speed for the hashes RomM records per file (CRC32, MD5 and SHA-1).
 - **Resume**: a ranged download survives the Wi-Fi switch and a suspend.

@@ -195,8 +195,10 @@ release would have had a meaningful life. The image is built from source in ever
 than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
 excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
-For mTLS, client keys should be ECDSA P-256: RSA-2048 signing is far slower on the Allegrex.
-Connections are kept alive to pay the handshake once per session.
+For mTLS, client keys should be ECDSA P-256: on a PSP-1000, a TLS 1.3 handshake took 0.59 s
+without a client certificate, 0.69 s with an ECDSA P-256 one and 2.07 s with RSA-2048 (median of
+5). Connections are kept alive to pay the handshake once per session; a second request on a kept
+connection needs none.
 
 ### Randomness for TLS
 

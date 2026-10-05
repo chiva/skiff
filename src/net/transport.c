@@ -30,6 +30,18 @@ static int has_allowed_scheme(const char *url) {
     return 0;
 }
 
+static int is_blank(const char *text) { return text[strspn(text, " \t")] == '\0'; }
+
+/* A range always carries the ETag it resumes: a missing or empty one (how the parser records an
+ * absent ETag) would let a replaced file's bytes be spliced onto the old partial download. */
+static int range_is_valid(const skiff_http_request *request) {
+    if (!request->has_range) {
+        return request->if_range == NULL;
+    }
+    return request->if_range != NULL && !is_blank(request->if_range) &&
+           !has_line_break(request->if_range);
+}
+
 int skiff_http_headers_valid(const skiff_http_header *headers, size_t count) {
     if (count > 0 && headers == NULL) {
         return 0;
@@ -54,8 +66,7 @@ skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_r
     if (transport == NULL || transport->ops == NULL || transport->ops->perform == NULL ||
         request == NULL || request->url == NULL || request->url[0] == '\0' ||
         !skiff_http_headers_valid(request->headers, request->header_count) ||
-        (request->has_range != (request->if_range != NULL)) ||
-        (request->if_range != NULL && has_line_break(request->if_range))) {
+        !range_is_valid(request)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     if (!has_allowed_scheme(request->url)) {

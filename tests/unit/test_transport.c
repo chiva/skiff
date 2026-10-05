@@ -131,6 +131,13 @@ static void test_if_range_needs_a_range_and_no_line_break(void) {
     request.if_range = NULL;
     request.has_range = 1;
     expect_refused("Range without If-Range: a changed file would be spliced");
+    request.if_range = "";
+    expect_refused("Range with an empty If-Range (the parser's absent ETag)");
+    request.if_range = " \t";
+    expect_refused("Range with a blank If-Range");
+    request.if_range = NULL;
+    request.has_range = 2;
+    expect_refused("any non-zero has_range counts as a range");
     request.has_range = 1;
     request.if_range = "\"etag\"\r\nX-Evil: 1";
     expect_refused("CRLF in If-Range");

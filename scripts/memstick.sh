@@ -11,10 +11,12 @@ readonly USAGE="usage: scripts/memstick.sh install|results|uninstall <memory-sti
 readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
-readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe)
-readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe)
+readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe
+  skiff_bench)
+readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe
+  SkiffBench)
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt net-log.txt)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
 # address (from its certificate's addresses), the test CA and the client certificates. The keys are
 # test material for that throwaway server; uninstall removes them with the folder.
@@ -22,6 +24,10 @@ readonly NET_PROBE_FOLDER="SkiffNetProbe"
 readonly INTEGRATION_CERTS="$REPO_ROOT/build/integration/certs"
 readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.crt client-rsa.key
   wrong-ca.crt client-wrong-ca.crt client-wrong-ca.key)
+# The benchmark downloads from the same server: the same settings, and only the test CA. Optional
+# SKIFF_BENCH_RUNS and SKIFF_BENCH_SECTIONS become runs= and sections= (tests/hardware/bench.c).
+readonly BENCH_FOLDER="SkiffBench"
+readonly BENCH_FILES=(ca.crt)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
 # The seeded file and the API token, for the probe's download checks through Skiff's transport.
 readonly INTEGRATION_SEED="$REPO_ROOT/build/integration/romm.json"
@@ -72,20 +78,24 @@ url_encode() {
   printf '%s' "$encoded"
 }
 
-install_net_probe_config() {
-  local dest="$GAME_DIR/$NET_PROBE_FOLDER" host profile="${SKIFF_NET_PROFILE:-$DEFAULT_NET_PROFILE}"
+# install_probe_config <folder> <config file> <extra lines> <certificate files...>: the test
+# server's settings and certificates for one probe folder, or none if no LAN server is running.
+install_probe_config() {
+  local folder="$1" config="$2" extra="$3"
+  shift 3
+  local dest="$GAME_DIR/$folder" host profile="${SKIFF_NET_PROFILE:-$DEFAULT_NET_PROFILE}" file
   host="$(test_server_lan_ip)"
   if [[ -z "$host" ]]; then
     # A previous install's address and certificates would point the probe at another server.
-    rm -f "$dest/net-probe.ini"
-    for file in "${NET_PROBE_FILES[@]}"; do
+    rm -f "$dest/$config"
+    for file in "$@"; do
       rm -f "$dest/$file"
     done
     echo "note: no LAN test server; run scripts/dev.sh romm-lan and install again before running" \
-      "the network probe" >&2
+      "$folder" >&2
     return
   fi
-  for file in "${NET_PROBE_FILES[@]}"; do
+  for file in "$@"; do
     cp "$INTEGRATION_CERTS/$file" "$dest/$file"
   done
   # Plain HTTP reaches the LAN only when romm-lan ran with SKIFF_LAN_PLAIN_HTTP=1.
@@ -93,14 +103,32 @@ install_net_probe_config() {
   if grep -qx 'ROMM_PLAIN_BIND_ADDRESS=0.0.0.0' "$INTEGRATION_ENV" 2>/dev/null; then
     plain_http=1
   fi
-  printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
-    "plain_http=$plain_http" "token=$(json_field token)" "rom_id=$(json_field rom_id)" \
-    "file_name=$(url_encode "$(json_field file_name)")" "size=$(json_field size)" \
-    "crc32=$(json_field crc32)" \
-    >"$dest/net-probe.ini"
-  remove_macos_metadata "$NET_PROBE_FOLDER"
-  echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \
-    "plain HTTP comparison $([[ $plain_http == 1 ]] && echo on || echo off)"
+  {
+    printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
+      "plain_http=$plain_http" "token=$(json_field token)" "rom_id=$(json_field rom_id)" \
+      "file_name=$(url_encode "$(json_field file_name)")" "size=$(json_field size)" \
+      "crc32=$(json_field crc32)"
+    if [[ -n "$extra" ]]; then
+      printf '%s\n' "$extra"
+    fi
+  } >"$dest/$config"
+  remove_macos_metadata "$folder"
+  echo "$folder: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \
+    "plain HTTP comparison $([[ $plain_http == 1 ]] && echo on || echo off)," \
+    "file $(json_field size) bytes"
+}
+
+install_probe_configs() {
+  install_probe_config "$NET_PROBE_FOLDER" net-probe.ini "" "${NET_PROBE_FILES[@]}"
+  local bench_extra=()
+  if [[ -n "${SKIFF_BENCH_RUNS:-}" ]]; then
+    bench_extra+=("runs=$SKIFF_BENCH_RUNS")
+  fi
+  if [[ -n "${SKIFF_BENCH_SECTIONS:-}" ]]; then
+    bench_extra+=("sections=$SKIFF_BENCH_SECTIONS")
+  fi
+  install_probe_config "$BENCH_FOLDER" bench.ini "$(printf '%s\n' "${bench_extra[@]}")" \
+    "${BENCH_FILES[@]}"
 }
 
 install_eboots() {
@@ -118,7 +146,7 @@ install_eboots() {
     remove_macos_metadata "${FOLDERS[$i]}"
     echo "installed ${TARGETS[$i]} -> PSP/GAME/${FOLDERS[$i]}"
   done
-  install_net_probe_config
+  install_probe_configs
   sync
   echo "Eject the Memory Stick, then run each Skiff entry from Game > Memory Stick."
 }
@@ -136,7 +164,7 @@ print_results() {
     for log in "${RUN_LOGS[@]}"; do
       local log_path="$GAME_DIR/${FOLDERS[$i]}/$log"
       if [[ -f "$log_path" ]]; then
-        echo "-- $log (one line per run)"
+        echo "-- $log (appended by every run)"
         cat "$log_path"
       fi
     done

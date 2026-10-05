@@ -51,6 +51,11 @@ skiff_add_tls_unit_test(test_host_tls)
 skiff_add_tls_unit_test(test_net_errors)
 skiff_add_tls_unit_test(test_curl_transport)
 
+# The hardware probes' plain-C helpers (tests/hardware/probe_support.c), shared with their EBOOTs.
+skiff_add_unit_test(test_probe_support)
+target_sources(test_probe_support PRIVATE hardware/probe_support.c)
+target_include_directories(test_probe_support PRIVATE hardware)
+
 # Runs against the integration RomM, not under ctest: scripts/dev.sh romm-test
 # (tests/integration/transport-test.sh). Built with every host build so it always compiles.
 add_executable(test_transport_romm integration/test_transport_romm.c)

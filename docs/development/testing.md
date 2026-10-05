@@ -7,7 +7,7 @@ the logic.
 | Tier | Where | In CI | Command |
 |---|---|---|---|
 | Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
-| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK and network probes (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe net-probe ui-proto` |
+| Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK and network probes and benchmark (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe net-probe ui-proto bench` |
 | Integration | Docker Compose | ✅ server checks, host transport against the server | `scripts/dev.sh romm-up romm-check romm-test romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
 
@@ -44,8 +44,8 @@ the bytes stay exact.
 when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`),
 `skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)), `skiff_kirk_probe`
 (`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)), `skiff_net_probe` (`NET PROBE NO ARK`, see
-[Network probe](#network-probe)) and `skiff_ui_proto` (`UI PROTO HEADLESS`, see
-[UI prototype](#ui-prototype)). PPSSPPHeadless only shows a
+[Network probe](#network-probe)), `skiff_ui_proto` (`UI PROTO HEADLESS`, see
+[UI prototype](#ui-prototype)) and `skiff_bench` (`BENCH NO ARK`, see [Benchmark](#benchmark)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -148,9 +148,10 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    without freezing.
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
 
-The **Skiff KIRK probe**, **Skiff network probe** and **Skiff UI prototype** are installed too;
-run them only when working on entropy (see [KIRK probe](#kirk-probe)), networking (see
-[Network probe](#network-probe)) or the UI (see [UI prototype](#ui-prototype)).
+The **Skiff KIRK probe**, **Skiff network probe**, **Skiff benchmark** and **Skiff UI prototype**
+are installed too; run them only when working on entropy (see [KIRK probe](#kirk-probe)),
+networking (see [Network probe](#network-probe) and [Benchmark](#benchmark)) or the UI (see
+[UI prototype](#ui-prototype)).
 
 ### Over PSPLINK
 
@@ -247,6 +248,58 @@ network modules while the access point is connected, and stops at the first laye
 come down. Without ARK, as in PPSSPP, TLS cannot start: the
 probe loads and unloads the network modules, checks that libcurl refuses to start, and ends with
 `SKIFF NET PROBE NO ARK OK` (`scripts/dev.sh net-probe`, run in CI).
+
+## Benchmark
+
+`tests/hardware/bench.c` measures where a download's time goes on a PSP, against the
+[integration server](#integration-server), and the settings the app can change. Its sections, in
+order (each can be chosen with `sections=` in `bench.ini`):
+
+- **latency:** right after joining Wi-Fi, five back-to-back TCP connects and one after each of 2, 5
+  and 10 s of waiting, then heartbeats on one kept HTTPS connection after 0, 0.5, 2, 5 and 15 s of
+  idle. A connect near 3 s (marked `SYN retried?`) points at a lost first packet, retried after the
+  TCP stack's 3 s timeout; latency that grows with the idle gap points at Wi-Fi power save;
+- **cpu:** CRC-32 (bitwise, table, zlib), MD5 and SHA-1 (the hashes RomM records per file), and
+  ChaCha20-Poly1305 and AES-128-GCM decryption in 16 KB records (the TLS ciphers), in KB/s and
+  cycles per byte. It also times the per-byte digest the network probe ran while it measured its
+  download;
+- **net:** the seeded file downloaded `runs=` times (default 3, median, min and max) for each of:
+  curl buffer 16 to 512 KB; plain HTTP at 16 and 512 KB (only when the server publishes it on the
+  LAN); `SO_RCVBUF` 32, 64 and 128 KB; TLS 1.3 and TLS 1.2, each forcing AES-128-GCM and
+  ChaCha20-Poly1305; and HTTPS and plain HTTP at 333 MHz. Speed counts from the request to the last
+  byte (no TCP or TLS setup). A thread at the lowest priority counts while the CPU is idle, so each
+  download also reports how busy the CPU was: if TLS is the limit, HTTPS runs near 100% and gets
+  faster at 333 MHz while plain HTTP does not. Every download is checked against the seeded size
+  and CRC-32;
+- **ms:** Memory Stick write and read-back speed with 16 to 512 KB blocks (16 MiB each, compared
+  byte for byte, then deleted), then the download written to the Memory Stick in 128 KB blocks as
+  it arrives, with the best curl buffer from **net**;
+- **app:** the download through Skiff's own transport with its defaults, as the network probe
+  measures it.
+
+On a PSP (plugged in, so the battery does not change the run; a full run takes about 25 minutes):
+
+1. On the computer:
+   `SKIFF_LAN_PLAIN_HTTP=1 SKIFF_PAYLOAD_BYTES=4194304 scripts/dev.sh romm-lan` (a 4 MiB file, and
+   plain HTTP for the comparison).
+2. PSP in USB mode: `scripts/memstick.sh install <mount>`. It writes `bench.ini` (the network
+   probe's settings, plus `runs=` and `sections=` from `SKIFF_BENCH_RUNS` and
+   `SKIFF_BENCH_SECTIONS` when set) and copies the test CA. Eject.
+3. With the Wi-Fi switch on, run **Skiff benchmark**. It prints an estimate before each section and
+   keeps the PSP from sleeping; HOME → Quit stops it after the current download.
+4. To tell power save from lost packets, change Settings → Power Save Settings → WLAN Power Save
+   and run the **latency** and **net** sections again
+   (`SKIFF_BENCH_SECTIONS=latency,net scripts/memstick.sh install <mount>`).
+5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF BENCH OK`. Each measurement also
+   appends one line to `bench-log.txt`, starting with what can change a result: the clock, the power
+   source, the WLAN Power Save setting and the state the access point reports, signal strength and
+   channel.
+
+A download that fails, or bytes that do not match the seeded file, fail the run; a socket buffer
+size the PSP refuses is reported and skipped. Without ARK, as in PPSSPP, TLS cannot start: the
+benchmark loads and unloads the network modules, checks that libcurl refuses to start, runs the
+CRC-32 and Memory Stick code on small sizes and ends with `SKIFF BENCH NO ARK OK`
+(`scripts/dev.sh bench`, run in CI).
 
 ## UI prototype
 

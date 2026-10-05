@@ -17,12 +17,13 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
 | UI prototype, headless (fonts and frames) | `scripts/dev.sh ui-proto` (after `psp`) |
 | Network probe without ARK (modules load, TLS must refuse) | `scripts/dev.sh net-probe` (after `psp`) |
+| Benchmark without ARK (TLS must refuse, CRC-32 and Memory Stick code runs) | `scripts/dev.sh bench` (after `psp`) |
 | Test RomM behind TLS/mTLS (Docker Compose) | `scripts/dev.sh romm-up` (or `romm-lan` for a PSP), `romm-check`, `romm-down` → `build/integration/` |
 | Host transport against the test RomM | `scripts/dev.sh romm-test` (after `romm-up`) |
 | Re-record the fake transport's RomM fixtures | `scripts/dev.sh romm-record` → `tests/fixtures/romm/` (review before committing) |

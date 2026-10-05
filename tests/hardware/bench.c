@@ -754,40 +754,49 @@ typedef struct download {
     SceUID file;
     unsigned char *sink;
     size_t sink_used;
-    /* When the first body chunk arrived, and the idle ticks then. */
+    /* When the first body chunk was done with (hashed, buffered), the idle ticks then, and its
+     * size: the measured window starts there. */
     int receiving;
     long long first_chunk_us;
     unsigned first_chunk_ticks;
     unsigned long long first_chunk_bytes;
 } download;
 
-static void write_sink(download *d) {
-    if (d->sink_used == 0 || d->result->write_failed) {
-        return;
+/* Writes the buffered block; 0 if the Memory Stick took less than all of it. The block is dropped
+ * either way, so the buffer always has room again. */
+static int write_sink(download *d) {
+    if (d->sink_used == 0) {
+        return !d->result->write_failed;
     }
     const long long start = now_us();
     const int written = sceIoWrite(d->file, d->sink, (SceSize)d->sink_used);
     d->result->write_us += now_us() - start;
-    d->result->write_failed = written != (int)d->sink_used;
+    d->result->write_failed |= written != (int)d->sink_used;
     d->sink_used = 0;
+    return !d->result->write_failed;
+}
+
+/* Closes the measured window after a unit of body work: from the end of the first chunk's work to
+ * now, the bytes after the first chunk, and the CPU's busy share meanwhile. */
+static void mark_progress(download *d) {
+    const long long now = now_us();
+    const unsigned ticks = idle_ticks;
+    if (!d->receiving) {
+        d->receiving = 1;
+        d->first_chunk_us = now;
+        d->first_chunk_ticks = ticks;
+        d->first_chunk_bytes = d->result->bytes;
+        return;
+    }
+    d->result->transfer_us = now - d->first_chunk_us;
+    d->result->transfer_bytes = d->result->bytes - d->first_chunk_bytes;
+    d->result->busy_percent =
+        busy_percent(d->owner, ticks - d->first_chunk_ticks, d->result->transfer_us);
 }
 
 static size_t on_download_body(char *data, size_t size, size_t count, void *context) {
     download *d = context;
     const size_t bytes = size * count;
-    const long long arrived_us = now_us();
-    const unsigned arrived_ticks = idle_ticks;
-    if (!d->receiving) {
-        d->receiving = 1;
-        d->first_chunk_us = arrived_us;
-        d->first_chunk_ticks = arrived_ticks;
-        d->first_chunk_bytes = bytes;
-    } else {
-        d->result->transfer_us = arrived_us - d->first_chunk_us;
-        d->result->transfer_bytes = d->result->bytes + bytes - d->first_chunk_bytes;
-        d->result->busy_percent =
-            busy_percent(d->owner, arrived_ticks - d->first_chunk_ticks, d->result->transfer_us);
-    }
     if (d->result->tls_version[0] == '\0' && d->spec->https) {
         skiff_probe_read_tls_session(d->curl, d->result->tls_version, d->result->cipher);
     }
@@ -800,10 +809,11 @@ static size_t on_download_body(char *data, size_t size, size_t count, void *cont
         memcpy(d->sink + d->sink_used, bytes_in + offset, take);
         d->sink_used += take;
         offset += take;
-        if (d->sink_used == MS_SINK_BYTES) {
-            write_sink(d);
+        if (d->sink_used == MS_SINK_BYTES && !write_sink(d)) {
+            return 0; /* short of bytes: curl stops with CURLE_WRITE_ERROR */
         }
     }
+    mark_progress(d);
     return bytes;
 }
 
@@ -883,11 +893,16 @@ static int open_download_file(const bench *b, download *d) {
     return d->file >= 0 && d->sink != NULL;
 }
 
+/* The last partial block and the close (which flushes the file system) are part of the download's
+ * cost, so the measured window extends over them. */
 static void close_download_file(const bench *b, download *d) {
     write_sink(d);
     const long long start = now_us();
     d->result->write_failed |= sceIoClose(d->file) < 0;
     d->result->write_us += now_us() - start;
+    if (d->result->code == CURLE_OK) {
+        mark_progress(d);
+    }
     char path[SKIFF_PROBE_PATH_MAX];
     if (skiff_probe_sibling(b->program_path, MS_TEST_FILE, path)) {
         sceIoRemove(path);
@@ -920,8 +935,8 @@ static void run_download(bench *b, const download_spec *spec, download_result *r
 
 static int download_ok(const bench *b, const download_spec *spec, const download_result *result) {
     return !result->setup_failed && result->code == CURLE_OK && result->status == HTTP_OK &&
-           result->bytes == b->config.size && result->crc32 == b->config.crc32 &&
-           !result->write_failed &&
+           result->transfer_us > 0 && result->bytes == b->config.size &&
+           result->crc32 == b->config.crc32 && !result->write_failed &&
            (spec->expect_version == NULL ||
             strcmp(result->tls_version, spec->expect_version) == 0) &&
            (spec->expect_suite == NULL || strstr(result->cipher, spec->expect_suite) != NULL);

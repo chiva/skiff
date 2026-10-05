@@ -54,7 +54,8 @@ skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_r
     if (transport == NULL || transport->ops == NULL || transport->ops->perform == NULL ||
         request == NULL || request->url == NULL || request->url[0] == '\0' ||
         !skiff_http_headers_valid(request->headers, request->header_count) ||
-        (request->if_range != NULL && (!request->has_range || has_line_break(request->if_range)))) {
+        (request->has_range != (request->if_range != NULL)) ||
+        (request->if_range != NULL && has_line_break(request->if_range))) {
         return SKIFF_ERR_INVALID_ARG;
     }
     if (!has_allowed_scheme(request->url)) {

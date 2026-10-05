@@ -135,9 +135,9 @@ static void apply_range(const skiff_http_request *request, skiff_http_response *
     if (!request->has_range || response->status != HTTP_STATUS_OK) {
         return;
     }
+    /* The transport refuses a range without If-Range before the fake sees it. */
     const int etag_matches =
-        request->if_range == NULL ||
-        (response->etag[0] != '\0' && strcmp(request->if_range, response->etag) == 0);
+        response->etag[0] != '\0' && strcmp(request->if_range, response->etag) == 0;
     if (!etag_matches) {
         return;
     }

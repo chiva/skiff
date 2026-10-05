@@ -113,12 +113,12 @@ static void test_resume_with_the_current_etag_returns_the_rest(void) {
     TEST_ASSERT_EQUAL_MEMORY(full_content + RESUME_OFFSET, sink.bytes, sink.size);
 }
 
-static void test_resume_without_if_range_still_gets_a_range(void) {
-    load_full_content();
+static void test_resume_without_if_range_is_refused(void) {
+    add(CONTENT_PATH, "romm/rom-content.http");
     request.has_range = 1;
     request.range_start = RESUME_OFFSET;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test" CONTENT_PATH));
-    TEST_ASSERT_EQUAL_INT64(206, response.status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, get("https://romm.test" CONTENT_PATH));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, fake.request_count, "the fake must not see it");
 }
 
 static void test_resume_with_a_stale_etag_restarts_with_the_whole_file(void) {
@@ -278,7 +278,7 @@ int main(void) {
     RUN_TEST(test_replays_a_recorded_json_response);
     RUN_TEST(test_replays_a_download_in_chunks_with_its_etag);
     RUN_TEST(test_resume_with_the_current_etag_returns_the_rest);
-    RUN_TEST(test_resume_without_if_range_still_gets_a_range);
+    RUN_TEST(test_resume_without_if_range_is_refused);
     RUN_TEST(test_resume_with_a_stale_etag_restarts_with_the_whole_file);
     RUN_TEST(test_file_changed_on_the_server);
     RUN_TEST(test_resume_past_the_end_is_not_satisfiable);

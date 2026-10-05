@@ -128,6 +128,9 @@ static void test_valid_headers_pass(void) {
 static void test_if_range_needs_a_range_and_no_line_break(void) {
     request.if_range = "\"etag\"";
     expect_refused("If-Range without Range");
+    request.if_range = NULL;
+    request.has_range = 1;
+    expect_refused("Range without If-Range: a changed file would be spliced");
     request.has_range = 1;
     request.if_range = "\"etag\"\r\nX-Evil: 1";
     expect_refused("CRLF in If-Range");

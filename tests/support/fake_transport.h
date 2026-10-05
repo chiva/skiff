@@ -12,7 +12,7 @@
  * body (already de-chunked, so a "Transfer-Encoding: chunked" header is ignored).
  *
  * Range requests are answered the way RomM's server does, from the recorded 200 body: a matching
- * If-Range (or none) gives 206 with Content-Range, a stale one the whole body with 200, an offset
+ * If-Range gives 206 with Content-Range, a stale one the whole body with 200, an offset
  * at or past the end 416.
  */
 

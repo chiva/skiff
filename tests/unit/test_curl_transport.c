@@ -146,6 +146,7 @@ static void test_range_offset_above_4_gib(void) {
     create(&TEST_CONFIG);
     request.has_range = 1;
     request.range_start = 4294967296ULL;
+    request.if_range = "\"e1\"";
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, skiff_http_status_error(response.status));
     stop_server();

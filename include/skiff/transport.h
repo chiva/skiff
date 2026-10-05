@@ -30,9 +30,9 @@ typedef struct skiff_http_request {
     /* Sent on this request after the transport's own default headers. */
     const skiff_http_header *headers;
     size_t header_count;
-    /* Resume: "Range: bytes=<range_start>-", and with if_range (the ETag recorded when the download
-     * started) "If-Range: <if_range>", so a file that changed on the server comes back whole (200)
-     * instead of as a range (206). */
+    /* Resume: "Range: bytes=<range_start>-" plus "If-Range: <if_range>" (the ETag recorded when the
+     * download started), so a file that changed on the server comes back whole (200) instead of as
+     * a range (206) spliced onto the old start. A range always needs its ETag. */
     int has_range;
     uint64_t range_start;
     const char *if_range;
@@ -65,10 +65,10 @@ int skiff_http_headers_valid(const skiff_http_header *headers, size_t count);
  * Sends request and fills response. An HTTP response of any status is SKIFF_OK with
  * response->status set; map it with skiff_http_status_error(). Otherwise returns the network
  * failure (1xx codes), the body callback's error, or SKIFF_ERR_INVALID_ARG for a NULL argument, a
- * missing URL, invalid headers (skiff_http_headers_valid()), or an if_range that is set without
- * has_range or contains a line break, and SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an
- * explicit http:// or https:// (curl would guess plain HTTP). The response is reset first,
- * so after a failure it holds whatever arrived before it. The connection stays usable after any
+ * missing URL, invalid headers (skiff_http_headers_valid()), has_range without if_range (or the
+ * reverse), or an if_range with a line break, and SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without
+ * an explicit http:// or https:// (curl would guess plain HTTP). The response is reset first, so
+ * after a failure it holds whatever arrived before it. The connection stays usable after any
  * failure.
  */
 skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_request *request,

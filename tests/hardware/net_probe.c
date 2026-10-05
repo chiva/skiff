@@ -51,6 +51,8 @@
 #define ECDSA_KEY_FILE "client-ecdsa.key"
 #define RSA_CERT_FILE "client-rsa.crt"
 #define RSA_KEY_FILE "client-rsa.key"
+/* An unrelated CA, and a client certificate it signed: neither is trusted by the test server. */
+#define OTHER_CA_FILE "wrong-ca.crt"
 #define WRONG_CA_CERT_FILE "client-wrong-ca.crt"
 #define WRONG_CA_KEY_FILE "client-wrong-ca.key"
 #define HEARTBEAT_PATH "/api/heartbeat"
@@ -88,6 +90,8 @@ enum {
 typedef struct probe_config {
     int profile;
     char host[HOST_MAX];
+    /* romm-lan keeps plain HTTP off the LAN unless asked; memstick.sh says which. */
+    int plain_http;
 } probe_config;
 
 typedef struct memory_snapshot {
@@ -219,6 +223,8 @@ static int read_config(probe *p) {
         const char *value = equals + 1;
         if (strcmp(line, "host") == 0) {
             snprintf(p->config.host, sizeof p->config.host, "%s", value);
+        } else if (strcmp(line, "plain_http") == 0) {
+            p->config.plain_http = strcmp(value, "1") == 0;
         } else if (strcmp(line, "profile") == 0) {
             p->config.profile = (int)strtol(value, NULL, DECIMAL);
         }
@@ -462,7 +468,7 @@ static int run_requests(probe *p, tls_findings *findings) {
     const request_spec other_ca = {.label = "HTTPS trusting another CA (must be refused)",
                                    .port = HTTPS_PORT,
                                    .https = 1,
-                                   .ca_file = WRONG_CA_CERT_FILE,
+                                   .ca_file = OTHER_CA_FILE,
                                    .expect = EXPECT_UNTRUSTED_SERVER};
     const request_spec mtls_none = {.label = "mTLS without a certificate (must be refused)",
                                     .port = MTLS_PORT,
@@ -502,9 +508,16 @@ static int run_requests(probe *p, tls_findings *findings) {
     ok &= findings->https_median_us >= 0 && findings->ecdsa_median_us >= 0 &&
           findings->rsa_median_us >= 0;
     ok &= check_keep_alive(p, &https);
-    request_result plain;
-    ok &= check_request(p, &http, &plain);
-    findings->http_total_us = plain.total_us;
+    if (p->config.plain_http) {
+        request_result plain;
+        ok &= check_request(p, &http, &plain);
+        findings->http_total_us = plain.total_us;
+    } else {
+        findings->http_total_us = -1;
+        skiff_psp_report_line(&p->report,
+                              "skip plain HTTP: the server keeps it local (SKIFF_LAN_PLAIN_HTTP=1 "
+                              "scripts/dev.sh romm-lan, then install again, to compare)");
+    }
     return ok;
 }
 
@@ -521,7 +534,8 @@ static int append_log(probe *p, const char *ip, long long join_us, const tls_fin
              "rsa_tls_ms=%lld http_total_ms=%lld system_free_low_kb=%u heap_peak_kb=%u",
              ip, join_us / US_PER_MS, findings->https.tls_version, findings->https.cipher,
              findings->https_median_us / US_PER_MS, findings->ecdsa_median_us / US_PER_MS,
-             findings->rsa_median_us / US_PER_MS, findings->http_total_us / US_PER_MS,
+             findings->rsa_median_us / US_PER_MS,
+             findings->http_total_us < 0 ? -1LL : findings->http_total_us / US_PER_MS,
              (unsigned)(p->system_free_low / BYTES_PER_KB),
              (unsigned)(p->heap_peak / BYTES_PER_KB));
     const int written = fprintf(file, "%s\n", line) > 0;

@@ -21,7 +21,8 @@ readonly RUN_LOGS=(kirk-log.txt net-log.txt)
 readonly NET_PROBE_FOLDER="SkiffNetProbe"
 readonly INTEGRATION_CERTS="$REPO_ROOT/build/integration/certs"
 readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.crt client-rsa.key
-  client-wrong-ca.crt client-wrong-ca.key)
+  wrong-ca.crt client-wrong-ca.crt client-wrong-ca.key)
+readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
 readonly DEFAULT_NET_PROFILE=1
 
 readonly COMMAND="${1:?$USAGE}"
@@ -66,10 +67,16 @@ install_net_probe_config() {
   for file in "${NET_PROBE_FILES[@]}"; do
     cp "$INTEGRATION_CERTS/$file" "$dest/$file"
   done
+  # Plain HTTP reaches the LAN only when romm-lan ran with SKIFF_LAN_PLAIN_HTTP=1.
+  local plain_http=0
+  if grep -qx 'ROMM_PLAIN_BIND_ADDRESS=0.0.0.0' "$INTEGRATION_ENV" 2>/dev/null; then
+    plain_http=1
+  fi
   printf '%s\n' "# Written by scripts/memstick.sh install" "host=$host" "profile=$profile" \
-    >"$dest/net-probe.ini"
+    "plain_http=$plain_http" >"$dest/net-probe.ini"
   remove_macos_metadata "$NET_PROBE_FOLDER"
-  echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)"
+  echo "network probe: server $host, Network Settings profile $profile (SKIFF_NET_PROFILE)," \
+    "plain HTTP comparison $([[ $plain_http == 1 ]] && echo on || echo off)"
 }
 
 install_eboots() {

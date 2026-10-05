@@ -185,7 +185,8 @@ PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 - **Handshake times:** the median of 5 fresh connections for HTTPS and for each client certificate
   type;
 - **Keep-alive:** a second request on the same connection needs no new handshake;
-- **Plain HTTP:** one request, for comparison;
+- **Plain HTTP:** one request, for comparison, when the server publishes it on the LAN
+  (`SKIFF_LAN_PLAIN_HTTP=1 scripts/dev.sh romm-lan`); skipped otherwise;
 - **Memory:** free system memory and heap use before and after the network modules load, after
   joining, at their worst while the requests run, and after unloading.
 

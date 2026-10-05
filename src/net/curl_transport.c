@@ -122,8 +122,8 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
         .curl_code = (int)code,
         .clock_now = (int64_t)mbedtls_time(NULL),
         .uses_tls = curl_strnequal(request->url, HTTPS_PREFIX, sizeof HTTPS_PREFIX - 1),
-        /* A reused connection finished its handshake on an earlier request. */
-        .tls_established = tls_done > 0 || current->response->new_connections == 0,
+        .tls_established = tls_done > 0,
+        .reused_connection = current->response->new_connections == 0,
         .got_response = current->response->status != 0,
         .client_cert_configured = transport->client_cert_configured,
         .body_error = current->body_error,

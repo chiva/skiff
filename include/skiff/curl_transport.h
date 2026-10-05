@@ -62,8 +62,10 @@ typedef struct skiff_net_failure {
      * clock alone decides between SKIFF_ERR_NET_TLS_CLOCK and SKIFF_ERR_NET_TLS_UNTRUSTED. */
     int64_t clock_now;
     int uses_tls;
-    /* The TLS handshake had completed (now or on an earlier request over a kept connection). */
+    /* This request completed a TLS handshake on a new connection. */
     int tls_established;
+    /* This request went over a connection kept from an earlier one. */
+    int reused_connection;
     int got_response;
     int client_cert_configured;
     /* What the body callback returned when it stopped the transfer. */

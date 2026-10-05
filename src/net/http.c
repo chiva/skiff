@@ -30,7 +30,12 @@ static int is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == 
 
 static int is_digit(char c) { return c >= '0' && c <= '9'; }
 
-static char ascii_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
+static char ascii_lower(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 'a');
+    }
+    return c;
+}
 
 static span trim(span s) {
     while (s.length > 0 && is_space(s.text[0])) {

@@ -23,7 +23,9 @@ enum {
     NO_RESPONSE = 0,
     RESPONSE = 1,
     NO_CERT = 0,
-    CERT = 1
+    CERT = 1,
+    NEW_CONNECTION = 0,
+    KEPT_CONNECTION = 1
 };
 
 typedef struct mapping_row {
@@ -32,8 +34,10 @@ typedef struct mapping_row {
     skiff_err expected;
 } mapping_row;
 
+#define FAILURE_ON(code, clock, tls, handshake, connection, response, cert, body)                  \
+    {(int)(code), (clock), (tls), (handshake), (connection), (response), (cert), (body)}
 #define FAILURE(code, clock, tls, handshake, response, cert, body)                                 \
-    {(int)(code), (clock), (tls), (handshake), (response), (cert), (body)}
+    FAILURE_ON(code, clock, tls, handshake, NEW_CONNECTION, response, cert, body)
 /* A failure where only the curl code matters. */
 #define CODE_ONLY(code)                                                                            \
     FAILURE(code, CLOCK_CORRECT, TLS, HANDSHAKE_PENDING, NO_RESPONSE, NO_CERT, SKIFF_OK)
@@ -78,6 +82,14 @@ static const mapping_row ROWS[] = {
     {"server closed right after the handshake with a client certificate",
      FAILURE(CURLE_RECV_ERROR, CLOCK_CORRECT, TLS, HANDSHAKE_DONE, NO_RESPONSE, CERT, SKIFF_OK),
      SKIFF_ERR_NET_TLS_CLIENT_CERT},
+    {"kept TLS connection closed by the server before the response, client certificate in use",
+     FAILURE_ON(CURLE_GOT_NOTHING, CLOCK_CORRECT, TLS, HANDSHAKE_PENDING, KEPT_CONNECTION,
+                NO_RESPONSE, CERT, SKIFF_OK),
+     SKIFF_ERR_NET_CONNECTION_LOST},
+    {"kept TLS connection reset before the response",
+     FAILURE_ON(CURLE_RECV_ERROR, CLOCK_CORRECT, TLS, HANDSHAKE_PENDING, KEPT_CONNECTION,
+                NO_RESPONSE, NO_CERT, SKIFF_OK),
+     SKIFF_ERR_NET_CONNECTION_LOST},
     {"client certificate or key unreadable", CODE_ONLY(CURLE_SSL_CERTPROBLEM),
      SKIFF_ERR_NET_TLS_CLIENT_CERT},
     {"cut off mid-body over TLS",

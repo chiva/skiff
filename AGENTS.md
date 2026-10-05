@@ -92,6 +92,9 @@ existing ones.
 - `scripts/dev.sh` works from git worktrees (it mounts the main repository's `.git` read-only in the
   containers). Parallel sessions should each work in their own worktree, never switch branches in
   a shared checkout.
+- On Apple Silicon the host image runs arm64, where `char` is unsigned; CI (amd64) and the PSP
+  (MIPS) have signed `char`. clang-tidy's narrowing checks can therefore pass locally and fail in
+  CI: convert `int` back to `char` with an explicit cast, not through a ternary or return.
 - "Clock skew detected" warnings from make in containers come from the Docker VM's clock and are
   harmless.
 

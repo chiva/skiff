@@ -8,8 +8,9 @@ static skiff_err untrusted_or_clock(const skiff_net_failure *failure) {
 }
 
 /*
- * The connection broke. Once a response has started, or without TLS, the connection was lost. Over
- * TLS before any response:
+ * The connection broke. Once a response has started, without TLS, or on a connection kept from an
+ * earlier request (the server closed it while idle), the connection was lost. Over a new TLS
+ * connection before any response:
  *   - the handshake had completed: the server closed right after it, which is how a TLS 1.3
  *     server refuses a missing or unaccepted client certificate (it checks the certificate after
  *     the client considers the handshake done);
@@ -17,7 +18,7 @@ static skiff_err untrusted_or_clock(const skiff_net_failure *failure) {
  *     means the server rejected that certificate.
  */
 static skiff_err broken_connection(const skiff_net_failure *failure) {
-    if (failure->got_response || !failure->uses_tls) {
+    if (failure->got_response || !failure->uses_tls || failure->reused_connection) {
         return SKIFF_ERR_NET_CONNECTION_LOST;
     }
     if (failure->tls_established || failure->client_cert_configured) {

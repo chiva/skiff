@@ -215,7 +215,7 @@ Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
 | TLS handshake failed | 104, or 106 with a client certificate configured |
 | Server certificate rejected, clock plausible / clock before `SKIFF_TLS_CLOCK_FLOOR` | 105 / 108 |
 | Server closed the connection right after the handshake (how a TLS 1.3 server refuses a missing or unaccepted client certificate); client certificate unreadable | 106 |
-| Connection broke after the response started, or without TLS | 111 |
+| Connection broke after the response started, without TLS, or on a connection kept from an earlier request | 111 |
 | The body callback stopped the transfer (e.g. Memory Stick full) | the callback's code |
 | Bad server address or unreadable CA file | 402 |
 

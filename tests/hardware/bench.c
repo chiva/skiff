@@ -833,7 +833,9 @@ static int on_socket(void *context, curl_socket_t socket_fd, curlsocktype purpos
         actual = -1;
     }
     d->result->receive_buffer = actual;
-    return CURL_SOCKOPT_OK;
+    /* A refused size would measure the default buffer under the wrong name: stop before connecting.
+     */
+    return d->result->receive_buffer_refused ? CURL_SOCKOPT_ERROR : CURL_SOCKOPT_OK;
 }
 
 static void content_url(const bench *b, int https, char *out) {
@@ -1395,6 +1397,10 @@ int main(int argc, char *argv[]) {
         run_without_ark(&b);
     }
 
+    /* HOME → Quit ends the run between downloads: whatever is missing makes it incomplete. */
+    if (skiff_psp_exit_requested()) {
+        check(&b, 0, "stopped from the HOME menu: the results are incomplete");
+    }
     stop_thread(idle, &idle_stop);
     stop_thread(ticker, &ticker_stop);
     close_log(&b);

@@ -286,7 +286,8 @@ On a PSP (plugged in, so the battery does not change the run; a full run takes a
    probe's settings, plus `runs=` and `sections=` from `SKIFF_BENCH_RUNS` and
    `SKIFF_BENCH_SECTIONS` when set) and copies the test CA. Eject.
 3. With the Wi-Fi switch on, run **Skiff benchmark**. It prints an estimate before each section and
-   keeps the PSP from sleeping; HOME → Quit stops it after the current download.
+   keeps the PSP from sleeping; HOME → Quit stops it after the current download, and the run then
+   ends with `SKIFF BENCH FAIL` (incomplete).
 4. To tell power save from lost packets, change Settings → Power Save Settings → WLAN Power Save
    and run the **latency** and **net** sections again
    (`SKIFF_BENCH_SECTIONS=latency,net scripts/memstick.sh install <mount>`).

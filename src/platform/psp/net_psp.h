@@ -56,8 +56,9 @@ skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size);
 skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us);
 
 /*
- * Undoes skiff_psp_net_load() in reverse; every step runs even if an earlier one fails, and stage
- * returns to NONE. SKIFF_ERR_NET_UNAVAILABLE if any step failed.
+ * Undoes skiff_psp_net_load() in reverse, down to stage NONE. Refuses while the access point is not
+ * disconnected, and stops at the first step that fails: stage then names the layer still live, so
+ * the caller can retry or leave the rest to the process exit. SKIFF_ERR_NET_UNAVAILABLE on either.
  */
 skiff_err skiff_psp_net_unload(skiff_psp_net *net);
 

@@ -105,17 +105,29 @@ typedef struct probe {
     size_t heap_peak;
 } probe;
 
-/* One request: which site, and which trust and client certificate to present. */
+/* How a request must end. */
+typedef enum expectation {
+    EXPECT_HEARTBEAT,
+    /* The client rejects the server's certificate: it trusts another CA. */
+    EXPECT_UNTRUSTED_SERVER,
+    /* TCP connects, then the server ends the TLS session before any HTTP response. */
+    EXPECT_TLS_REFUSED,
+} expectation;
+
+/* One request: which site, which CA file to trust, and which client certificate to present. */
 typedef struct request_spec {
     const char *label;
     int port;
     int https;
-    int trust_test_ca;
+    const char *ca_file;
     const char *cert_file;
     const char *key_file;
+    expectation expect;
 } request_spec;
 
 typedef struct request_result {
+    /* A file was missing or curl refused an option: the request never tested the server. */
+    int setup_failed;
     CURLcode code;
     long status;
     long long tcp_us;
@@ -231,33 +243,46 @@ static size_t keep_body(char *data, size_t size, size_t count, void *context) {
     return bytes;
 }
 
-/* Sets up `curl` for spec; returns 0 if a file it needs has no path. */
-static int configure(const probe *p, CURL *curl, const request_spec *spec, body_buffer *body,
-                     char *url) {
+/* The full path of a file next to the EBOOT, if it is there and readable. */
+static int existing_sibling(probe *p, const char *file_name, char *out) {
+    FILE *file = sibling(p, file_name, out) ? fopen(out, "r") : NULL;
+    if (file == NULL) {
+        char text[SKIFF_SELFTEST_LINE_MAX];
+        snprintf(text, sizeof text,
+                 "setup: %s missing next to the EBOOT (scripts/memstick.sh "
+                 "install copies it)",
+                 file_name);
+        report_check(p, 0, text);
+        return 0;
+    }
+    fclose(file);
+    return 1;
+}
+
+/* Sets up `curl` for spec; returns 0 if a file it needs is missing or curl refuses an option. */
+static int configure(probe *p, CURL *curl, const request_spec *spec, body_buffer *body, char *url) {
     char ca[PATH_MAX_LEN];
     char cert[PATH_MAX_LEN];
     char key[PATH_MAX_LEN];
     snprintf(url, URL_MAX, "%s://%s:%d%s", spec->https ? "https" : "http", p->config.host,
              spec->port, HEARTBEAT_PATH);
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)CURL_CONNECT_TIMEOUT_S);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)CURL_TIMEOUT_S);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, keep_body);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, body);
-    if (spec->trust_test_ca) {
-        if (!sibling(p, CA_FILE, ca)) {
-            return 0;
-        }
-        curl_easy_setopt(curl, CURLOPT_CAINFO, ca);
+    int ok =
+        curl_easy_setopt(curl, CURLOPT_URL, url) == CURLE_OK &&
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)CURL_CONNECT_TIMEOUT_S) == CURLE_OK &&
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)CURL_TIMEOUT_S) == CURLE_OK &&
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, keep_body) == CURLE_OK &&
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, body) == CURLE_OK;
+    if (ok && spec->ca_file != NULL) {
+        ok = existing_sibling(p, spec->ca_file, ca) &&
+             curl_easy_setopt(curl, CURLOPT_CAINFO, ca) == CURLE_OK;
     }
-    if (spec->cert_file != NULL) {
-        if (!sibling(p, spec->cert_file, cert) || !sibling(p, spec->key_file, key)) {
-            return 0;
-        }
-        curl_easy_setopt(curl, CURLOPT_SSLCERT, cert);
-        curl_easy_setopt(curl, CURLOPT_SSLKEY, key);
+    if (ok && spec->cert_file != NULL) {
+        ok = existing_sibling(p, spec->cert_file, cert) &&
+             existing_sibling(p, spec->key_file, key) &&
+             curl_easy_setopt(curl, CURLOPT_SSLCERT, cert) == CURLE_OK &&
+             curl_easy_setopt(curl, CURLOPT_SSLKEY, key) == CURLE_OK;
     }
-    return 1;
+    return ok;
 }
 
 /* After a transfer, while the connection is still cached in the handle. */
@@ -294,7 +319,26 @@ static void read_result(CURL *curl, const body_buffer *body, CURLcode code,
 }
 
 static int request_ok(const request_result *result) {
-    return result->code == CURLE_OK && result->status == HTTP_OK && result->body_ok;
+    return !result->setup_failed && result->code == CURLE_OK && result->status == HTTP_OK &&
+           result->body_ok;
+}
+
+/* Whether the request ended the way spec says it must. */
+static int as_expected(const request_spec *spec, const request_result *result) {
+    if (result->setup_failed) {
+        return 0;
+    }
+    switch (spec->expect) {
+    case EXPECT_HEARTBEAT:
+        return request_ok(result);
+    case EXPECT_UNTRUSTED_SERVER:
+        return result->code == CURLE_PEER_FAILED_VERIFICATION;
+    case EXPECT_TLS_REFUSED:
+        /* TLS 1.2 fails the handshake; TLS 1.3 reports the server's alert on the first read. */
+        return result->tcp_us > 0 && result->status == 0 &&
+               (result->code == CURLE_SSL_CONNECT_ERROR || result->code == CURLE_RECV_ERROR);
+    }
+    return 0;
 }
 
 static void log_request(probe *p, const request_spec *spec, const request_result *result, int ok) {
@@ -318,7 +362,7 @@ static void run_request(probe *p, const request_spec *spec, request_result *resu
     body_buffer body = {{0}, 0};
     char url[URL_MAX];
     if (!configure(p, curl, spec, &body, url)) {
-        result->code = CURLE_READ_ERROR;
+        result->setup_failed = 1;
     } else {
         read_result(curl, &body, curl_easy_perform(curl), result);
     }
@@ -326,20 +370,11 @@ static void run_request(probe *p, const request_spec *spec, request_result *resu
     curl_easy_cleanup(curl);
 }
 
-static int expect_success(probe *p, const request_spec *spec, request_result *result) {
+static int check_request(probe *p, const request_spec *spec, request_result *result) {
     run_request(p, spec, result);
-    const int ok = request_ok(result);
+    const int ok = as_expected(spec, result);
     log_request(p, spec, result, ok);
     return ok;
-}
-
-/* A request the server or the client must refuse; refused means no heartbeat came back. */
-static int expect_refusal(probe *p, const request_spec *spec) {
-    request_result result;
-    run_request(p, spec, &result);
-    const int refused = !request_ok(&result);
-    log_request(p, spec, &result, refused);
-    return refused;
 }
 
 static int compare_long_long(const void *a, const void *b) {
@@ -354,7 +389,7 @@ static long long median_handshake(probe *p, const request_spec *spec) {
     int all_ok = 1;
     for (int run = 0; run < HANDSHAKE_RUNS; run++) {
         request_result result;
-        all_ok &= expect_success(p, spec, &result);
+        all_ok &= check_request(p, spec, &result);
         tls_us[run] = result.tls_us;
     }
     qsort(tls_us, HANDSHAKE_RUNS, sizeof tls_us[0], compare_long_long);
@@ -379,7 +414,7 @@ static int check_tls_parameters(probe *p, const request_result *result) {
     return tls13 || tls12_ecdhe;
 }
 
-/* Two requests on one handle: the second must reuse the first's connection. */
+/* Two heartbeats on one handle: both must succeed, the second on the first's connection. */
 static int check_keep_alive(probe *p, const request_spec *spec) {
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
@@ -388,22 +423,25 @@ static int check_keep_alive(probe *p, const request_spec *spec) {
     }
     body_buffer body = {{0}, 0};
     char url[URL_MAX];
-    int ok = configure(p, curl, spec, &body, url);
-    CURLcode first = CURLE_READ_ERROR;
-    CURLcode second = CURLE_READ_ERROR;
+    request_result first;
+    request_result second;
+    memset(&first, 0, sizeof first);
+    memset(&second, 0, sizeof second);
     long new_connections = -1;
-    if (ok) {
-        first = curl_easy_perform(curl);
-        body.length = 0;
-        second = curl_easy_perform(curl);
+    const int configured = configure(p, curl, spec, &body, url);
+    if (configured) {
+        read_result(curl, &body, curl_easy_perform(curl), &first);
+        memset(&body, 0, sizeof body);
+        read_result(curl, &body, curl_easy_perform(curl), &second);
         curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &new_connections);
     }
     track_memory(p);
     curl_easy_cleanup(curl);
-    ok = ok && first == CURLE_OK && second == CURLE_OK && new_connections == 0;
+    const int ok = configured && request_ok(&first) && request_ok(&second) && new_connections == 0;
     char text[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(text, sizeof text, "keep-alive: curl %d then %d, new connections on the second: %ld",
-             (int)first, (int)second, new_connections);
+    snprintf(text, sizeof text,
+             "keep-alive: HTTP %ld then %ld, new connections on the second: %ld (TLS %lld ms)",
+             first.status, second.status, new_connections, second.tls_us / US_PER_MS);
     report_check(p, ok, text);
     return ok;
 }
@@ -417,27 +455,47 @@ typedef struct tls_findings {
 } tls_findings;
 
 static int run_requests(probe *p, tls_findings *findings) {
-    const request_spec https = {"HTTPS, test CA", HTTPS_PORT, 1, 1, NULL, NULL};
-    const request_spec no_ca = {
-        "HTTPS without the test CA (must be refused)", HTTPS_PORT, 1, 0, NULL, NULL};
-    const request_spec mtls_none = {
-        "mTLS without a certificate (must be refused)", MTLS_PORT, 1, 1, NULL, NULL};
-    const request_spec mtls_wrong = {"mTLS, untrusted CA's certificate (must be refused)",
-                                     MTLS_PORT,
-                                     1,
-                                     1,
-                                     WRONG_CA_CERT_FILE,
-                                     WRONG_CA_KEY_FILE};
-    const request_spec mtls_ecdsa = {"mTLS, ECDSA P-256", MTLS_PORT,     1, 1,
-                                     ECDSA_CERT_FILE,     ECDSA_KEY_FILE};
-    const request_spec mtls_rsa = {"mTLS, RSA-2048", MTLS_PORT, 1, 1, RSA_CERT_FILE, RSA_KEY_FILE};
-    const request_spec http = {"plain HTTP", HTTP_PORT, 0, 0, NULL, NULL};
+    const request_spec https = {
+        .label = "HTTPS, test CA", .port = HTTPS_PORT, .https = 1, .ca_file = CA_FILE};
+    /* Trusting another CA, so verification really runs and must fail on the server's certificate.
+     */
+    const request_spec other_ca = {.label = "HTTPS trusting another CA (must be refused)",
+                                   .port = HTTPS_PORT,
+                                   .https = 1,
+                                   .ca_file = WRONG_CA_CERT_FILE,
+                                   .expect = EXPECT_UNTRUSTED_SERVER};
+    const request_spec mtls_none = {.label = "mTLS without a certificate (must be refused)",
+                                    .port = MTLS_PORT,
+                                    .https = 1,
+                                    .ca_file = CA_FILE,
+                                    .expect = EXPECT_TLS_REFUSED};
+    const request_spec mtls_wrong = {.label = "mTLS, untrusted CA's certificate (must be refused)",
+                                     .port = MTLS_PORT,
+                                     .https = 1,
+                                     .ca_file = CA_FILE,
+                                     .cert_file = WRONG_CA_CERT_FILE,
+                                     .key_file = WRONG_CA_KEY_FILE,
+                                     .expect = EXPECT_TLS_REFUSED};
+    const request_spec mtls_ecdsa = {.label = "mTLS, ECDSA P-256",
+                                     .port = MTLS_PORT,
+                                     .https = 1,
+                                     .ca_file = CA_FILE,
+                                     .cert_file = ECDSA_CERT_FILE,
+                                     .key_file = ECDSA_KEY_FILE};
+    const request_spec mtls_rsa = {.label = "mTLS, RSA-2048",
+                                   .port = MTLS_PORT,
+                                   .https = 1,
+                                   .ca_file = CA_FILE,
+                                   .cert_file = RSA_CERT_FILE,
+                                   .key_file = RSA_KEY_FILE};
+    const request_spec http = {.label = "plain HTTP", .port = HTTP_PORT};
 
-    int ok = expect_success(p, &https, &findings->https);
+    int ok = check_request(p, &https, &findings->https);
     ok &= check_tls_parameters(p, &findings->https);
-    ok &= expect_refusal(p, &no_ca);
-    ok &= expect_refusal(p, &mtls_none);
-    ok &= expect_refusal(p, &mtls_wrong);
+    request_result refused;
+    ok &= check_request(p, &other_ca, &refused);
+    ok &= check_request(p, &mtls_none, &refused);
+    ok &= check_request(p, &mtls_wrong, &refused);
     findings->https_median_us = median_handshake(p, &https);
     findings->ecdsa_median_us = median_handshake(p, &mtls_ecdsa);
     findings->rsa_median_us = median_handshake(p, &mtls_rsa);
@@ -445,7 +503,7 @@ static int run_requests(probe *p, tls_findings *findings) {
           findings->rsa_median_us >= 0;
     ok &= check_keep_alive(p, &https);
     request_result plain;
-    ok &= expect_success(p, &http, &plain);
+    ok &= check_request(p, &http, &plain);
     findings->http_total_us = plain.total_us;
     return ok;
 }

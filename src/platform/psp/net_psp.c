@@ -10,8 +10,7 @@
 #include <stdio.h>
 
 enum {
-    /* sceNetInit's memory pool and its callout and interrupt threads, as pspsdk's samples set them.
-     */
+    /* sceNetInit's pool and its callout and interrupt threads, as pspsdk's samples set them. */
     NET_POOL_BYTES = 128 * 1024,
     NET_CALLOUT_PRIORITY = 42,
     NET_CALLOUT_STACK_BYTES = 4 * 1024,
@@ -161,32 +160,45 @@ skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us) {
     return SKIFF_ERR_NET_TIMEOUT;
 }
 
+/* One layer of the teardown: on failure the stage stays at this layer, which is still live. */
+static int term(skiff_psp_net *net, skiff_psp_net_stage layer, const char *call, int result) {
+    if (!step(net, call, result)) {
+        return 0;
+    }
+    net->stage = (skiff_psp_net_stage)(layer - 1);
+    return 1;
+}
+
 skiff_err skiff_psp_net_unload(skiff_psp_net *net) {
     if (net == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
     clear_failure(net);
-    int ok = 1;
     if (net->stage >= SKIFF_PSP_NET_APCTL) {
-        ok &= step(net, "sceNetApctlTerm", sceNetApctlTerm());
+        int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+        if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
+            return SKIFF_ERR_NET_UNAVAILABLE;
+        }
+        net->apctl_state = state;
+        if (state != PSP_NET_APCTL_STATE_DISCONNECTED) {
+            step(net, "skiff_psp_net_unload (still connected)", -1);
+            return SKIFF_ERR_NET_UNAVAILABLE;
+        }
     }
-    if (net->stage >= SKIFF_PSP_NET_RESOLVER) {
-        ok &= step(net, "sceNetResolverTerm", sceNetResolverTerm());
-    }
-    if (net->stage >= SKIFF_PSP_NET_INET) {
-        ok &= step(net, "sceNetInetTerm", sceNetInetTerm());
-    }
-    if (net->stage >= SKIFF_PSP_NET_NET) {
-        ok &= step(net, "sceNetTerm", sceNetTerm());
-    }
-    if (net->stage >= SKIFF_PSP_NET_INET_MODULE) {
-        ok &= step(net, "sceUtilityUnloadNetModule(INET)",
-                   sceUtilityUnloadNetModule(PSP_NET_MODULE_INET));
-    }
-    if (net->stage >= SKIFF_PSP_NET_COMMON_MODULE) {
-        ok &= step(net, "sceUtilityUnloadNetModule(COMMON)",
-                   sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON));
-    }
-    net->stage = SKIFF_PSP_NET_NONE;
+    const int ok =
+        (net->stage < SKIFF_PSP_NET_APCTL ||
+         term(net, SKIFF_PSP_NET_APCTL, "sceNetApctlTerm", sceNetApctlTerm())) &&
+        (net->stage < SKIFF_PSP_NET_RESOLVER ||
+         term(net, SKIFF_PSP_NET_RESOLVER, "sceNetResolverTerm", sceNetResolverTerm())) &&
+        (net->stage < SKIFF_PSP_NET_INET ||
+         term(net, SKIFF_PSP_NET_INET, "sceNetInetTerm", sceNetInetTerm())) &&
+        (net->stage < SKIFF_PSP_NET_NET ||
+         term(net, SKIFF_PSP_NET_NET, "sceNetTerm", sceNetTerm())) &&
+        (net->stage < SKIFF_PSP_NET_INET_MODULE ||
+         term(net, SKIFF_PSP_NET_INET_MODULE, "sceUtilityUnloadNetModule(INET)",
+              sceUtilityUnloadNetModule(PSP_NET_MODULE_INET))) &&
+        (net->stage < SKIFF_PSP_NET_COMMON_MODULE ||
+         term(net, SKIFF_PSP_NET_COMMON_MODULE, "sceUtilityUnloadNetModule(COMMON)",
+              sceUtilityUnloadNetModule(PSP_NET_MODULE_COMMON)));
     return ok ? SKIFF_OK : SKIFF_ERR_NET_UNAVAILABLE;
 }

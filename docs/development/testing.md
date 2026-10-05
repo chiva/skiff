@@ -177,10 +177,11 @@ PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 - **Wi-Fi:** it joins the access point of a saved Network Settings profile, without the network
   picker, and reports the time and the IP address;
 - **HTTPS:** the heartbeat request is trusted through the test CA, and runs over TLS 1.3, or TLS 1.2
-  with an ECDHE key exchange (version and cipher suite are reported). A client without the test CA
-  is refused;
-- **Client certificates:** the mTLS port refuses a request without one and one from an untrusted CA.
-  It accepts the ECDSA P-256 and RSA-2048 test certificates;
+  with an ECDHE key exchange (version and cipher suite are reported). A client that trusts a
+  different CA must fail to verify the server's certificate;
+- **Client certificates:** the mTLS port refuses a request without one and one from an untrusted CA
+  (TCP connects, then TLS ends before any HTTP response). It accepts the ECDSA P-256 and RSA-2048
+  test certificates. A missing certificate file fails the run as a setup error, never as a refusal;
 - **Handshake times:** the median of 5 fresh connections for HTTPS and for each client certificate
   type;
 - **Keep-alive:** a second request on the same connection needs no new handshake;
@@ -202,8 +203,9 @@ On a PSP:
    one line to `net-log.txt` (join time, TLS version and cipher, the median handshake times, the
    lowest free system memory and the highest heap use).
 
-A failed join or unload names the firmware call and its result. The probe unloads the network
-modules only after a disconnect it confirmed. Without ARK, as in PPSSPP, TLS cannot start: the
+A failed join or unload names the firmware call and its result. `net_psp` refuses to unload the
+network modules while the access point is connected, and stops at the first layer that fails to
+come down. Without ARK, as in PPSSPP, TLS cannot start: the
 probe loads and unloads the network modules, checks that libcurl refuses to start, and ends with
 `SKIFF NET PROBE NO ARK OK` (`scripts/dev.sh net-probe`, run in CI).
 

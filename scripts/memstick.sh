@@ -54,6 +54,11 @@ install_net_probe_config() {
   local dest="$GAME_DIR/$NET_PROBE_FOLDER" host profile="${SKIFF_NET_PROFILE:-$DEFAULT_NET_PROFILE}"
   host="$(test_server_lan_ip)"
   if [[ -z "$host" ]]; then
+    # A previous install's address and certificates would point the probe at another server.
+    rm -f "$dest/net-probe.ini"
+    for file in "${NET_PROBE_FILES[@]}"; do
+      rm -f "$dest/$file"
+    done
     echo "note: no LAN test server; run scripts/dev.sh romm-lan and install again before running" \
       "the network probe" >&2
     return

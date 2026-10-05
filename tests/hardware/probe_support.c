@@ -87,8 +87,11 @@ static int apply(skiff_probe_config *config, const char *key, const char *value)
         return copy_value(config->host, sizeof config->host, value);
     }
     if (strcmp(key, "plain_http") == 0) {
-        config->plain_http = strcmp(value, "1") == 0;
-        return 1;
+        /* Anything but 0 or 1 is a typo, which would otherwise skip the plain-HTTP comparisons. */
+        const int on = strcmp(value, "1") == 0;
+        const int ok = on || strcmp(value, "0") == 0;
+        config->plain_http = ok ? on : config->plain_http;
+        return ok;
     }
     if (strcmp(key, "profile") == 0) {
         const int ok = parse_bounded(value, SKIFF_PROBE_DEFAULT_PROFILE, INT32_MAX, &number);

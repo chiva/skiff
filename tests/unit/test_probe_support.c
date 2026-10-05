@@ -93,6 +93,14 @@ static void test_all_selects_every_section(void) {
     TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SECTION_ALL, config.sections);
 }
 
+static void test_plain_http_takes_only_0_or_1(void) {
+    read_text("plain_http=1\nplain_http=yes\nplain_http=\n");
+    TEST_ASSERT_EQUAL_INT(1, config.plain_http);
+    TEST_ASSERT_EQUAL_INT(2, config.invalid_values);
+    read_text("plain_http=0\n");
+    TEST_ASSERT_EQUAL_INT(0, config.plain_http);
+}
+
 static void test_reads_the_clock_and_its_section(void) {
     TEST_ASSERT_EQUAL_INT(0, config.clock_mhz);
     read_text("clock_mhz=333\nsections=clock\n");
@@ -234,6 +242,7 @@ int main(void) {
     RUN_TEST(test_ignores_comments_blank_lines_crlf_and_unknown_keys);
     RUN_TEST(test_reads_runs_and_sections);
     RUN_TEST(test_all_selects_every_section);
+    RUN_TEST(test_plain_http_takes_only_0_or_1);
     RUN_TEST(test_reads_the_clock_and_its_section);
     RUN_TEST(test_a_clock_other_than_222_or_333_is_invalid);
     RUN_TEST(test_unusable_values_keep_the_default_and_are_counted);

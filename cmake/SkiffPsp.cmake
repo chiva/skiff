@@ -117,10 +117,11 @@ target_include_directories(skiff_psp_net PUBLIC src/platform/psp)
 skiff_set_warnings(skiff_psp_net)
 
 # Network probe (Phase 1 hardware spike): joins Wi-Fi through a saved profile and runs HTTPS and mTLS
-# requests against the test RomM (tests/integration). Without ARK (PPSSPP, CI) it checks that TLS
-# refuses while the network modules still load and unload.
+# requests against the test RomM (tests/integration), raw and through Skiff's transport (skiff_net).
+# Without ARK (PPSSPP, CI) it checks that TLS refuses while the network modules still load and
+# unload.
 skiff_add_psp_app(skiff_net_probe "${SKIFF_PBP_TITLE} network probe" tests/hardware/net_probe.c)
-target_link_libraries(skiff_net_probe PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ark
+target_link_libraries(skiff_net_probe PRIVATE skiff_net skiff_psp_check skiff_psp_net skiff_psp_ark
                                               skiff_psp_tls skiff_psp_entropy)
 
 # UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen

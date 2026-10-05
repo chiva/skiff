@@ -218,6 +218,11 @@ PPSSPP has no ARK, so that is what CI runs (`scripts/dev.sh kirk-probe`).
 - **Keep-alive:** a second request on the same connection needs no new handshake;
 - **Plain HTTP:** one request, for comparison, when the server publishes it on the LAN
   (`SKIFF_LAN_PLAIN_HTTP=1 scripts/dev.sh romm-lan`); skipped otherwise;
+- **Skiff's transport** (`skiff_net`, the layer the app uses): two heartbeats on one kept
+  connection, the seeded file downloaded whole (with its speed, checked against the seeded CRC32), resumed from byte 1000 with the
+  current ETag (206, the same bytes as the whole download) and with a stale one (the whole file
+  again), and a request with the TLS clock forced back to 2000, which must fail with
+  `SKIFF_ERR_NET_TLS_CLOCK` (108) before the real clock is put back;
 - **Memory:** free system memory and heap use before and after the network modules load, after
   joining, at their worst while the requests run, and after unloading.
 
@@ -227,13 +232,15 @@ On a PSP:
    [Wi-Fi guide](../guide/02-wifi.md)), and note its position in the list (the first is 1).
 2. `scripts/dev.sh romm-lan` on the computer, so the PSP can reach the server.
 3. PSP in USB mode: `scripts/memstick.sh install <mount>`. With a test server running, it writes
-   `net-probe.ini` (the server's address and the profile, `SKIFF_NET_PROFILE`, default 1) and copies
-   the test CA and client certificates next to the probe. Eject.
+   `net-probe.ini` (the server's address, the profile (`SKIFF_NET_PROFILE`, default 1), and the
+   seeded file, its CRC32 and the API token from `build/integration/romm.json`) and copies the test CA and client
+   certificates next to the probe. The token only opens that throwaway server; uninstall removes it
+   with the folder. Eject.
 4. With the Wi-Fi switch on, run **Skiff network probe**; it returns to the XMB when done (under a
    minute).
 5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF NET PROBE OK`. Each run also appends
    one line to `net-log.txt` (join time, TLS version and cipher, the median handshake times, the
-   lowest free system memory and the highest heap use).
+   transport's download time, the lowest free system memory and the highest heap use).
 
 A failed join or unload names the firmware call and its result. `net_psp` refuses to unload the
 network modules while the access point is connected, and stops at the first layer that fails to

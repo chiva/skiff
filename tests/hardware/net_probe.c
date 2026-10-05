@@ -14,11 +14,14 @@
  *     with the ECDSA P-256 and the RSA-2048 test certificates. Handshake times are the median of
  *     HANDSHAKE_RUNS fresh connections each, against plain HTTPS as the baseline;
  *   - keep-alive: a second request on the same handle reuses the connection (no new handshake);
- *   - plain HTTP for comparison.
+ *   - plain HTTP for comparison;
+ *   - Skiff's own network layer (skiff_net, include/skiff/curl_transport.h) on the PSP: keep-alive,
+ *     downloading the seeded file and resuming it with Range and If-Range (current and stale ETag),
+ *     and a clock forced back to 2000 reported as SKIFF_ERR_NET_TLS_CLOCK (108).
  *
- * scripts/memstick.sh install writes net-probe.ini (the server's address and the profile number)
- * and copies the test CA and client certificates next to the EBOOT. Each run appends one line to
- * net-log.txt.
+ * scripts/memstick.sh install writes net-probe.ini (the server's address, the profile number, and
+ * the seeded file and API token from the test server) and copies the test CA and client
+ * certificates next to the EBOOT. Each run appends one line to net-log.txt.
  *
  * Without ARK (PPSSPP in CI) TLS cannot start, since its entropy comes only from KIRK through ARK.
  * The probe then loads and unloads the network modules, checks that libcurl refuses to start, and
@@ -28,7 +31,6 @@
 #include <malloc.h>
 #include <mbedtls/platform_time.h>
 #include <mbedtls/ssl.h>
-#include <mbedtls/x509_crt.h>
 #include <pspkernel.h>
 #include <psputility.h>
 #include <stdio.h>
@@ -36,6 +38,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "skiff/curl_transport.h"
 #include "skiff/selftest.h"
 
 #include "kirk_entropy.h"
@@ -73,17 +76,26 @@ enum {
     CONFIG_LINE_MAX = 160,
     BODY_EXCERPT_MAX = 256,
     TLS_NAME_MAX = 64,
-    VERIFY_INFO_MAX = 160,
+    TOKEN_MAX = 128,
+    ROM_ID_MAX = 16,
+    FILE_NAME_MAX = 128,
+    /* Resume the seeded file from here; the bytes after it are compared between both downloads. */
+    RESUME_OFFSET = 1000,
     CLOCK_TEXT_MAX = 32,
     /* Request and run-log lines carry labels, curl's message and TLS names: longer than a check. */
     LONG_LINE_MAX = 512,
+    /* https://<host>:8443/api/roms/<id>/content/<URL-encoded file name> */
+    CONTENT_URL_MAX = 320,
     DEFAULT_PROFILE = 1,
     DECIMAL = 10,
+    HEXADECIMAL = 16,
+    BITS_PER_BYTE = 8,
     HANDSHAKE_RUNS = 5,
     HTTP_PORT = 8080,
     HTTPS_PORT = 8443,
     MTLS_PORT = 8444,
     HTTP_OK = 200,
+    HTTP_STATUS_PARTIAL = 206,
     BYTES_PER_KB = 1024,
     US_PER_MS = 1000,
     CURL_CONNECT_TIMEOUT_S = 10,
@@ -91,6 +103,17 @@ enum {
 };
 
 #define WIFI_JOIN_TIMEOUT_US (30LL * 1000 * 1000)
+/* A PSP whose battery ran flat: its clock restarts years before any certificate was issued. */
+#define CLOCK_RESET_TO_2000 ((mbedtls_time_t)946684800)
+#define STALE_ETAG "\"stale\""
+#define BEARER_PREFIX "Bearer "
+/* FNV-1a, to compare the bytes of two downloads without keeping either in memory. */
+#define FNV_OFFSET_BASIS 2166136261U
+#define FNV_PRIME 16777619U
+/* CRC-32 (IEEE 802.3, reflected), what RomM records as crc_hash: checks the whole download against
+ * the seeded file, not just against itself. */
+#define CRC32_POLYNOMIAL 0xEDB88320U
+#define CRC32_INITIAL 0xFFFFFFFFU
 #define DISCONNECT_TIMEOUT_US (10LL * 1000 * 1000)
 
 typedef struct probe_config {
@@ -98,6 +121,13 @@ typedef struct probe_config {
     char host[HOST_MAX];
     /* romm-lan keeps plain HTTP off the LAN unless asked; memstick.sh says which. */
     int plain_http;
+    /* The test server's seeded file and API token (romm.json), for the download checks. */
+    char token[TOKEN_MAX];
+    char rom_id[ROM_ID_MAX];
+    char file_name[FILE_NAME_MAX]; /* URL-encoded */
+    unsigned long long size;
+    uint32_t crc32;
+    int has_crc32;
 } probe_config;
 
 typedef struct memory_snapshot {
@@ -146,8 +176,6 @@ typedef struct request_result {
     int body_ok;
     char tls_version[TLS_NAME_MAX];
     char cipher[TLS_NAME_MAX];
-    /* Why the server's certificate was rejected (Mbed TLS's verify flags), when it was. */
-    long verify_flags;
 } request_result;
 
 /* Response bytes kept for the heartbeat check, and the request they belong to. */
@@ -240,13 +268,30 @@ static int read_config(probe *p) {
             p->config.plain_http = strcmp(value, "1") == 0;
         } else if (strcmp(line, "profile") == 0) {
             p->config.profile = (int)strtol(value, NULL, DECIMAL);
+        } else if (strcmp(line, "token") == 0) {
+            snprintf(p->config.token, sizeof p->config.token, "%s", value);
+        } else if (strcmp(line, "rom_id") == 0) {
+            snprintf(p->config.rom_id, sizeof p->config.rom_id, "%s", value);
+        } else if (strcmp(line, "file_name") == 0) {
+            snprintf(p->config.file_name, sizeof p->config.file_name, "%s", value);
+        } else if (strcmp(line, "size") == 0) {
+            p->config.size = strtoull(value, NULL, DECIMAL);
+        } else if (strcmp(line, "crc32") == 0 && value[0] != '\0') {
+            char *end = NULL;
+            p->config.crc32 = (uint32_t)strtoul(value, &end, HEXADECIMAL);
+            p->config.has_crc32 = *end == '\0';
         }
     }
     fclose(file);
     char text[SKIFF_SELFTEST_LINE_MAX];
-    const int ok = p->config.host[0] != '\0' && p->config.profile >= DEFAULT_PROFILE;
-    snprintf(text, sizeof text, "config: server %s, Network Settings profile %d",
-             p->config.host[0] != '\0' ? p->config.host : "(missing)", p->config.profile);
+    const int ok = p->config.host[0] != '\0' && p->config.profile >= DEFAULT_PROFILE &&
+                   p->config.token[0] != '\0' && p->config.rom_id[0] != '\0' &&
+                   p->config.file_name[0] != '\0' && p->config.size > RESUME_OFFSET &&
+                   p->config.has_crc32;
+    snprintf(text, sizeof text,
+             "config: server %s, Network Settings profile %d, ROM %s (%llu bytes)",
+             p->config.host[0] != '\0' ? p->config.host : "(missing)", p->config.profile,
+             p->config.rom_id[0] != '\0' ? p->config.rom_id : "(missing)", p->config.size);
     report_check(p, ok, text);
     return ok;
 }
@@ -340,7 +385,6 @@ static void read_result(CURL *curl, const body_buffer *body, CURLcode code,
     result->tls_us = app > tcp ? (long long)(app - tcp) : 0;
     result->total_us = (long long)total;
     result->body_ok = strstr(body->data, HEARTBEAT_MARKER) != NULL;
-    curl_easy_getinfo(curl, CURLINFO_SSL_VERIFYRESULT, &result->verify_flags);
 }
 
 static int request_ok(const request_result *result) {
@@ -374,14 +418,6 @@ static void log_request(probe *p, const request_spec *spec, const request_result
              result->status, result->tcp_us / US_PER_MS, result->tls_us / US_PER_MS,
              result->total_us / US_PER_MS, result->tls_version, result->cipher);
     skiff_psp_report_line(&p->report, line);
-    if (result->code == CURLE_PEER_FAILED_VERIFICATION && result->verify_flags != 0) {
-        char info[VERIFY_INFO_MAX];
-        mbedtls_x509_crt_verify_info(info, sizeof info, "", (uint32_t)result->verify_flags);
-        trim_line(info);
-        snprintf(line, sizeof line, "     certificate rejected (flags 0x%08lX): %s",
-                 (unsigned long)result->verify_flags, info);
-        skiff_psp_report_line(&p->report, line);
-    }
 }
 
 /* One fresh connection (a full handshake). */
@@ -481,12 +517,190 @@ static int check_keep_alive(probe *p, const request_spec *spec) {
     return ok;
 }
 
+/* A download hashed as it arrives: every byte of the body (whole), and the bytes from file offset
+ * RESUME_OFFSET on (suffix), which a resumed 206 must match. */
+typedef struct download_digest {
+    const skiff_http_response *response;
+    int started;
+    unsigned long long position; /* file offset of the next byte */
+    uint32_t whole;
+    uint32_t suffix;
+    uint32_t crc32; /* running value; finish with crc32_value() */
+} download_digest;
+
+static uint32_t crc32_update(uint32_t crc, unsigned char byte) {
+    crc ^= byte;
+    for (int bit = 0; bit < BITS_PER_BYTE; bit++) {
+        crc = (crc & 1U) != 0 ? (crc >> 1) ^ CRC32_POLYNOMIAL : crc >> 1;
+    }
+    return crc;
+}
+
+static uint32_t crc32_value(const download_digest *digest) { return ~digest->crc32; }
+
+/* The status and headers are parsed before the first chunk: a 206 starts where its Content-Range
+ * says, anything else (a whole file, also after a stale If-Range) at byte 0. */
+static skiff_err digest_body(void *ctx, const unsigned char *data, size_t size) {
+    download_digest *digest = ctx;
+    if (!digest->started) {
+        digest->started = 1;
+        digest->position = digest->response->has_content_range ? digest->response->range_start : 0;
+    }
+    for (size_t i = 0; i < size; i++, digest->position++) {
+        digest->whole = (digest->whole ^ data[i]) * FNV_PRIME;
+        digest->crc32 = crc32_update(digest->crc32, data[i]);
+        if (digest->position >= RESUME_OFFSET) {
+            digest->suffix = (digest->suffix ^ data[i]) * FNV_PRIME;
+        }
+    }
+    return SKIFF_OK;
+}
+
+/* One request through skiff_net; with resume, from RESUME_OFFSET with if_range. */
+static skiff_err transport_get(probe *p, skiff_transport *transport, const char *url, int resume,
+                               const char *if_range, download_digest *digest,
+                               skiff_http_response *response, long long *elapsed_us) {
+    digest->response = response;
+    digest->started = 0;
+    digest->position = 0;
+    digest->whole = FNV_OFFSET_BASIS;
+    digest->suffix = FNV_OFFSET_BASIS;
+    digest->crc32 = CRC32_INITIAL;
+    const skiff_http_request request = {.url = url,
+                                        .has_range = resume,
+                                        .range_start = resume ? RESUME_OFFSET : 0,
+                                        .if_range = if_range,
+                                        .on_body = digest_body,
+                                        .body_ctx = digest};
+    const long long start_us = sceKernelGetSystemTimeWide();
+    const skiff_err err = skiff_transport_perform(transport, &request, response);
+    *elapsed_us = sceKernelGetSystemTimeWide() - start_us;
+    track_memory(p);
+    return err;
+}
+
+static int report_transport(probe *p, int ok, const char *label, skiff_err err,
+                            const skiff_http_response *response, long long elapsed_us) {
+    char text[LONG_LINE_MAX];
+    snprintf(text, sizeof text,
+             "skiff_net %s: %s, HTTP %ld, %llu bytes, %ld new connection(s), %lld ms", label,
+             skiff_err_name(err), response->status, (unsigned long long)response->body_bytes,
+             response->new_connections, elapsed_us / US_PER_MS);
+    report_check(p, ok, text);
+    return ok;
+}
+
+/* A fresh transport (no kept connection, no TLS session) trusting the test CA, with the token. */
+static skiff_transport *create_transport(probe *p, const char *authorization) {
+    char ca[PATH_MAX_LEN];
+    if (!existing_sibling(p, CA_FILE, ca)) {
+        return NULL;
+    }
+    const skiff_http_header headers[] = {{"Authorization", authorization}};
+    const skiff_curl_config config = {
+        .ca_file = ca, .default_headers = headers, .default_header_count = 1};
+    skiff_transport *transport = NULL;
+    const skiff_err err = skiff_curl_transport_create(&config, &transport);
+    if (err != SKIFF_OK) {
+        char text[SKIFF_SELFTEST_LINE_MAX];
+        snprintf(text, sizeof text, "skiff_net: creating the transport failed: %s",
+                 skiff_err_name(err));
+        report_check(p, 0, text);
+    }
+    return transport;
+}
+
+static mbedtls_time_t clock_reset_to_2000(mbedtls_time_t *out) {
+    if (out != NULL) {
+        *out = CLOCK_RESET_TO_2000;
+    }
+    return CLOCK_RESET_TO_2000;
+}
+
+/* The app's transport on the PSP: keep-alive, a whole download, resuming it, and the clock rule. */
+static int run_transport_checks(probe *p, long long *download_us) {
+    const probe_config *config = &p->config;
+    char authorization[TOKEN_MAX + sizeof BEARER_PREFIX];
+    char heartbeat[URL_MAX];
+    char content[CONTENT_URL_MAX];
+    snprintf(authorization, sizeof authorization, BEARER_PREFIX "%s", config->token);
+    snprintf(heartbeat, sizeof heartbeat, "https://%s:%d" HEARTBEAT_PATH, config->host, HTTPS_PORT);
+    snprintf(content, sizeof content, "https://%s:%d/api/roms/%s/content/%s", config->host,
+             HTTPS_PORT, config->rom_id, config->file_name);
+    skiff_transport *transport = create_transport(p, authorization);
+    if (transport == NULL) {
+        return 0;
+    }
+    skiff_http_response response;
+    download_digest digest;
+    long long elapsed_us = 0;
+
+    skiff_err err =
+        transport_get(p, transport, heartbeat, 0, NULL, &digest, &response, &elapsed_us);
+    int ok = report_transport(p, err == SKIFF_OK && response.status == HTTP_OK, "heartbeat", err,
+                              &response, elapsed_us);
+    err = transport_get(p, transport, heartbeat, 0, NULL, &digest, &response, &elapsed_us);
+    ok &= report_transport(
+        p, err == SKIFF_OK && response.status == HTTP_OK && response.new_connections == 0,
+        "heartbeat on the kept connection", err, &response, elapsed_us);
+
+    err = transport_get(p, transport, content, 0, NULL, &digest, &response, download_us);
+    char etag[SKIFF_HTTP_ETAG_MAX];
+    snprintf(etag, sizeof etag, "%s", response.etag);
+    const download_digest whole_file = digest;
+    ok &= report_transport(
+        p,
+        err == SKIFF_OK && response.status == HTTP_OK && response.body_bytes == config->size &&
+            etag[0] != '\0' && crc32_value(&digest) == config->crc32,
+        "whole download (CRC32 of the seeded file)", err, &response, *download_us);
+    char text[LONG_LINE_MAX];
+    snprintf(text, sizeof text,
+             "skiff_net download speed: %llu KB/s, ETag %s, CRC32 %08lx (seeded %08lx)",
+             *download_us > 0
+                 ? (unsigned long long)(response.body_bytes * US_PER_MS * US_PER_MS /
+                                        (unsigned long long)*download_us / BYTES_PER_KB)
+                 : 0ULL,
+             etag[0] != '\0' ? etag : "(none)", (unsigned long)crc32_value(&whole_file),
+             (unsigned long)config->crc32);
+    skiff_psp_report_line(&p->report, text);
+
+    err = transport_get(p, transport, content, 1, etag, &digest, &response, &elapsed_us);
+    ok &= report_transport(
+        p,
+        err == SKIFF_OK && response.status == HTTP_STATUS_PARTIAL && response.has_content_range &&
+            response.range_start == RESUME_OFFSET &&
+            response.body_bytes == config->size - RESUME_OFFSET &&
+            digest.suffix == whole_file.suffix,
+        "resume with the current ETag (206, same bytes)", err, &response, elapsed_us);
+    err = transport_get(p, transport, content, 1, STALE_ETAG, &digest, &response, &elapsed_us);
+    ok &= report_transport(
+        p,
+        err == SKIFF_OK && response.status == HTTP_OK && response.body_bytes == config->size &&
+            digest.whole == whole_file.whole,
+        "resume with a stale ETag (whole file again)", err, &response, elapsed_us);
+    skiff_transport_destroy(transport);
+
+    /* The real clock goes back whatever happens: later requests verify certificates against it. */
+    mbedtls_time_t (*const psp_clock)(mbedtls_time_t *) = mbedtls_time;
+    mbedtls_platform_set_time(clock_reset_to_2000);
+    transport = create_transport(p, authorization);
+    err = transport != NULL
+              ? transport_get(p, transport, heartbeat, 0, NULL, &digest, &response, &elapsed_us)
+              : SKIFF_ERR_NO_MEMORY;
+    mbedtls_platform_set_time(psp_clock);
+    skiff_transport_destroy(transport);
+    ok &= report_transport(p, err == SKIFF_ERR_NET_TLS_CLOCK, "clock forced to 2000 (must be 108)",
+                           err, &response, elapsed_us);
+    return ok;
+}
+
 typedef struct tls_findings {
     request_result https;
     long long https_median_us;
     long long ecdsa_median_us;
     long long rsa_median_us;
     long long http_total_us;
+    long long download_us;
 } tls_findings;
 
 static int run_requests(probe *p, tls_findings *findings) {
@@ -537,6 +751,7 @@ static int run_requests(probe *p, tls_findings *findings) {
     ok &= findings->https_median_us >= 0 && findings->ecdsa_median_us >= 0 &&
           findings->rsa_median_us >= 0;
     ok &= check_keep_alive(p, &https);
+    ok &= run_transport_checks(p, &findings->download_us);
     if (p->config.plain_http) {
         request_result plain;
         ok &= check_request(p, &http, &plain);
@@ -560,12 +775,13 @@ static int append_log(probe *p, const char *ip, long long join_us, const tls_fin
     char line[LONG_LINE_MAX];
     snprintf(line, sizeof line,
              "ip=%s join_ms=%lld tls=%s cipher=%s https_tls_ms=%lld ecdsa_tls_ms=%lld "
-             "rsa_tls_ms=%lld http_total_ms=%lld system_free_low_kb=%u heap_peak_kb=%u",
+             "rsa_tls_ms=%lld http_total_ms=%lld download_ms=%lld system_free_low_kb=%u "
+             "heap_peak_kb=%u",
              ip, join_us / US_PER_MS, findings->https.tls_version, findings->https.cipher,
              findings->https_median_us / US_PER_MS, findings->ecdsa_median_us / US_PER_MS,
              findings->rsa_median_us / US_PER_MS,
              findings->http_total_us < 0 ? -1LL : findings->http_total_us / US_PER_MS,
-             (unsigned)(p->system_free_low / BYTES_PER_KB),
+             findings->download_us / US_PER_MS, (unsigned)(p->system_free_low / BYTES_PER_KB),
              (unsigned)(p->heap_peak / BYTES_PER_KB));
     const int written = fprintf(file, "%s\n", line) > 0;
     const int closed = fclose(file) == 0;

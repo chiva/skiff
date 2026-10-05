@@ -799,6 +799,18 @@ static void record_frame(frame_stats *stats, long long elapsed_us) {
     }
 }
 
+/*
+ * A dialog the run gave up on may still own input and the screen, so the tester might never reach
+ * START or HOME again: end the run there, while result.txt can still get its FAIL marker.
+ */
+static int dialog_stuck(const ui_state *ui, const dialog_outcome *outcome) {
+    if (!outcome->started || outcome->closed) {
+        return 0;
+    }
+    log_step(ui, "FAIL dialog still open: ending the run to report");
+    return 1;
+}
+
 static void run_list(ui_state *ui, proto_results *results) {
     const long long headless_deadline = now_us() + HEADLESS_EXIT_US;
     int any_input = 0;
@@ -824,10 +836,16 @@ static void run_list(ui_state *ui, proto_results *results) {
         }
         if (buttons & PSP_CTRL_TRIANGLE) {
             open_keyboard(ui, results);
+            if (dialog_stuck(ui, &results->osk)) {
+                return;
+            }
             continue;
         }
         if (buttons & PSP_CTRL_SQUARE) {
             open_network_picker(ui, results);
+            if (dialog_stuck(ui, &results->netconf)) {
+                return;
+            }
             continue;
         }
 

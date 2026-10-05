@@ -120,15 +120,15 @@ install_probe_config() {
 
 install_probe_configs() {
   install_probe_config "$NET_PROBE_FOLDER" net-probe.ini "" "${NET_PROBE_FILES[@]}"
-  local bench_extra=()
+  # A string, not an array: macOS's Bash 3.2 rejects an empty array under set -u.
+  local bench_extra=""
   if [[ -n "${SKIFF_BENCH_RUNS:-}" ]]; then
-    bench_extra+=("runs=$SKIFF_BENCH_RUNS")
+    bench_extra+="runs=$SKIFF_BENCH_RUNS"$'\n'
   fi
   if [[ -n "${SKIFF_BENCH_SECTIONS:-}" ]]; then
-    bench_extra+=("sections=$SKIFF_BENCH_SECTIONS")
+    bench_extra+="sections=$SKIFF_BENCH_SECTIONS"$'\n'
   fi
-  install_probe_config "$BENCH_FOLDER" bench.ini "$(printf '%s\n' "${bench_extra[@]}")" \
-    "${BENCH_FILES[@]}"
+  install_probe_config "$BENCH_FOLDER" bench.ini "${bench_extra%$'\n'}" "${BENCH_FILES[@]}"
 }
 
 install_eboots() {

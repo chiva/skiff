@@ -98,8 +98,9 @@ size_t skiff_config_headers(const skiff_config *config, skiff_http_header *out, 
  * key's line is rewritten in place (its first occurrence, keeping the key as written); a missing
  * key is added after the last setting of its section, a missing section at the end. Line endings
  * follow the text's first line (CRLF for a file saved on Windows). Returns SKIFF_ERR_INVALID_ARG
- * for a NULL argument, text and out overlapping (out must be another buffer), a section or key
- * that would not parse back (empty, blanks at either end, '=', '[', ']', a line break, or a leading
+ * for a NULL argument, out overlapping text, section, key or value (out must be its own buffer), a
+ * section or key that would not parse back (empty, blanks at either end, '=', '[', ']', a line
+ * break, or a leading
  * '#' or ';'), a value with a line break or blanks at either end; SKIFF_ERR_BUFFER_TOO_SMALL if the
  * result does not fit. The result is parsed before it is returned, so it always loads back: when
  * skiff_config_parse() refuses it (a bad value for this key, or a damaged line elsewhere in text),

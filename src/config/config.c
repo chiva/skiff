@@ -483,6 +483,13 @@ static void put_setting(builder *b, const char *key, const char *value, const ch
     put_text(b, eol);
 }
 
+static int overlaps(const char *input, size_t input_size, const char *out, size_t out_size) {
+    const uintptr_t input_start = (uintptr_t)input;
+    const uintptr_t out_start = (uintptr_t)out;
+    return input_size > 0 && input_start < out_start + out_size &&
+           out_start < input_start + input_size;
+}
+
 skiff_err skiff_config_set(const char *text, size_t length, const char *section, const char *key,
                            const char *value, char *out, size_t out_size, size_t *out_length,
                            skiff_config_issue *issue) {
@@ -494,11 +501,11 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
         !is_settable_name(key) || !is_settable_value(value)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    /* out is written while text is still being read. */
-    const uintptr_t text_start = (uintptr_t)text;
-    const uintptr_t out_start = (uintptr_t)out;
-    if (text != NULL && length > 0 && text_start < out_start + out_size &&
-        out_start < text_start + length) {
+    /* out is written while the inputs are still being read. */
+    if ((text != NULL && overlaps(text, length, out, out_size)) ||
+        overlaps(section, strlen(section) + 1, out, out_size) ||
+        overlaps(key, strlen(key) + 1, out, out_size) ||
+        overlaps(value, strlen(value) + 1, out, out_size)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     const span source = {text != NULL ? text : "", length};

@@ -515,6 +515,22 @@ static void test_an_edit_into_its_own_buffer_is_refused(void) {
     TEST_ASSERT_EQUAL_STRING("[auth]\ntoken = old\n", text);
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_config_set(text + 8, 4, "auth", "token", "v",
                                                                   text, 10, &length, NULL));
+    TEST_PRINTF(
+        "nor may the value, key or section live in out: out is cleared before they are read");
+    char out[64] = "https://new.example";
+    const char *base = "[server]\nurl = https://a\n";
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_config_set(base, strlen(base), "server", "url", out, out, sizeof out, &length, NULL));
+    snprintf(out, sizeof out, "url");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_config_set(base, strlen(base), "server", out, "https://b", out,
+                                           sizeof out, &length, NULL));
+    snprintf(out, sizeof out, "server");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_config_set(base, strlen(base), out, "url", "https://b", out,
+                                           sizeof out, &length, NULL));
+    TEST_ASSERT_EQUAL_STRING("server", out);
 }
 
 static void test_an_edit_that_does_not_fit_is_refused(void) {

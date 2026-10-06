@@ -33,6 +33,13 @@
 /* "\u0000": an escaped NUL would cut a name short where C strings end. */
 #define JSON_ESCAPED_NUL "u0000"
 #define JSON_ESCAPED_NUL_LENGTH 5
+/* UTF-8 continuation bytes are 10xxxxxx. */
+#define UTF8_CONTINUATION_MASK 0xC0U
+#define UTF8_CONTINUATION 0x80U
+/* C1 control characters, U+0080 to U+009F, in UTF-8. */
+#define UTF8_C1_LEAD 0xC2U
+#define UTF8_C1_FIRST 0x80U
+#define UTF8_C1_LAST 0x9FU
 
 /* ---- Fields ---- */
 
@@ -52,11 +59,24 @@ static int read_count(const cJSON *object, const char *name, uint64_t *out) {
     return 1;
 }
 
+/*
+ * The bytes of the control character text starts with: 1 for C0 (below ' ') and DEL, 2 for a C1
+ * control (U+0080 to U+009F, which UTF-8 writes as C2 80 to C2 9F), 0 for anything else. text is
+ * NUL-terminated, so reading the byte after a C2 stays inside it.
+ */
+static size_t control_length(const char *text) {
+    const unsigned char byte = (unsigned char)text[0];
+    if (byte < (unsigned char)' ' || byte == ASCII_DELETE) {
+        return 1;
+    }
+    const unsigned char next = (unsigned char)text[1];
+    return byte == UTF8_C1_LEAD && next >= UTF8_C1_FIRST && next <= UTF8_C1_LAST ? 2 : 0;
+}
+
 /* No control character, decoded from an escape such as "\u001b": a name is shown and logged. */
 static int is_printable_text(const char *text) {
     for (const char *c = text; *c != '\0'; c++) {
-        const unsigned char byte = (unsigned char)*c;
-        if (byte < (unsigned char)' ' || byte == ASCII_DELETE) {
+        if (control_length(c) > 0) {
             return 0;
         }
     }
@@ -83,6 +103,78 @@ static int read_optional_text(const cJSON *object, const char *name, char *out, 
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
     out[0] = '\0';
     return item == NULL || cJSON_IsNull(item) || read_text(object, name, out, out_size);
+}
+
+static int is_control_byte(char c) {
+    const unsigned char byte = (unsigned char)c;
+    return byte < (unsigned char)' ' || byte == ASCII_DELETE;
+}
+
+/* The first byte of a UTF-8 character, or ASCII: a cut before it splits no character. */
+static int starts_character(char c) {
+    return ((unsigned char)c & UTF8_CONTINUATION_MASK) != UTF8_CONTINUATION;
+}
+
+/*
+ * Copies text into out (out_size > sizeof SKIFF_ROMM_NAME_CUT_MARKER) in the form a list can show:
+ * each control character replaced, and a text too long cut at a character boundary with the
+ * marker after it. Returns what was wrong with it.
+ */
+static skiff_romm_name_status copy_display_name(const char *text, char *out, size_t out_size) {
+    const size_t length = strlen(text);
+    size_t kept = length;
+    if (length >= out_size) {
+        kept = out_size - sizeof SKIFF_ROMM_NAME_CUT_MARKER;
+        while (kept > 0 && !starts_character(text[kept])) {
+            kept--;
+        }
+    }
+    int control = 0;
+    for (size_t i = 0; i < length; i++) {
+        control = control || control_length(text + i) > 0;
+    }
+    /* kept ends on a character boundary, so no control character straddles it; one '?' per control
+     * character makes the copy no longer than kept. */
+    size_t used = 0;
+    for (size_t i = 0; i < kept;) {
+        const size_t skip = control_length(text + i);
+        if (skip > 0) {
+            out[used++] = SKIFF_ROMM_NAME_REPLACEMENT;
+            i += skip;
+        } else {
+            out[used++] = text[i++];
+        }
+    }
+    out[used] = '\0';
+    if (kept < length) {
+        memcpy(out + used, SKIFF_ROMM_NAME_CUT_MARKER, sizeof SKIFF_ROMM_NAME_CUT_MARKER);
+    }
+    return control         ? SKIFF_ROMM_NAME_CONTROL_CHAR
+           : kept < length ? SKIFF_ROMM_NAME_TOO_LONG
+                           : SKIFF_ROMM_NAME_OK;
+}
+
+/*
+ * A name RomM gives (a ROM's title or file name) into out in display form, with what was wrong
+ * with it in *status (left alone when nothing was, so one status covers several names). 0 only for
+ * a structural problem: absent or empty when required, or not a string (null counts as absent).
+ */
+static int read_name(const cJSON *object, const char *name, int required, char *out,
+                     size_t out_size, skiff_romm_name_status *status) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
+    out[0] = '\0';
+    if (item == NULL || cJSON_IsNull(item)) {
+        return !required;
+    }
+    if (!cJSON_IsString(item) || item->valuestring == NULL ||
+        (required && item->valuestring[0] == '\0')) {
+        return 0;
+    }
+    const skiff_romm_name_status found = copy_display_name(item->valuestring, out, out_size);
+    if (*status == SKIFF_ROMM_NAME_OK) {
+        *status = found;
+    }
+    return 1;
 }
 
 /* RomM's crc_hash: hexadecimal, at most 8 digits; empty or null when RomM has none. */
@@ -113,8 +205,8 @@ static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     memset(out, 0, sizeof *out);
     if (!cJSON_IsObject(item) || !read_count(item, "id", &out->id) ||
         !read_count(item, "platform_id", &out->platform_id) ||
-        !read_optional_text(item, "name", out->name, sizeof out->name) ||
-        !read_text(item, "fs_name", out->fs_name, sizeof out->fs_name) || out->fs_name[0] == '\0' ||
+        !read_name(item, "name", 0, out->name, sizeof out->name, &out->name_status) ||
+        !read_name(item, "fs_name", 1, out->fs_name, sizeof out->fs_name, &out->name_status) ||
         !read_count(item, "fs_size_bytes", &out->size) ||
         !read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32)) {
         return 0;
@@ -128,8 +220,9 @@ static int parse_file(const cJSON *item, uint64_t rom_id, skiff_romm_file *out) 
     uint64_t owner = 0;
     /* A file listed under another ROM would download the wrong bytes under this one's name. */
     return cJSON_IsObject(item) && read_count(item, "rom_id", &owner) && owner == rom_id &&
-           read_text(item, "file_name", out->file_name, sizeof out->file_name) &&
-           out->file_name[0] != '\0' && read_count(item, "file_size_bytes", &out->size) &&
+           read_name(item, "file_name", 1, out->file_name, sizeof out->file_name,
+                     &out->name_status) &&
+           read_count(item, "file_size_bytes", &out->size) &&
            read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32);
 }
 
@@ -140,16 +233,17 @@ static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || 
 /*
  * Checks a body before cJSON builds a tree from it: at most SKIFF_ROMM_JSON_NODES_MAX values (each
  * value but the first follows a ',' or opens its '[' or '{', so counting those outside strings
- * bounds them without parsing), and no NUL, raw or escaped, or other control character in a string,
- * where it would cut a name short at the C string's end.
+ * bounds them without parsing), no NUL anywhere, raw or escaped (it would cut a name short at the
+ * C string's end), and no raw control character in a string.
  */
 static int json_shape_ok(const char *json, size_t length) {
     size_t openings = 0;
     int in_string = 0;
     for (size_t i = 0; i < length; i++) {
         const char c = json[i];
-        /* JSON has no raw control characters inside a string, and no NUL anywhere. */
-        if (c == '\0' || (in_string && (unsigned char)c < (unsigned char)' ')) {
+        /* JSON has no raw C0 control characters inside a string and no NUL anywhere; a raw DEL is
+         * refused with them, so only an escaped control character reaches a name. */
+        if (c == '\0' || (in_string && is_control_byte(c))) {
             return 0;
         }
         if (in_string) {
@@ -258,6 +352,10 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
             return 0;
         }
         if (i < SKIFF_ROMM_FILES_MAX) {
+            /* A file of a ROM whose own names are not usable is not downloadable either. */
+            if (file.name_status == SKIFF_ROMM_NAME_OK) {
+                file.name_status = out->summary.name_status;
+            }
             out->files[i] = file;
             out->stored_count++;
         }
@@ -606,14 +704,16 @@ static int is_unreserved(char c) {
 }
 
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
-                                 const char *file_name, char *out, size_t out_size) {
+                                 const skiff_romm_file *file, char *out, size_t out_size) {
     if (out != NULL && out_size > 0) {
         out[0] = '\0';
     }
-    if (!client_ready(client) || file_name == NULL || file_name[0] == '\0' || out == NULL ||
-        out_size == 0) {
+    /* A name that is not OK is a display form: requesting it would ask RomM for another file. */
+    if (!client_ready(client) || file == NULL || file->name_status != SKIFF_ROMM_NAME_OK ||
+        file->file_name[0] == '\0' || out == NULL || out_size == 0) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    const char *file_name = file->file_name;
     const int written = snprintf(out, out_size, "%s" PATH_ROMS "/%llu/content/", client->base_url,
                                  (unsigned long long)rom_id);
     if (written < 0 || (size_t)written >= out_size) {

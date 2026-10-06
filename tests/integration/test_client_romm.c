@@ -136,11 +136,11 @@ static void test_a_reserved_file_name_downloads_through_its_url(void) {
     TEST_ASSERT_EQUAL_UINT64(extra.size, rom.files[0].size);
     TEST_ASSERT_TRUE(rom.files[0].has_crc32);
     TEST_ASSERT_EQUAL_HEX32(extra.crc32, rom.files[0].crc32);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom.files[0].name_status);
 
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(
-        SKIFF_OK,
-        skiff_romm_content_url(&client, rom.summary.id, rom.files[0].file_name, url, sizeof url));
+        SKIFF_OK, skiff_romm_content_url(&client, rom.summary.id, &rom.files[0], url, sizeof url));
     skiff_http_header authorization;
     TEST_ASSERT_EQUAL_size_t(1, skiff_romm_auth_header(&client, &authorization));
     received got = {0, 0};

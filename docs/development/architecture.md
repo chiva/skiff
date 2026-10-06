@@ -202,8 +202,13 @@ The client (`include/skiff/romm.h`) reads each response into a buffer of at most
 it with cJSON 1.7.16 (pspdev's package; the host image builds the same version). A larger response
 is refused (204), never cut, and so is anything that is not RomM's JSON: a proxy's login page, a cut
 body, valid JSON followed by anything but blanks, a missing field, a number that is not a whole,
-non-negative value below 2^53, a string longer than its field or holding a control character, raw or
-escaped. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
+non-negative value below 2^53, a control byte or an escaped NUL inside a string, or a string other
+than a name (a slug, a CRC, the server version) longer than its field or holding a control
+character. A name (a ROM's title or file name, or a file's name) with an escaped control character,
+or too long for its field, does not refuse its page: the item is listed with each control character
+(C0, DEL or C1) shown as `?` and a long name cut at a UTF-8 character boundary and ended with `~`,
+but it is not downloadable (a ROM's files neither), since that is not the name RomM serves the file
+under. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
 44 bytes each on the PSP): RomM's responses run near one value per 20 bytes, while a body of tiny
 values would otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a page,
 ordered by name: an unidentified ROM is about 2.6 KB of JSON and one with metadata several times
@@ -218,7 +223,8 @@ integrity check can use any of them; its `crc_hash` is hexadecimal, read with or
 zeros.
 
 Download URLs percent-encode every byte of the file name except letters, digits and `-._~`: a `#`
-would otherwise end the path, a `?` start a query, a `/` split it. The heartbeat is public and is
+would otherwise end the path, a `?` start a query, a `/` split it. The URL builder takes the file
+RomM listed and refuses one whose name was not usable. The heartbeat is public and is
 sent without the token.
 
 ## Downloads and storage

@@ -28,11 +28,20 @@ static const section_name SECTION_NAMES[] = {
     {"all", SKIFF_PROBE_SECTION_ALL},
 };
 
+static const section_name SCENARIO_NAMES[] = {
+    {"restart", SKIFF_PROBE_SCENARIO_RESTART}, {"wifi", SKIFF_PROBE_SCENARIO_WIFI},
+    {"suspend", SKIFF_PROBE_SCENARIO_SUSPEND}, {"home", SKIFF_PROBE_SCENARIO_HOME},
+    {"sleep", SKIFF_PROBE_SCENARIO_SLEEP},     {"all", SKIFF_PROBE_SCENARIO_ALL},
+};
+
 void skiff_probe_config_defaults(skiff_probe_config *config) {
     memset(config, 0, sizeof *config);
     config->profile = SKIFF_PROBE_DEFAULT_PROFILE;
     config->runs = SKIFF_PROBE_DEFAULT_RUNS;
     config->sections = SKIFF_PROBE_SECTION_ALL;
+    config->scenarios = SKIFF_PROBE_SCENARIO_ALL;
+    config->wait_s = SKIFF_PROBE_DEFAULT_WAIT_S;
+    config->awake_s = SKIFF_PROBE_DEFAULT_AWAKE_S;
 }
 
 static void trim_line(char *text) {
@@ -54,26 +63,26 @@ static int parse_bounded(const char *text, long min, long max, long *value) {
     return 1;
 }
 
-/* "net,ms" -> their bits; 0 for an empty list or an unknown name. */
-static unsigned parse_sections(const char *text) {
+/* "net,ms" -> their bits from names; 0 for an empty list or an unknown name. */
+static unsigned parse_names(const char *text, const section_name *names, size_t count) {
     char copy[SKIFF_PROBE_LINE_MAX];
     snprintf(copy, sizeof copy, "%s", text);
-    unsigned sections = 0;
+    unsigned bits = 0;
     char *rest = copy;
     for (const char *name = strtok_r(rest, SECTION_SEPARATORS, &rest); name != NULL;
          name = strtok_r(NULL, SECTION_SEPARATORS, &rest)) {
         unsigned bit = 0;
-        for (size_t i = 0; i < sizeof SECTION_NAMES / sizeof SECTION_NAMES[0]; i++) {
-            if (strcmp(name, SECTION_NAMES[i].name) == 0) {
-                bit = SECTION_NAMES[i].bit;
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(name, names[i].name) == 0) {
+                bit = names[i].bit;
             }
         }
         if (bit == 0) {
             return 0;
         }
-        sections |= bit;
+        bits |= bit;
     }
-    return sections;
+    return bits;
 }
 
 static int copy_value(char *out, size_t out_size, const char *value) {
@@ -135,9 +144,28 @@ static int apply(skiff_probe_config *config, const char *key, const char *value)
         return ok;
     }
     if (strcmp(key, "sections") == 0) {
-        const unsigned sections = parse_sections(value);
+        const unsigned sections =
+            parse_names(value, SECTION_NAMES, sizeof SECTION_NAMES / sizeof SECTION_NAMES[0]);
         config->sections = sections != 0 ? sections : config->sections;
         return sections != 0;
+    }
+    if (strcmp(key, "scenarios") == 0) {
+        const unsigned scenarios =
+            parse_names(value, SCENARIO_NAMES, sizeof SCENARIO_NAMES / sizeof SCENARIO_NAMES[0]);
+        config->scenarios = scenarios != 0 ? scenarios : config->scenarios;
+        return scenarios != 0;
+    }
+    if (strcmp(key, "wait_s") == 0) {
+        const int ok =
+            parse_bounded(value, SKIFF_PROBE_WAIT_MIN_S, SKIFF_PROBE_WAIT_MAX_S, &number);
+        config->wait_s = ok ? (int)number : config->wait_s;
+        return ok;
+    }
+    if (strcmp(key, "awake_s") == 0) {
+        const int ok =
+            parse_bounded(value, SKIFF_PROBE_AWAKE_MIN_S, SKIFF_PROBE_AWAKE_MAX_S, &number);
+        config->awake_s = ok ? (int)number : config->awake_s;
+        return ok;
     }
     return 1;
 }

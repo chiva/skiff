@@ -93,6 +93,32 @@ static void test_all_selects_every_section(void) {
     TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SECTION_ALL, config.sections);
 }
 
+static void test_resume_probe_defaults_run_every_scenario(void) {
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_ALL, config.scenarios);
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_DEFAULT_WAIT_S, config.wait_s);
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_DEFAULT_AWAKE_S, config.awake_s);
+}
+
+static void test_reads_scenarios_and_their_timings(void) {
+    read_text("scenarios=wifi, suspend\nwait_s=90\nawake_s=400\n");
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_WIFI | SKIFF_PROBE_SCENARIO_SUSPEND,
+                           config.scenarios);
+    TEST_ASSERT_EQUAL_INT(90, config.wait_s);
+    TEST_ASSERT_EQUAL_INT(400, config.awake_s);
+    TEST_ASSERT_EQUAL_INT(0, config.invalid_values);
+    read_text("scenarios=restart,home,sleep\nscenarios=all\n");
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_ALL, config.scenarios);
+}
+
+static void test_unusable_scenarios_and_timings_keep_the_defaults(void) {
+    read_text("scenarios=wifi,usb\nscenarios=\nwait_s=5\nwait_s=601\nawake_s=29\n"
+              "awake_s=1801\nawake_s=long\n");
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_ALL, config.scenarios);
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_DEFAULT_WAIT_S, config.wait_s);
+    TEST_ASSERT_EQUAL_INT(SKIFF_PROBE_DEFAULT_AWAKE_S, config.awake_s);
+    TEST_ASSERT_EQUAL_INT(7, config.invalid_values);
+}
+
 static void test_plain_http_takes_only_0_or_1(void) {
     read_text("plain_http=1\nplain_http=yes\nplain_http=\n");
     TEST_ASSERT_EQUAL_INT(1, config.plain_http);
@@ -242,6 +268,9 @@ int main(void) {
     RUN_TEST(test_ignores_comments_blank_lines_crlf_and_unknown_keys);
     RUN_TEST(test_reads_runs_and_sections);
     RUN_TEST(test_all_selects_every_section);
+    RUN_TEST(test_resume_probe_defaults_run_every_scenario);
+    RUN_TEST(test_reads_scenarios_and_their_timings);
+    RUN_TEST(test_unusable_scenarios_and_timings_keep_the_defaults);
     RUN_TEST(test_plain_http_takes_only_0_or_1);
     RUN_TEST(test_reads_the_clock_and_its_section);
     RUN_TEST(test_a_clock_other_than_222_or_333_is_invalid);

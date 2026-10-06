@@ -345,7 +345,7 @@ int main(int argc, char *argv[]) {
     skiff_psp_report report;
     const char *program_path = argc > 0 ? argv[0] : NULL;
 
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     skiff_psp_report_open(&report, program_path);
 
     const int version = sctrlHENGetVersion();

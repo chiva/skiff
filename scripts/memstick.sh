@@ -12,11 +12,11 @@ readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
 readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe
-  skiff_bench)
+  skiff_bench skiff_resume_probe)
 readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe
-  SkiffBench)
+  SkiffBench SkiffResumeProbe)
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
 # address (from its certificate's addresses), the test CA and the client certificates. The keys are
 # test material for that throwaway server; uninstall removes them with the folder.
@@ -29,6 +29,11 @@ readonly NET_PROBE_FILES=(ca.crt client-ecdsa.crt client-ecdsa.key client-rsa.cr
 # clock_mhz= (tests/hardware/bench.c).
 readonly BENCH_FOLDER="SkiffBench"
 readonly BENCH_FILES=(ca.crt)
+# The resume probe downloads the seeded file too, best a large one (SKIFF_PAYLOAD_BYTES=67108864 for
+# romm-lan). Optional SKIFF_RESUME_SCENARIOS, SKIFF_RESUME_WAIT_S and SKIFF_RESUME_AWAKE_S become
+# scenarios=, wait_s= and awake_s= (tests/hardware/resume_probe.c).
+readonly RESUME_FOLDER="SkiffResumeProbe"
+readonly RESUME_FILES=(ca.crt)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
 # The seeded file and the API token, for the probe's download checks through Skiff's transport.
 readonly INTEGRATION_SEED="$REPO_ROOT/build/integration/romm.json"
@@ -133,6 +138,17 @@ install_probe_configs() {
     bench_extra+="clock_mhz=$SKIFF_BENCH_CLOCK_MHZ"$'\n'
   fi
   install_probe_config "$BENCH_FOLDER" bench.ini "${bench_extra%$'\n'}" "${BENCH_FILES[@]}"
+  local resume_extra=""
+  if [[ -n "${SKIFF_RESUME_SCENARIOS:-}" ]]; then
+    resume_extra+="scenarios=$SKIFF_RESUME_SCENARIOS"$'\n'
+  fi
+  if [[ -n "${SKIFF_RESUME_WAIT_S:-}" ]]; then
+    resume_extra+="wait_s=$SKIFF_RESUME_WAIT_S"$'\n'
+  fi
+  if [[ -n "${SKIFF_RESUME_AWAKE_S:-}" ]]; then
+    resume_extra+="awake_s=$SKIFF_RESUME_AWAKE_S"$'\n'
+  fi
+  install_probe_config "$RESUME_FOLDER" resume-probe.ini "${resume_extra%$'\n'}" "${RESUME_FILES[@]}"
 }
 
 install_eboots() {

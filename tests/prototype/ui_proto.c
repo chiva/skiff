@@ -901,7 +901,7 @@ int main(int argc, char *argv[]) {
     static proto_results results;
     skiff_psp_report report;
 
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     skiff_psp_report_open(&report, argc > 0 ? argv[0] : NULL);
     ui.report = &report;
     skiff_psp_report_line(&report, TITLE_TEXT);

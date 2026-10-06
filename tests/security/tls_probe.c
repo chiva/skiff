@@ -103,7 +103,7 @@ static int check_curl_refuses_without_entropy(skiff_psp_report *report) {
 int main(int argc, char *argv[]) {
     skiff_psp_report report;
 
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     skiff_psp_report_open(&report, argc > 0 ? argv[0] : NULL);
 
     int passed = check_curl_build(&report);

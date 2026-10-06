@@ -24,6 +24,14 @@ enum {
     /* The CPU clocks "clock_mhz=" accepts: the homebrew default and the PSP's highest. */
     SKIFF_PROBE_CLOCK_DEFAULT_MHZ = 222,
     SKIFF_PROBE_CLOCK_FAST_MHZ = 333,
+    /* How long the resume probe waits for the player to act ("wait_s="). */
+    SKIFF_PROBE_DEFAULT_WAIT_S = 60,
+    SKIFF_PROBE_WAIT_MIN_S = 10,
+    SKIFF_PROBE_WAIT_MAX_S = 600,
+    /* How long the resume probe downloads without input to outlast Auto Sleep ("awake_s="). */
+    SKIFF_PROBE_DEFAULT_AWAKE_S = 200,
+    SKIFF_PROBE_AWAKE_MIN_S = 30,
+    SKIFF_PROBE_AWAKE_MAX_S = 1800,
 };
 
 /* What a probe measures, chosen with "sections=" (comma-separated names, or "all"). */
@@ -36,6 +44,18 @@ typedef enum skiff_probe_section {
     SKIFF_PROBE_SECTION_CLOCK = 1U << 5,
     SKIFF_PROBE_SECTION_ALL = (1U << 6) - 1,
 } skiff_probe_section;
+
+/* The interruptions the resume probe stages, chosen with "scenarios=" (comma-separated names, or
+ * "all"). */
+typedef enum skiff_probe_scenario {
+    /* The probe stops the download itself, then resumes it on a new connection. */
+    SKIFF_PROBE_SCENARIO_RESTART = 1U << 0,
+    SKIFF_PROBE_SCENARIO_WIFI = 1U << 1,
+    SKIFF_PROBE_SCENARIO_SUSPEND = 1U << 2,
+    SKIFF_PROBE_SCENARIO_HOME = 1U << 3,
+    SKIFF_PROBE_SCENARIO_SLEEP = 1U << 4,
+    SKIFF_PROBE_SCENARIO_ALL = (1U << 5) - 1,
+} skiff_probe_scenario;
 
 typedef struct skiff_probe_config {
     int profile;
@@ -54,6 +74,11 @@ typedef struct skiff_probe_config {
     unsigned sections;
     /* CPU clock to set before the network modules load, or 0 to leave it. */
     int clock_mhz;
+    /* The resume probe's scenarios, how long it waits for the player, and how long it downloads
+     * without input. */
+    unsigned scenarios;
+    int wait_s;
+    int awake_s;
     /* Lines whose value could not be used; the default stays in place for them. */
     int invalid_values;
 } skiff_probe_config;

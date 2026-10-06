@@ -25,6 +25,12 @@ void skiff_psp_report_line(skiff_psp_report *report, const char *line);
  */
 void skiff_psp_report_line_offscreen(skiff_psp_report *report, const char *line);
 
+/*
+ * The debug screen only, on the line the next report line will use, which then overwrites it: live
+ * progress (a download's bytes and speed) that would flood result.txt if logged.
+ */
+void skiff_psp_report_status(skiff_psp_report *report, const char *line);
+
 void skiff_psp_report_close(skiff_psp_report *report);
 
 #endif

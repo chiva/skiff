@@ -755,7 +755,7 @@ int main(int argc, char *argv[]) {
     probe p;
     memset(&p, 0, sizeof p);
     p.program_path = argc > 0 ? argv[0] : NULL;
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     skiff_psp_report_open(&p.report, p.program_path);
     skiff_psp_report_line(&p.report, "Skiff network probe");
     report_clock(&p);

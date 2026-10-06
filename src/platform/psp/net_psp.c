@@ -189,6 +189,21 @@ skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size) {
     return SKIFF_OK;
 }
 
+skiff_err skiff_psp_net_online(skiff_psp_net *net) {
+    if (net == NULL || net->stage != SKIFF_PSP_NET_APCTL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    if (sceWlanGetSwitchState() == WLAN_SWITCH_OFF) {
+        return SKIFF_ERR_NET_UNAVAILABLE;
+    }
+    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+    if (sceNetApctlGetState(&state) < 0) {
+        return SKIFF_ERR_NET_CONNECTION_LOST;
+    }
+    net->apctl_state = state;
+    return state == PSP_NET_APCTL_STATE_GOT_IP ? SKIFF_OK : SKIFF_ERR_NET_CONNECTION_LOST;
+}
+
 skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us) {
     if (net == NULL || net->stage != SKIFF_PSP_NET_APCTL) {
         return SKIFF_ERR_INVALID_ARG;

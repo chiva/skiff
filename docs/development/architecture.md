@@ -49,10 +49,17 @@ them.
   a job owns its transport and file handles.
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
   at a lower priority than the UI and yields between chunks.
-- **Power**: during a job, `scePowerTick` keeps the PSP from auto-sleeping, and the backlight can
-  dim to save battery. A power callback catches suspend: on resume the Wi-Fi connection is gone, so
-  the job reconnects and resumes from the `.part` file instead of failing.
-- The Wi-Fi switch and the HOME menu are ordinary interruptions with the same resume path.
+- **Power**: during a job, `skiff_psp_keep_awake()` (`scePowerTick(PSP_POWER_TICK_SUSPEND)`, at
+  most every 5 s) keeps the PSP from auto-sleeping, and the backlight can still dim to save
+  battery. A power callback on the same thread as the HOME-menu callback counts suspends and
+  resumes (`src/platform/psp/lifecycle.c`): on resume the Wi-Fi connection is gone, so the job
+  reconnects and resumes from the `.part` file instead of failing.
+- The Wi-Fi switch and the HOME menu are ordinary interruptions with the same resume path. A
+  download's stop hook asks the network layer whether the connection still stands
+  (`skiff_psp_net_online()`: switch, access point) and whether a suspend happened, so an attempt
+  ends within a fraction of a second instead of at the 30 s stall timeout. Recovery waits for the
+  switch, rejoins the profile (or reloads the network modules if that fails) and starts a new
+  transport; `tests/hardware/resume_probe.c` measures each path on a PSP.
 - **Clock**: TLS is CPU-bound on a PSP (the CPU is 80–85% busy during an HTTPS download), so the
   network layer runs the CPU at 333 MHz while the network is up and puts the previous clock back
   when it unloads (`skiff_psp_net_load()`, `SKIFF_PSP_NET_CPU_MHZ`). On a PSP-1000 that took HTTPS

@@ -27,6 +27,9 @@ typedef struct fake_storage {
     skiff_err sync_error;
     /* Every rename of a matching file (by its old name) fails with this; SKIFF_OK for none. */
     skiff_err rename_error;
+    /* The next this many size queries of matching files fail with SKIFF_ERR_STORAGE_IO; 0 for
+     * none. */
+    int size_failures;
     /* Every remove of a matching file deletes it and then fails with this, as a device that reports
      * an error after the directory entry is gone; SKIFF_OK for none. */
     skiff_err remove_error;

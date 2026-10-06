@@ -9,6 +9,7 @@
 #include "skiff/config.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
+#include "skiff/log.h"
 #include "skiff/version.h"
 
 typedef const char *(*selftest_check_fn)(void);
@@ -42,6 +43,9 @@ typedef struct selftest_check {
     "\xEF\xBB\xBF[Server]\r\nURL = https://romm.lan:8443\r\n[mtls]\r\ncert_file = psp.crt\r\n"     \
     "key_file = psp.key\r\n[headers]\r\nCF-Access-Client-Id = "                                    \
     "id.access\r\n[skiff]\r\nversion=1\r\n"
+/* 2^31 seconds after 1970, in milliseconds: past what a 32-bit time_t holds. */
+#define SKIFF_SELFTEST_LOG_MS 2147483648123LL
+#define SKIFF_SELFTEST_LOG_TIMESTAMP "2038-01-19 03:14:08.123Z"
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -163,6 +167,17 @@ static const char *check_config_parsing(void) {
     return NULL;
 }
 
+/* Log lines carry a date computed with 64-bit division, which the PSP's 32-bit MIPS CPU does in
+ * software (libgcc), without newlib's time functions. */
+static const char *check_log_timestamp(void) {
+    char timestamp[SKIFF_LOG_TIMESTAMP_MAX];
+    return skiff_log_format_timestamp(SKIFF_SELFTEST_LOG_MS, timestamp, sizeof timestamp) ==
+                       SKIFF_OK &&
+                   strcmp(timestamp, SKIFF_SELFTEST_LOG_TIMESTAMP) == 0
+               ? NULL
+               : "a log timestamp past 2038 came out wrong";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -174,6 +189,7 @@ static const selftest_check CHECKS[] = {
     {"http-range", check_http_range_parsing},
     {"download-state", check_download_state},
     {"config-parse", check_config_parsing},
+    {"log-timestamp", check_log_timestamp},
 };
 // clang-format on
 

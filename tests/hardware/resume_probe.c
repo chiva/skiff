@@ -32,6 +32,7 @@
 #include <pspkernel.h>
 #include <psppower.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "skiff/curl_transport.h"
@@ -113,6 +114,8 @@ typedef struct probe {
     const char *program_path;
     skiff_probe_config config;
     skiff_psp_net net;
+    /* The PSP storage, and the timing wrapper around it the downloads write through. */
+    skiff_storage *psp_storage;
     skiff_storage *storage;
     skiff_transport *transport;
     char authorization[TOKEN_MAX + sizeof BEARER_PREFIX];
@@ -132,7 +135,11 @@ typedef struct watch {
     uint64_t stop_at;
     skiff_psp_power_events power_at_attempt;
     long long last_poll_us;
+    /* When the attempt started, its last body byte (0 before the first), the longest wait for a
+     * first byte (request, TLS and the server's answer) and the longest pause between bytes. */
+    long long attempt_start_us;
     long long last_byte_us;
+    long long first_byte_us;
     long long longest_gap_us;
     long long last_status_us;
     uint64_t done;
@@ -160,6 +167,124 @@ typedef struct outcome {
     int cpu_mhz_after;
 } outcome;
 
+/* ---- Where the Memory Stick's time goes: every storage call, timed ---- */
+
+typedef enum storage_op {
+    OP_OPEN,
+    OP_READ,
+    OP_WRITE,
+    OP_SYNC,
+    OP_CLOSE,
+    OP_SIZE,
+    OP_RENAME,
+    OP_REMOVE,
+    STORAGE_OPS,
+} storage_op;
+
+static const char *const STORAGE_OP_NAMES[STORAGE_OPS] = {
+    "open", "read", "write", "sync", "close", "size", "rename", "remove",
+};
+
+typedef struct op_timing {
+    int count;
+    long long total_us;
+    long long max_us;
+} op_timing;
+
+typedef struct timed_storage {
+    skiff_storage base;
+    skiff_storage *inner;
+    op_timing ops[STORAGE_OPS];
+} timed_storage;
+
+typedef struct timed_file {
+    skiff_file base;
+    skiff_file *inner;
+} timed_file;
+
+/* One per probe, so the wrapper reaches it directly. */
+static timed_storage timed;
+
+static skiff_err timed_call(storage_op op, long long start_us, skiff_err err) {
+    const long long elapsed_us = sceKernelGetSystemTimeWide() - start_us;
+    op_timing *timing = &timed.ops[op];
+    timing->count++;
+    timing->total_us += elapsed_us;
+    if (elapsed_us > timing->max_us) {
+        timing->max_us = elapsed_us;
+    }
+    return err;
+}
+
+static skiff_err timed_open(skiff_storage *base, const char *path, skiff_file_mode mode,
+                            uint64_t offset, skiff_file **out) {
+    timed_file *file = calloc(1, sizeof *file);
+    if (file == NULL) {
+        return SKIFF_ERR_NO_MEMORY;
+    }
+    const long long start = sceKernelGetSystemTimeWide();
+    const skiff_err err = timed_call(
+        OP_OPEN, start, skiff_storage_open(timed.inner, path, mode, offset, &file->inner));
+    if (err != SKIFF_OK) {
+        free(file);
+        return err;
+    }
+    file->base.storage = base;
+    *out = &file->base;
+    return SKIFF_OK;
+}
+
+static skiff_err timed_read(skiff_file *base, void *buffer, size_t size, size_t *got) {
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_READ, start,
+                      skiff_file_read(((timed_file *)base)->inner, buffer, size, got));
+}
+
+static skiff_err timed_write(skiff_file *base, const void *data, size_t size) {
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_WRITE, start, skiff_file_write(((timed_file *)base)->inner, data, size));
+}
+
+static skiff_err timed_sync(skiff_file *base) {
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_SYNC, start, skiff_file_sync(((timed_file *)base)->inner));
+}
+
+static skiff_err timed_close(skiff_file *base) {
+    timed_file *file = (timed_file *)base;
+    const long long start = sceKernelGetSystemTimeWide();
+    const skiff_err err = timed_call(OP_CLOSE, start, skiff_file_close(file->inner));
+    free(file);
+    return err;
+}
+
+static skiff_err timed_size(skiff_storage *base, const char *path, uint64_t *out) {
+    (void)base;
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_SIZE, start, skiff_storage_size(timed.inner, path, out));
+}
+
+static skiff_err timed_rename(skiff_storage *base, const char *from, const char *to) {
+    (void)base;
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_RENAME, start, skiff_storage_rename(timed.inner, from, to));
+}
+
+static skiff_err timed_remove(skiff_storage *base, const char *path) {
+    (void)base;
+    const long long start = sceKernelGetSystemTimeWide();
+    return timed_call(OP_REMOVE, start, skiff_storage_remove(timed.inner, path));
+}
+
+static void timed_destroy(skiff_storage *base) { (void)base; }
+
+static const skiff_storage_ops TIMED_STORAGE_OPS = {
+    timed_open, timed_read,   timed_write,  timed_sync,    timed_close,
+    timed_size, timed_rename, timed_remove, timed_destroy,
+};
+
+static void reset_storage_timing(void) { memset(timed.ops, 0, sizeof timed.ops); }
+
 static void report_check(probe *p, int ok, const char *text) {
     skiff_probe_report_check(&p->report, ok, text);
 }
@@ -176,7 +301,7 @@ static int expect(probe *p, const char *label, skiff_err got, skiff_err want) {
              skiff_err_name(want));
     report_check(p, got == want, text);
     if (got != want) {
-        const skiff_psp_storage_failure failure = skiff_psp_storage_last_failure(p->storage);
+        const skiff_psp_storage_failure failure = skiff_psp_storage_last_failure(p->psp_storage);
         snprintf(text, sizeof text, "storage: last failed call %s = 0x%08X",
                  failure.call != NULL ? failure.call : "-", (unsigned)failure.sce_result);
         report_line(p, text);
@@ -293,7 +418,7 @@ static int run_without_ark(probe *p) {
 
 static skiff_err stopped(watch *w, stop_reason reason, skiff_err err, long long now) {
     w->stop_reason = reason;
-    w->detected_after_us = now - w->last_byte_us;
+    w->detected_after_us = now - (w->last_byte_us != 0 ? w->last_byte_us : w->attempt_start_us);
     return err;
 }
 
@@ -326,7 +451,11 @@ static skiff_err should_stop(void *ctx) {
 static void on_progress(void *ctx, uint64_t done, uint64_t total) {
     watch *w = ctx;
     const long long now = now_us();
-    if (w->last_byte_us != 0 && now - w->last_byte_us > w->longest_gap_us) {
+    if (w->last_byte_us == 0) {
+        if (now - w->attempt_start_us > w->first_byte_us) {
+            w->first_byte_us = now - w->attempt_start_us;
+        }
+    } else if (now - w->last_byte_us > w->longest_gap_us) {
         w->longest_gap_us = now - w->last_byte_us;
     }
     w->last_byte_us = now;
@@ -437,7 +566,7 @@ static int is_storage_error(skiff_err err) {
 static void log_attempt(probe *p, const watch *w, const outcome *o, skiff_err err,
                         const skiff_download_result *result) {
     char text[LONG_LINE_MAX];
-    const skiff_psp_storage_failure failure = skiff_psp_storage_last_failure(p->storage);
+    const skiff_psp_storage_failure failure = skiff_psp_storage_last_failure(p->psp_storage);
     int used = snprintf(
         text, sizeof text, "attempt %d: %s, HTTP %ld, from %llu, +%llu bytes%s, %s %s", o->attempts,
         skiff_err_name(err), result->response.status, (unsigned long long)result->resumed_from,
@@ -474,7 +603,8 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         o->attempts++;
         w->stop_reason = STOP_NONE;
         w->power_at_attempt = skiff_psp_power_events_now();
-        w->last_byte_us = now_us();
+        w->attempt_start_us = now_us();
+        w->last_byte_us = 0;
         skiff_download_result result;
         err = skiff_download_attempt(p->transport, p->storage, &spec, &result);
         log_attempt(p, w, o, err, &result);
@@ -536,16 +666,31 @@ static int report_scenario(probe *p, const char *name, int ok, const watch *w, c
     snprintf(text, sizeof text,
              "scenario=%s ok=%d attempts=%d interruptions=%d first=%s reason=%s detected_ms=%lld "
              "recovery=%s recovery_ms=%lld clock_after=%d resumed_from=%llu status=%ld "
-             "restarted=%d complete=%d longest_gap_ms=%lld total_ms=%lld kb_s=%llu %s",
+             "restarted=%d complete=%d first_byte_ms=%lld longest_gap_ms=%lld total_ms=%lld "
+             "kb_s=%llu %s",
              name, ok, o->attempts, o->interruptions,
              o->interruptions > 0 ? skiff_err_name(o->first_interruption) : "-",
              o->first_from_transport ? "transport" : STOP_REASON_NAMES[o->first_reason],
              o->detected_after_us / US_PER_MS, o->recovery != NULL ? o->recovery : "-",
              o->recovery_us / US_PER_MS, o->cpu_mhz_after, (unsigned long long)o->resumed_from,
-             o->last_status, o->restarted, o->complete, w->longest_gap_us / US_PER_MS,
-             o->elapsed_us / US_PER_MS, skiff_probe_kb_per_s(p->config.size, o->elapsed_us), note);
+             o->last_status, o->restarted, o->complete, w->first_byte_us / US_PER_MS,
+             w->longest_gap_us / US_PER_MS, o->elapsed_us / US_PER_MS,
+             skiff_probe_kb_per_s(p->config.size, o->elapsed_us), note);
     report_check(p, ok, text);
-    return append_log(p, text) && ok;
+    const int logged = append_log(p, text);
+    /* Where the Memory Stick's time went in this scenario, then start counting afresh. */
+    int used = snprintf(text, sizeof text, "storage %s:", name);
+    for (int op = 0; op < STORAGE_OPS && used > 0 && (size_t)used < sizeof text; op++) {
+        const op_timing *timing = &timed.ops[op];
+        if (timing->count > 0) {
+            used += snprintf(text + used, sizeof text - (size_t)used, " %s=%dx/%lldms/max%lldms",
+                             STORAGE_OP_NAMES[op], timing->count, timing->total_us / US_PER_MS,
+                             timing->max_us / US_PER_MS);
+        }
+    }
+    report_line(p, text);
+    reset_storage_timing();
+    return append_log(p, text) && logged && ok;
 }
 
 static int resumed_with_206(const outcome *o) {
@@ -645,6 +790,7 @@ static int run_sleep(probe *p) {
 
 static int run_scenarios(probe *p) {
     const unsigned chosen = p->config.scenarios;
+    reset_storage_timing();
     int ok = run_leftover(p);
     if ((chosen & SKIFF_PROBE_SCENARIO_RESTART) != 0) {
         ok &= run_interrupted(p, "restart", NULL, p->config.size * RESTART_AT_PERCENT / PERCENT);
@@ -734,11 +880,14 @@ int main(int argc, char *argv[]) {
     skiff_psp_report_line(&p.report, "Skiff resume probe");
 
     const int has_ark = skiff_psp_entropy_status() != SKIFF_ERR_NET_NEEDS_ARK;
-    int passed = skiff_psp_storage_create(&p.storage) == SKIFF_OK;
+    int passed = skiff_psp_storage_create(&p.psp_storage) == SKIFF_OK;
+    timed.base.ops = &TIMED_STORAGE_OPS;
+    timed.inner = p.psp_storage;
+    p.storage = &timed.base;
     if (passed) {
         passed = has_ark ? run_with_ark(&p) : run_without_ark(&p);
     }
-    skiff_storage_destroy(p.storage);
+    skiff_storage_destroy(p.psp_storage);
     const char *marker = has_ark ? (passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER)
                                  : (passed ? PROBE_NO_ARK_OK_MARKER : PROBE_NO_ARK_FAIL_MARKER);
     skiff_psp_report_line(&p.report, marker);

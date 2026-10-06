@@ -41,7 +41,13 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
     RSA-2048;
   - Wi-Fi throughput and Memory Stick write speed by buffer size;
   - hashing speed for the hashes RomM records per file (CRC32, MD5 and SHA-1).
-- **Resume**: a ranged download survives the Wi-Fi switch and a suspend.
+- **Resume** ✅: a download continues from its `.part` file after the Wi-Fi switch, a suspend, a
+  restart or a quit, and is checked against RomM's CRC-32 (`include/skiff/download.h`,
+  `tests/hardware/resume_probe.c`). On a PSP-1000 with a 64 MiB file: the switch was noticed 1.7 s
+  after the last byte and the profile rejoined in 13 s; after a suspend, rejoining the profile was
+  enough (8 s, the CPU stayed at 333 MHz); the HOME menu did not pause the download; keep-awake
+  held off Auto Sleep. Files left open across a suspend stop working, so every attempt opens its
+  own. See [Architecture](architecture.md#threads-power-and-suspend).
 
 Output: `docs/development/hardware-findings.md` with the numbers and the decisions they settle.
 

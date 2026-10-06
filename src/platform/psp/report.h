@@ -8,9 +8,17 @@
  * the debug screen, and result.txt next to the EBOOT, flushed per line so a crash on hardware still
  * leaves the lines written before it. Running from the XMB then needs no PSPLINK: read result.txt
  * from the Memory Stick (scripts/memstick.sh results).
+ *
+ * A suspend invalidates files the program has open on the Memory Stick (seen on a PSP-1000: writes
+ * after waking failed silently). A line that cannot be written reopens result.txt for appending
+ * and is written again, so a report survives a suspend.
  */
+#define SKIFF_PSP_REPORT_PATH_MAX 256
+
 typedef struct skiff_psp_report {
     FILE *file;
+    /* result.txt, to reopen after a suspend; empty when there is none. */
+    char path[SKIFF_PSP_REPORT_PATH_MAX];
 } skiff_psp_report;
 
 /* program_path is argv[0]. Without a writable result file, stdout and the screen still work. */

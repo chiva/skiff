@@ -363,7 +363,9 @@ On a PSP (plugged in; with every scenario it takes 15–25 minutes):
 5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF RESUME PROBE OK`. Each scenario appends
    one line to `resume-log.txt`: attempts, what stopped the first interrupted one and how soon, the
    recovery path and its time, the clock afterwards, where the last attempt resumed from and its
-   status, the longest pause and the speed.
+   status, the longest wait for a first byte, the longest pause between bytes and the speed. A
+   second line times every Memory Stick call the download made (count, total, longest), so a slow
+   download shows whether the time went to writes, syncs or the network.
 
 Without ARK, as in PPSSPP, TLS cannot start: the probe checks the PSP storage on the emulated Memory
 Stick (writes, sync, writing from an offset, read-back, rename never replacing a file, remove, the

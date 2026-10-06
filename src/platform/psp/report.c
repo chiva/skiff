@@ -9,7 +9,7 @@
 enum {
     /* Characters per debug screen line (480 pixels, 7 per character). */
     REPORT_SCREEN_COLUMNS = 68,
-    REPORT_PATH_MAX = 256,
+    REPORT_PATH_MAX = SKIFF_PSP_REPORT_PATH_MAX,
     /* A note quotes the whole path plus the reason, so it must hold more than a path. */
     REPORT_NOTE_MAX = REPORT_PATH_MAX + SKIFF_SELFTEST_LINE_MAX,
 };
@@ -24,6 +24,7 @@ void skiff_psp_report_open(skiff_psp_report *report, const char *program_path) {
     char note[REPORT_NOTE_MAX];
 
     report->file = NULL;
+    report->path[0] = '\0';
     pspDebugScreenInit();
 
     const skiff_err err = skiff_selftest_result_path(program_path, path, sizeof path);
@@ -33,16 +34,27 @@ void skiff_psp_report_open(skiff_psp_report *report, const char *program_path) {
         return;
     }
     report->file = fopen(path, "w");
-    if (report->file == NULL) {
+    if (report->file != NULL) {
+        snprintf(report->path, sizeof report->path, "%s", path);
+    } else {
         snprintf(note, sizeof note, "result file: not written (%s: %s)", path, strerror(errno));
         print_line(note);
     }
 }
 
+static int put_line(FILE *file, const char *line) {
+    return fprintf(file, "%s\n", line) >= 0 && fflush(file) == 0;
+}
+
+/* A failed write means the file handle died (a suspend does that): reopen and write once more. */
 static void write_line(skiff_psp_report *report, const char *line) {
+    if (report->file == NULL || put_line(report->file, line)) {
+        return;
+    }
+    fclose(report->file);
+    report->file = report->path[0] != '\0' ? fopen(report->path, "a") : NULL;
     if (report->file != NULL) {
-        fprintf(report->file, "%s\n", line);
-        fflush(report->file);
+        put_line(report->file, line);
     }
 }
 

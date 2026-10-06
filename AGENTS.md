@@ -90,6 +90,9 @@ existing ones.
   (`include/skiff/storage.h`), whose PSP implementation (`src/platform/psp/storage_psp.c`) uses
   `sceIo` with 64-bit offsets. `sceIoSync` flushes a whole device (`"ms0:"`), as libcglue's
   `fsync()` does.
+- A suspend invalidates files open on the Memory Stick: writes after waking fail, silently with
+  stdio. Open files per job step (the download engine opens and closes them per attempt) and reopen
+  on a write error, as `src/platform/psp/report.c` does.
 - `time()` on the PSP returns only the time of day (the date is lost). Never use it for anything
   date-related: read `sceRtcGetCurrentTick` (UTC) instead.
 - ARK custom firmware functions are imported through hand-written stubs in

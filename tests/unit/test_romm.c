@@ -410,6 +410,48 @@ static void test_a_clean_file_of_a_rom_with_an_unusable_name_gets_no_url(void) {
                           skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
 }
 
+static void test_c1_control_characters_count_as_one_control_each(void) {
+    static const char page_json[] =
+        "{\"items\":[{\"id\":5,\"platform_id\":1,\"name\":\"x\\u0085y\",\"fs_name\":"
+        "\"a\\u009b2J\xC2\x85"
+        "b.iso\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_rom_page(page_json, sizeof page_json - 1, &page));
+    TEST_PRINTF("escaped and raw C1 controls show as '%s' / '%s'", page.items[0].name,
+                page.items[0].fs_name);
+    TEST_ASSERT_EQUAL_STRING("x?y", page.items[0].name);
+    TEST_ASSERT_EQUAL_STRING("a?2J?b.iso", page.items[0].fs_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, page.items[0].name_status);
+
+    static const char rom_json[] =
+        "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Folder\",\"fs_size_bytes\":1,\"files\":["
+        "{\"rom_id\":3,\"file_name\":\"f\\u009b.iso\",\"file_size_bytes\":1}]}";
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(rom_json, sizeof rom_json - 1, &rom));
+    TEST_ASSERT_EQUAL_STRING("f?.iso", rom.files[0].file_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.files[0].name_status);
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+
+    TEST_PRINTF("U+00A0 and U+00E9 share the C2/C3 lead bytes but are text");
+    static const char text_json[] =
+        "{\"items\":[{\"id\":5,\"platform_id\":1,\"fs_name\":\"a\\u00a0b\\u00e9.iso\","
+        "\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_rom_page(text_json, sizeof text_json - 1, &page));
+    TEST_ASSERT_EQUAL_STRING("a\xC2\xA0"
+                             "b\xC3\xA9.iso",
+                             page.items[0].fs_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, page.items[0].name_status);
+
+    TEST_PRINTF("strict fields refuse a C1 control");
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_check_version("5.3\xC2\x9b", &server));
+}
+
 static void test_a_raw_delete_byte_in_a_name_is_still_refused(void) {
     static const char page_json[] = "{\"items\":[{\"id\":5,\"platform_id\":1,\"fs_name\":"
                                     "\"a\x7f.iso\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
@@ -966,6 +1008,7 @@ int main(void) {
     RUN_TEST(test_a_title_with_a_control_character_marks_its_rom);
     RUN_TEST(test_a_file_with_a_control_character_is_listed_but_not_downloadable);
     RUN_TEST(test_a_clean_file_of_a_rom_with_an_unusable_name_gets_no_url);
+    RUN_TEST(test_c1_control_characters_count_as_one_control_each);
     RUN_TEST(test_a_raw_delete_byte_in_a_name_is_still_refused);
     RUN_TEST(test_an_overlong_name_is_cut_at_a_character_with_a_marker);
     RUN_TEST(test_an_overlong_file_name_is_listed_but_not_downloadable);

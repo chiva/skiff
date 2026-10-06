@@ -89,9 +89,10 @@ typedef struct skiff_romm_platform {
 /*
  * Whether a name from RomM can be used as it is. A name with a control character, or too long for
  * its field, does not refuse its page: the item is still listed with its name made displayable
- * (each control character shown as SKIFF_ROMM_NAME_REPLACEMENT; a long name cut at a UTF-8
- * character boundary and ended with SKIFF_ROMM_NAME_CUT_MARKER), and is not downloadable, since the
- * shown name is not the file's real name. A name with both problems reports the control character.
+ * (each control character, C0, DEL or C1, shown as one SKIFF_ROMM_NAME_REPLACEMENT; a long name cut
+ * at a UTF-8 character boundary and ended with SKIFF_ROMM_NAME_CUT_MARKER), and is not
+ * downloadable, since the shown name is not the file's real name. A name with both problems reports
+ * the control character.
  */
 typedef enum skiff_romm_name_status {
     SKIFF_ROMM_NAME_OK,

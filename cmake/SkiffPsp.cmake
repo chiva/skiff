@@ -8,7 +8,9 @@
 set(SKIFF_PSP_SYSTEM_INCLUDES "SHELL:-isystem ${PSPDEV}/psp/include"
                             "SHELL:-isystem ${PSPDEV}/psp/sdk/include")
 
-set(SKIFF_PSP_LIBRARIES pspdebug pspdisplay pspge pspctrl)
+# psppower: the power callback and keep-awake (src/platform/psp/lifecycle.c), and the CPU clock
+# (net_psp.c). Listed only here, once: a stub library linked twice splits its import stubs.
+set(SKIFF_PSP_LIBRARIES pspdebug pspdisplay pspge pspctrl psppower)
 set(SKIFF_PBP_TITLE "Skiff")
 # PARAM.SFO wants "XX.YY"; the patch level does not fit and is visible in-app instead.
 set(SKIFF_PBP_VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
@@ -109,13 +111,20 @@ target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark ski
 # The PSP's network stack (src/platform/psp/net_psp.c): CPU clock, modules, access-point connection,
 # teardown. psputility, pspnet_inet and pspnet_resolver are left out: psp-gcc already links them
 # after everything else, and listing a stub library twice splits its import stubs, which
-# psp-fixup-imports rejects ("stubs out of order"). psppower is not among them, so it is listed
-# here (and only here: its users get it through this library).
+# psp-fixup-imports rejects ("stubs out of order"). psppower comes with skiff_psp.
 add_library(skiff_psp_net OBJECT src/platform/psp/net_psp.c)
 target_compile_options(skiff_psp_net PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
-target_link_libraries(skiff_psp_net PUBLIC skiff_core pspnet_apctl pspnet pspwlan psppower)
+target_link_libraries(skiff_psp_net PUBLIC skiff_core pspnet_apctl pspnet pspwlan)
 target_include_directories(skiff_psp_net PUBLIC src/platform/psp)
 skiff_set_warnings(skiff_psp_net)
+
+# skiff_storage on sceIo (src/platform/psp/storage_psp.h): 64-bit file positions, which newlib's
+# stdio lacks on the PSP. What downloads write through.
+add_library(skiff_psp_storage OBJECT src/platform/psp/storage_psp.c)
+target_compile_options(skiff_psp_storage PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_storage PUBLIC skiff_core)
+target_include_directories(skiff_psp_storage PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_storage)
 
 # Helpers shared by the hardware probes (tests/hardware/): the plain-C part, also unit-tested on the
 # host, and the PSP part (check lines, memory, configuration file, network stack, TLS session). Like
@@ -143,6 +152,15 @@ target_link_libraries(skiff_net_probe PRIVATE skiff_net skiff_probe_support skif
 skiff_add_psp_app(skiff_bench "${SKIFF_PBP_TITLE} benchmark" tests/hardware/bench.c)
 target_link_libraries(skiff_bench PRIVATE skiff_net skiff_probe_support skiff_psp_check skiff_psp_net
                                           skiff_psp_ark skiff_psp_tls skiff_psp_entropy ZLIB::ZLIB)
+
+# Resume probe (Phase 1 hardware spike, W7): resumable downloads (skiff/download.h) through the PSP
+# storage, interrupted by the Wi-Fi switch, a suspend, the HOME menu and auto-sleep, against the test
+# RomM (see tests/hardware/resume_probe.c). Without ARK it checks the PSP storage and that TLS
+# refuses.
+skiff_add_psp_app(skiff_resume_probe "${SKIFF_PBP_TITLE} resume probe" tests/hardware/resume_probe.c)
+target_link_libraries(skiff_resume_probe PRIVATE skiff_net skiff_probe_support skiff_psp_check
+                                                 skiff_psp_net skiff_psp_storage skiff_psp_ark
+                                                 skiff_psp_tls skiff_psp_entropy)
 
 # UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen
 # keyboard and the network picker (see tests/prototype/ui_proto.c). intraFont comes from pspdev's

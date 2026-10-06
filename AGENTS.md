@@ -17,15 +17,16 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench,skiff_resume_probe}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
 | UI prototype, headless (fonts and frames) | `scripts/dev.sh ui-proto` (after `psp`) |
 | Network probe without ARK (modules load, TLS must refuse) | `scripts/dev.sh net-probe` (after `psp`) |
 | Benchmark without ARK (TLS must refuse, CRC-32 and Memory Stick code runs) | `scripts/dev.sh bench` (after `psp`) |
+| Resume probe without ARK (PSP storage works, TLS must refuse) | `scripts/dev.sh resume-probe` (after `psp`) |
 | Test RomM behind TLS/mTLS (Docker Compose) | `scripts/dev.sh romm-up` (or `romm-lan` for a PSP), `romm-check`, `romm-down` → `build/integration/` |
-| Host transport against the test RomM | `scripts/dev.sh romm-test` (after `romm-up`) |
+| Host transport and resumable downloads against the test RomM | `scripts/dev.sh romm-test` (after `romm-up`) |
 | Re-record the fake transport's RomM fixtures | `scripts/dev.sh romm-record` → `tests/fixtures/romm/` (review before committing) |
 | Release zip | `scripts/dev.sh package` → `dist/` |
 | Icon PNGs from `assets/brand/` SVGs | `scripts/dev.sh icons` → `assets/{psp,github}/` (commit them) |
@@ -84,6 +85,14 @@ existing ones.
 - An EBOOT linking Mbed TLS must provide `mbedtls_platform_get_entropy()` and `mbedtls_ms_time()`
   (link-time contracts, see `docs/development/toolchain.md`), and link `skiff_psp_tls`, whose
   constructor gives Mbed TLS the real-time clock for certificate dates.
+- newlib's `off_t` is 32 bits on the PSP and it has no `fseeko64` or `ftruncate`: stdio cannot
+  place a file position past 2 GiB. File I/O for downloads goes through the storage seam
+  (`include/skiff/storage.h`), whose PSP implementation (`src/platform/psp/storage_psp.c`) uses
+  `sceIo` with 64-bit offsets. `sceIoSync` flushes a whole device (`"ms0:"`), as libcglue's
+  `fsync()` does.
+- A suspend invalidates files open on the Memory Stick: writes after waking fail, silently with
+  stdio. Open files per job step (the download engine opens and closes them per attempt) and reopen
+  on a write error, as `src/platform/psp/report.c` does.
 - `time()` on the PSP returns only the time of day (the date is lost). Never use it for anything
   date-related: read `sceRtcGetCurrentTick` (UTC) instead.
 - ARK custom firmware functions are imported through hand-written stubs in

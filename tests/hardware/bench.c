@@ -1411,7 +1411,7 @@ int main(int argc, char *argv[]) {
     static bench b;
     b.program_path = argc > 0 ? argv[0] : NULL;
     b.best_buffer_bytes = CURL_MAX_WRITE_SIZE;
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     skiff_psp_report_open(&b.report, b.program_path);
     say(&b, "Skiff benchmark");
     b.initial_cpu_mhz = scePowerGetCpuClockFrequency();

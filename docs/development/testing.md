@@ -53,7 +53,8 @@ when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`
 `skiff_tls_probe` (`TLS PROBE`, see [Security probe](#security-probe)), `skiff_kirk_probe`
 (`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)), `skiff_net_probe` (`NET PROBE NO ARK`, see
 [Network probe](#network-probe)), `skiff_ui_proto` (`UI PROTO HEADLESS`, see
-[UI prototype](#ui-prototype)) and `skiff_bench` (`BENCH NO ARK`, see [Benchmark](#benchmark)). PPSSPPHeadless only shows a
+[UI prototype](#ui-prototype)), `skiff_bench` (`BENCH NO ARK`, see [Benchmark](#benchmark)) and
+`skiff_resume_probe` (`RESUME PROBE NO ARK`, see [Resume probe](#resume-probe)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -162,9 +163,10 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    without freezing.
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
 
-The **Skiff KIRK probe**, **Skiff network probe**, **Skiff benchmark** and **Skiff UI prototype**
-are installed too; run them only when working on entropy (see [KIRK probe](#kirk-probe)),
-networking (see [Network probe](#network-probe) and [Benchmark](#benchmark)) or the UI (see
+The **Skiff KIRK probe**, **Skiff network probe**, **Skiff benchmark**, **Skiff resume probe** and
+**Skiff UI prototype** are installed too; run them only when working on entropy (see
+[KIRK probe](#kirk-probe)), networking (see [Network probe](#network-probe) and
+[Benchmark](#benchmark)), downloads (see [Resume probe](#resume-probe)) or the UI (see
 [UI prototype](#ui-prototype)).
 
 ### Over PSPLINK
@@ -322,6 +324,53 @@ size the PSP refuses, cuts down or does not report back is reported and skipped.
 benchmark loads and unloads the network modules, checks that libcurl refuses to start, runs the
 CRC-32 and Memory Stick code on small sizes and ends with `SKIFF BENCH NO ARK OK`
 (`scripts/dev.sh bench`, run in CI).
+
+## Resume probe
+
+`tests/hardware/resume_probe.c` runs Skiff's resumable downloads (`include/skiff/download.h`) on a
+PSP, through the PSP storage (`sceIo`) and the app's transport, against the
+[integration server](#integration-server), and interrupts them the ways a player does. Every
+scenario downloads the seeded file next to the EBOOT and ends with RomM's CRC-32; `scenarios=`
+picks them (default all):
+
+- **restart:** the probe stops the download at 40% and resumes it on a new connection: 206 from
+  the saved offset;
+- **wifi:** at 20% the screen asks to turn the Wi-Fi switch off, then on again. The probe logs how
+  long after the last byte the download noticed, rejoins the access point and resumes with 206;
+- **suspend:** at 20% the screen asks to put the PSP to sleep and wake it. The probe logs the power
+  events, what the attempt returned (a network error, or a file handle that stopped working, with
+  the firmware's code), the CPU clock afterwards, and how the network came back;
+- **home:** at 20% the screen asks to open the HOME menu for 10 s and go back. The download must
+  finish; the longest pause between chunks shows whether it stopped meanwhile;
+- **sleep:** back-to-back downloads with no input for `awake_s=` seconds (default 200): with Auto
+  Sleep at its shortest, keep-awake (`scePowerTick`) must keep the PSP from sleeping.
+
+After any interruption the probe waits up to `wait_s=` seconds (default 60) for the Wi-Fi switch,
+rejoins the profile, or reloads the network modules if rejoining fails, makes a new transport and
+attempts again. Which path worked and how long it took is what `jobs/` will build its retry policy
+on. A download an earlier run left unfinished (HOME → Quit, a power-off) is resumed first, as the
+**relaunch** scenario, which tests the `.resume` file across launches.
+
+On a PSP (plugged in; with every scenario it takes 15–25 minutes):
+
+1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 scripts/dev.sh romm-lan` (a 64 MiB file, about
+   2.5 minutes per download at 470 KB/s, long enough to act in).
+2. On the PSP: Settings → Power Save Settings → Auto Sleep at its shortest.
+3. PSP in USB mode: `scripts/memstick.sh install <mount>`. It writes `resume-probe.ini` (the network
+   probe's settings, plus `scenarios=`, `wait_s=` and `awake_s=` from `SKIFF_RESUME_SCENARIOS`,
+   `SKIFF_RESUME_WAIT_S` and `SKIFF_RESUME_AWAKE_S` when set) and copies the test CA. Eject.
+4. With the Wi-Fi switch on, run **Skiff resume probe** and do what each `ACTION:` line asks.
+5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF RESUME PROBE OK`. Each scenario appends
+   one line to `resume-log.txt`: attempts, what stopped the first interrupted one and how soon, the
+   recovery path and its time, the clock afterwards, where the last attempt resumed from and its
+   status, the longest wait for a first byte, the longest pause between bytes and the speed. A
+   second line times every Memory Stick call the download made (count, total, longest), so a slow
+   download shows whether the time went to writes, syncs or the network.
+
+Without ARK, as in PPSSPP, TLS cannot start: the probe checks the PSP storage on the emulated Memory
+Stick (writes, sync, writing from an offset, read-back, rename never replacing a file, remove, the
+errors for missing files) and that libcurl refuses to start, and ends with
+`SKIFF RESUME PROBE NO ARK OK` (`scripts/dev.sh resume-probe`, run in CI).
 
 ## UI prototype
 

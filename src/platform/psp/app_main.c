@@ -8,7 +8,7 @@
 #include "lifecycle.h"
 
 int main(void) {
-    skiff_psp_install_exit_callback();
+    skiff_psp_install_callbacks();
     pspDebugScreenInit();
     pspDebugScreenPrintf("Skiff %s\n\n", skiff_version_string());
     pspDebugScreenPrintf(

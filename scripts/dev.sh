@@ -55,11 +55,14 @@ Commands run in the order given and stop at the first failure.
                and exits on its own (needs `psp` first; the dialogs need a real PSP)
   bench        Run the benchmark in PPSSPPHeadless, which has no ARK: TLS must refuse, the CRC-32
                and Memory Stick code runs on small sizes (needs `psp` first; numbers need a PSP)
+  resume-probe Run the resume probe in PPSSPPHeadless, which has no ARK: the PSP storage (sceIo)
+               the downloads write through must work, and TLS must refuse (needs `psp` first; the
+               interruptions need a real PSP)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
-  romm-test    Run the host build's transport against the running test RomM (TLS, mTLS, clock,
-               keep-alive, ranged downloads)
+  romm-test    Run the host build's transport and resumable downloads against the running test
+               RomM (TLS, mTLS, clock, keep-alive, ranged and resumed downloads)
   romm-record  Start a fresh test RomM with a small seeded file, record the fake transport's
                fixtures into tests/fixtures/romm/, and stop it
   romm-down    Stop the test RomM and delete its data
@@ -251,6 +254,9 @@ run_command() {
     ;;
   bench)
     run_emulator build/psp/pbp/skiff_bench/EBOOT.PBP "BENCH NO ARK"
+    ;;
+  resume-probe)
+    run_emulator build/psp/pbp/skiff_resume_probe/EBOOT.PBP "RESUME PROBE NO ARK"
     ;;
   romm-up)
     romm_up 127.0.0.1

@@ -80,6 +80,15 @@ skiff_err skiff_psp_net_connect(skiff_psp_net *net, int profile, long long timeo
 skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size);
 
 /*
+ * Whether the connection still stands, cheap enough to ask during a download: SKIFF_OK while the
+ * access point has given an address, SKIFF_ERR_NET_UNAVAILABLE once the Wi-Fi switch is off,
+ * SKIFF_ERR_NET_CONNECTION_LOST when the access point is gone (out of range, or after a suspend).
+ * Records the state in apctl_state but not as a failed call. SKIFF_ERR_INVALID_ARG before
+ * skiff_psp_net_load() finished.
+ */
+skiff_err skiff_psp_net_online(skiff_psp_net *net);
+
+/*
  * Drops the connection, if any, and waits up to timeout_us until it is reported gone. SKIFF_OK only
  * then; otherwise the modules must stay loaded (process exit releases them).
  */

@@ -344,14 +344,15 @@ picks them (default `all`, every one but speed):
   finish; the longest pause between chunks shows whether it stopped meanwhile;
 - **sleep:** back-to-back downloads with no input for `awake_s=` seconds (default 200): with Auto
   Sleep at its shortest, keep-awake (`scePowerTick`) must keep the PSP from sleeping;
-- **speed** (only when named, `scenarios=speed`; about 15 minutes, nothing to do): where a
+- **speed** (only when named, `scenarios=speed`; about 20 minutes, nothing to do): where a
   download's time goes, each part measured alone in one session. First the Memory Stick alone: the
   file's size in the download's 128 KB writes, synced every 4 MiB, from a 64-byte-aligned buffer
   and from one 8 bytes off (where `malloc()` puts blocks; the probe logs where it put one), with
   the write time of each quarter of the file, then 16 MiB at a download's pace (one write every
   300 ms, the Memory Stick idle in between). Then the network alone, computing the CRC-32 and
-  writing nothing, without and then with the download's stop and progress hooks. Last, two whole
-  downloads: as the engine writes them, and with every write copied to an aligned buffer first.
+  writing nothing, without and then with the download's stop and progress hooks. Last, three whole
+  downloads: as the engine writes them, gathered into 1 MiB writes, and through a writer thread
+  that writes while the download keeps receiving.
   Each line ends with the clock, power, signal and channel.
 
 After any interruption the probe waits up to `wait_s=` seconds (default 60) for the Wi-Fi switch,

@@ -34,6 +34,7 @@ add_library(
   src/core/version.c
   src/jobs/download.c
   src/jobs/download_state.c
+  src/log/log.c
   src/net/entropy.c
   src/net/http.c
   src/net/transport.c

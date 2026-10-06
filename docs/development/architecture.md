@@ -38,8 +38,9 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/`, `config/` (`config.ini`), `net/` (transport, TLS entropy source), `storage/` (the
-storage seam), `jobs/` (resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `net/` (transport, TLS entropy
+source), `storage/` (the storage seam), `jobs/` (resumable downloads) and `platform/psp/`
+(lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
 them.
 
 ## Threads, power and suspend
@@ -141,9 +142,38 @@ know and the player's order survive.
 
 ## Logging
 
-`log/` writes `PSP/GAME/Skiff/skiff.log`: levels, a size cap with one rotated file, and batched
-writes, because small writes to a Memory Stick are slow. Secrets are redacted at the logging call
-(tokens, keys, `Authorization` headers), not left to callers. The bug report form asks for this file.
+`log/` (`include/skiff/log.h`) writes `PSP/GAME/Skiff/skiff.log`, the file the bug report form
+asks for. A logger is an object the app creates and passes to the layers that log (`jobs/`,
+`app/`), not a global; `net/` and `romm/` return errors and leave logging to their callers. Lines
+read `2026-10-06 12:34:56.789Z W jobs: text`: the time comes from a clock the platform supplies
+(the real-time clock on the PSP, since `time()` has no date there), the level is one of error,
+warn, info and debug, and errors appear by stable name and number, never translated.
+
+- **Batched writes**: lines wait in an 8 KB buffer, because every Memory Stick write during a
+  download also pauses Wi-Fi reception ([Download speed](hardware-findings.md#download-speed)). A
+  batch is written when the buffer is full, after every warning or error (so they survive a crash),
+  when the logger is destroyed, and when `jobs/` asks for it right after the download engine's own
+  1 MiB write, while reception is paused anyway.
+- **Suspend-safe and durable**: each batch opens the file, writes, syncs and closes it, so no
+  handle is left open for a suspend to invalidate and a crash cannot lose a warning already
+  written. A batch that fails is tried once more at the same offset (a handle lost
+  to a suspend works again once reopened); one refused twice is dropped, and the next line says
+  how many were lost. Whatever part of a dropped batch reached the file stays (the storage seam
+  cannot shorten a file) and is cut off from the next batch by a line break. Logging never fails
+  its caller.
+- **Size cap**: past 256 KB the log moves to `skiff.log.1`, replacing an older one, and a new file
+  starts. If the move fails, the log starts over rather than grow past the cap.
+- **Redaction in the logger, not at call sites**: the values that are secret (the token, the
+  custom header values) are registered once with `skiff_log_add_secret()` and replaced by
+  `[redacted]` wherever they appear in any line, also in a URL or a response logged by mistake
+  (values nested in or overlapping one another are redacted as one stretch). Registration fails
+  closed: a value the logger cannot hold (under 8 or over 255 bytes, or past 12 values) makes every
+  later message show as withheld; `config.ini`'s checks keep configured values inside those
+  limits. A
+  line cut at its maximum length also loses any tail that could be the start of a secret.
+  `skiff_log_header()` shows the value only of headers known to carry none (`Content-Length`,
+  `Content-Range`, `Content-Type`, `ETag`), so an unknown proxy header is hidden by default.
+  Control characters are replaced, so text from a server cannot forge log lines.
 
 ## RomM integration
 

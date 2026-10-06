@@ -134,11 +134,9 @@ know and the player's order survive.
   fit is refused, never cut; a setting given twice is refused rather than one silently winning.
   Unknown keys are ignored, so an older Skiff reads a newer file, and the first one is kept for a
   log warning, since a typo such as `ca-file` would otherwise do nothing.
-- **Saving**: FAT cannot replace a file in one step, so Skiff writes and syncs `config.ini.tmp`,
-  renames it `config.ini.new` (so a `.new` file is always complete), syncs the device so that rename
-  is on it, removes `config.ini`, renames `.new` into place and syncs again. The next load (or save) finishes a save a power cut interrupted: a
-  `.tmp` file is dropped, a `.new` file without `config.ini` is put in place, and one beside
-  `config.ini` is dropped. An edit is parsed before it is saved, so a saved file always loads.
+- **Saving**: `config.ini` is replaced whole with the storage seam's crash-safe replacement (see
+  [Small files replaced whole](#downloads-and-storage)), and an edit is parsed before it is saved,
+  so a saved file always loads.
 - **Schema changes**: the `version` key exists from the first release; migrations arrive with the
   first change to the schema.
 
@@ -285,6 +283,13 @@ network is back.
   blanks at the start and blanks and dots at the end go (FAT drops trailing dots); a DOS device name
   (`CON`, `NUL`, `COM1`…) gets a leading `_`; a name over 127 bytes is shortened between characters,
   keeping its extension. A name that cleans to nothing (`..`) is refused.
+- **Small files replaced whole** (`config.ini`, the download queue, `installed.json`):
+  `skiff_storage_replace_whole()`. FAT cannot replace a file in one step, so Skiff writes and syncs
+  `<file>.tmp`, renames it `<file>.new` (so a `.new` file is always complete), syncs the device so
+  that rename is on it, removes the file, renames `.new` into place and syncs again; on the PSP any
+  sync flushes the whole device, directory entries included. `skiff_storage_read_whole()` (and the
+  next replacement) first finishes one a power cut interrupted: a `.tmp` file is dropped, a `.new`
+  file without the file is put in place, and one beside the file is dropped.
 - **Installed state**: a manifest (`PSP/GAME/Skiff/installed.json`: RomM ID → path, size, hash)
   records what Skiff installed. Scanning folders and matching names is only a fallback for games
   copied by hand.

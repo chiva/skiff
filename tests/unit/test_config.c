@@ -5,6 +5,8 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "skiff/config.h"
 
@@ -94,7 +96,7 @@ static void assert_refused(const char *text, skiff_err expected, int line, const
 
 static void set(const char *text, const char *section, const char *key, const char *value) {
     const skiff_err err = skiff_config_set(text, strlen(text), section, key, value, edited,
-                                           sizeof edited, &edited_length);
+                                           sizeof edited, &edited_length, &issue);
     TEST_PRINTF("set [%s] %s = '%s' -> %s:\n%s", section, key, value, skiff_err_name(err), edited);
     TEST_ASSERT_EQUAL_STRING(skiff_err_name(SKIFF_OK), skiff_err_name(err));
     TEST_ASSERT_EQUAL_size_t(strlen(edited), edited_length);
@@ -407,7 +409,7 @@ static void test_editing_an_empty_or_unterminated_file(void) {
     set("", "server", "url", "https://first.lan");
     TEST_ASSERT_EQUAL_STRING("[server]\nurl = https://first.lan\n", edited);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_set(NULL, 0, "auth", "token", "t", edited,
-                                                     sizeof edited, &edited_length));
+                                                     sizeof edited, &edited_length, NULL));
     TEST_ASSERT_EQUAL_STRING("[auth]\ntoken = t\n", edited);
     set("[server]\nurl = https://a", "auth", "token", "t");
     TEST_ASSERT_EQUAL_STRING("[server]\nurl = https://a\n\n[auth]\ntoken = t\n", edited);
@@ -448,25 +450,58 @@ static void test_names_and_values_that_would_not_parse_back_are_refused(void) {
     for (size_t i = 0; i < sizeof bad_names / sizeof bad_names[0]; i++) {
         TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                               skiff_config_set("", 0, "server", bad_names[i], "v", edited,
-                                               sizeof edited, &edited_length));
+                                               sizeof edited, &edited_length, NULL));
         TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                               skiff_config_set("", 0, bad_names[i], "url", "v", edited,
-                                               sizeof edited, &edited_length));
+                                               sizeof edited, &edited_length, NULL));
     }
     const char *bad_values[] = {"a\nb", "a\rb", " a", "a\t"};
     for (size_t i = 0; i < sizeof bad_values / sizeof bad_values[0]; i++) {
         TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                               skiff_config_set("", 0, "auth", "token", bad_values[i], edited,
-                                               sizeof edited, &edited_length));
+                                               sizeof edited, &edited_length, NULL));
     }
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_config_set(NULL, 1, "a", "b", "c", edited,
-                                                                  sizeof edited, &edited_length));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_config_set(NULL, 1, "a", "b", "c", edited, sizeof edited, &edited_length, NULL));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_config_set("", 0, "a", "b", "c", edited, 0, &edited_length));
+                          skiff_config_set("", 0, "a", "b", "c", edited, 0, &edited_length, NULL));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_config_set("", 0, "a", "b", NULL, edited, 8, &edited_length));
+                          skiff_config_set("", 0, "a", "b", NULL, edited, 8, &edited_length, NULL));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_config_set("", 0, "a", "b", "c", edited, 8, NULL));
+                          skiff_config_set("", 0, "a", "b", "c", edited, 8, NULL, NULL));
+}
+
+/* Calls skiff_config_set() expecting a refusal from the parser, which names the setting. */
+static void assert_set_refused(const char *text, const char *section, const char *key,
+                               const char *value, skiff_err expected, int line) {
+    const skiff_err err = skiff_config_set(text, strlen(text), section, key, value, edited,
+                                           sizeof edited, &edited_length, &issue);
+    TEST_PRINTF("set [%s] %s = '%s' -> %s at line %d [%s] %s", section, key, value,
+                skiff_err_name(err), issue.line, issue.section, issue.key);
+    TEST_ASSERT_EQUAL_STRING(skiff_err_name(expected), skiff_err_name(err));
+    TEST_ASSERT_EQUAL_INT(line, issue.line);
+    TEST_ASSERT_EQUAL_STRING("", edited);
+}
+
+static void test_an_edit_that_would_not_load_is_refused(void) {
+    TEST_PRINTF("values the parser refuses never reach a saved file");
+    assert_set_refused(GUIDE_TOKEN_EXAMPLE, "server", "url", "ftp://host",
+                       SKIFF_ERR_CONFIG_INVALID_VALUE, 2);
+    TEST_ASSERT_EQUAL_STRING("url", issue.key);
+    assert_set_refused(GUIDE_TOKEN_EXAMPLE, "auth", "token", "rmm two words",
+                       SKIFF_ERR_CONFIG_INVALID_VALUE, 5);
+    assert_set_refused("", "headers", "X Bad", "v", SKIFF_ERR_CONFIG_INVALID_VALUE, 2);
+    assert_set_refused("", "headers", "Authorization", "Bearer x", SKIFF_ERR_CONFIG_INVALID_VALUE,
+                       2);
+    assert_set_refused("", "mtls", "cert_file", "psp.crt", SKIFF_ERR_CONFIG_MISSING_KEY, 0);
+    TEST_ASSERT_EQUAL_STRING("key_file", issue.key);
+    TEST_PRINTF("a damaged line elsewhere is reported, not saved again");
+    assert_set_refused("[server]\nnot a setting\n", "auth", "token", "t", SKIFF_ERR_CONFIG_PARSE,
+                       2);
+    TEST_PRINTF("and an edit that repairs the file is accepted");
+    set("[server]\nurl = 192.168.1.20\n", "server", "url", "http://192.168.1.20");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse(edited));
 }
 
 static void test_an_edit_that_does_not_fit_is_refused(void) {
@@ -476,10 +511,10 @@ static void test_an_edit_that_does_not_fit_is_refused(void) {
     size_t length = 0;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
                           skiff_config_set(text, strlen(text), "auth", "token", "new", small,
-                                           strlen(expected), &length));
+                                           strlen(expected), &length, NULL));
     TEST_ASSERT_EQUAL_STRING("", small);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_set(text, strlen(text), "auth", "token", "new",
-                                                     small, strlen(expected) + 1, &length));
+                                                     small, strlen(expected) + 1, &length, NULL));
     TEST_ASSERT_EQUAL_STRING(expected, small);
 }
 
@@ -556,6 +591,16 @@ static void test_a_leftover_new_file_beside_the_old_one_is_dropped(void) {
                                                       strlen(GUIDE_MTLS_EXAMPLE)));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
+}
+
+static void test_an_undeletable_new_file_does_not_block_loading(void) {
+    write_file(path, GUIDE_TOKEN_EXAMPLE);
+    TEST_PRINTF("a folder named config.ini.new cannot be removed as a file");
+    TEST_ASSERT_EQUAL_INT(0, mkdir(new_path, S_IRWXU));
+    const skiff_err err = load();
+    TEST_ASSERT_EQUAL_INT(0, rmdir(new_path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_ASSERT_EQUAL_STRING(GUIDE_TOKEN_EXAMPLE, loaded);
 }
 
 static void test_a_file_too_large_is_damage(void) {
@@ -640,12 +685,14 @@ int main(void) {
     RUN_TEST(test_a_windows_file_keeps_crlf);
     RUN_TEST(test_only_the_first_instance_of_a_section_grows);
     RUN_TEST(test_names_and_values_that_would_not_parse_back_are_refused);
+    RUN_TEST(test_an_edit_that_would_not_load_is_refused);
     RUN_TEST(test_an_edit_that_does_not_fit_is_refused);
     RUN_TEST(test_no_file_loads_as_empty);
     RUN_TEST(test_save_then_load_round_trips);
     RUN_TEST(test_a_failed_write_or_sync_leaves_the_old_file);
     RUN_TEST(test_a_save_cut_before_the_rename_is_finished_by_load);
     RUN_TEST(test_a_leftover_new_file_beside_the_old_one_is_dropped);
+    RUN_TEST(test_an_undeletable_new_file_does_not_block_loading);
     RUN_TEST(test_a_file_too_large_is_damage);
     RUN_TEST(test_a_buffer_too_small_for_the_file_reports_damage);
     RUN_TEST(test_load_and_save_refuse_bad_arguments);

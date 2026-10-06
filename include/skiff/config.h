@@ -98,15 +98,20 @@ size_t skiff_config_headers(const skiff_config *config, skiff_http_header *out, 
  * follow the text's first line (CRLF for a file saved on Windows). Returns SKIFF_ERR_INVALID_ARG
  * for a NULL argument, a section or key that would not parse back (empty, blanks at either end,
  * '=', '[', ']', a line break, or a leading '#' or ';'), a value with a line break or blanks at
- * either end; SKIFF_ERR_BUFFER_TOO_SMALL if the result does not fit.
+ * either end; SKIFF_ERR_BUFFER_TOO_SMALL if the result does not fit. The result is parsed before it
+ * is returned, so it always loads back: when skiff_config_parse() refuses it (a bad value for this
+ * key, or a damaged line elsewhere in text), that error is returned with its issue and out is left
+ * empty. A client certificate and its key cannot be set one at a time; players set them by hand.
  */
 skiff_err skiff_config_set(const char *text, size_t length, const char *section, const char *key,
-                           const char *value, char *out, size_t out_size, size_t *out_length);
+                           const char *value, char *out, size_t out_size, size_t *out_length,
+                           skiff_config_issue *issue);
 
 /*
  * Reads config.ini into text (text_size should be SKIFF_CONFIG_TEXT_MAX + 1) and terminates it.
  * Finishes a save cut short by a power loss first: with only "<path>.new" on the device it becomes
- * config.ini (it was synced before config.ini was removed); with both, the .new file is deleted.
+ * config.ini (it was synced before config.ini was removed); with both, the .new file is deleted
+ * when it can be, and config.ini is read either way.
  * No file at all is an empty config (length 0). SKIFF_ERR_CONFIG_PARSE when the file does not fit,
  * SKIFF_ERR_INVALID_ARG for a NULL argument or a path too long for SKIFF_CONFIG_PATH_MAX, otherwise
  * the storage's error.

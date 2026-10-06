@@ -154,7 +154,7 @@ static const char *check_config_parsing(void) {
         return "a Windows-saved config.ini parsed wrongly";
     }
     if (skiff_config_set(text, sizeof text - 1, "auth", "token", "rmm_selftest", edited,
-                         sizeof edited, &edited_length) != SKIFF_OK ||
+                         sizeof edited, &edited_length, NULL) != SKIFF_OK ||
         skiff_config_parse(edited, edited_length, &config, NULL) != SKIFF_OK ||
         strcmp(config.token, "rmm_selftest") != 0 ||
         strcmp(config.server_url, "https://romm.lan:8443") != 0) {

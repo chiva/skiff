@@ -483,7 +483,11 @@ static void put_setting(builder *b, const char *key, const char *value, const ch
 }
 
 skiff_err skiff_config_set(const char *text, size_t length, const char *section, const char *key,
-                           const char *value, char *out, size_t out_size, size_t *out_length) {
+                           const char *value, char *out, size_t out_size, size_t *out_length,
+                           skiff_config_issue *issue) {
+    if (issue != NULL) {
+        memset(issue, 0, sizeof *issue);
+    }
     if ((text == NULL && length > 0) || section == NULL || key == NULL || value == NULL ||
         out == NULL || out_size == 0 || out_length == NULL || !is_settable_name(section) ||
         !is_settable_name(key) || !is_settable_value(value)) {
@@ -530,6 +534,14 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
     if (!b.fits) {
         out[0] = '\0';
         return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    /* What is saved must load: an address without a scheme, a token with a blank or a header Skiff
+     * sets itself is refused here, before it reaches the Memory Stick. */
+    skiff_config parsed;
+    const skiff_err err = skiff_config_parse(out, b.used, &parsed, issue);
+    if (err != SKIFF_OK) {
+        out[0] = '\0';
+        return err;
     }
     *out_length = b.used;
     return SKIFF_OK;
@@ -599,8 +611,9 @@ skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text
         err = pending_err == SKIFF_OK ? skiff_storage_rename(storage, pending, path) : pending_err;
     } else if (err == SKIFF_OK && pending_err != SKIFF_ERR_STORAGE_NOT_FOUND) {
         /* Cut before config.ini was removed: the .new file may be incomplete, the old one is not.
-         */
-        err = pending_err == SKIFF_OK ? skiff_storage_remove(storage, pending) : pending_err;
+         * Removing it is only tidying (the next save removes it first), so a .new file that cannot
+         * be removed never keeps the intact config.ini from loading. */
+        (void)skiff_storage_remove(storage, pending);
     }
     if (err != SKIFF_OK) {
         return err;

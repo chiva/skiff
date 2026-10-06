@@ -28,9 +28,11 @@
 #define SKIFF_DOWNLOAD_PATH_MAX 256
 /* FAT32 cannot hold a file of 4 GiB or more. */
 #define SKIFF_DOWNLOAD_MAX_BYTES 0xFFFFFFFFULL
-/* Writes go to the Memory Stick in blocks this large: it is slow with the small chunks the network
- * delivers (128 KB measured at 9–13 MB/s on a PSP-1000). */
-#define SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES ((size_t)128 * 1024)
+/* Writes go to the Memory Stick in blocks this large. While the Memory Stick writes, Wi-Fi data
+ * stops arriving and the transfer takes a while to pick up again, so fewer, larger writes are
+ * faster: on a PSP-1000 at 333 MHz, 64 MiB downloaded at 386 KB/s with 1 MiB writes and 296 KB/s
+ * with 128 KB ones (a writer thread did not help: 310 KB/s). */
+#define SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES ((size_t)1024 * 1024)
 /* How often the progress is made durable: at most this much is downloaded again after a power cut
  * (about 9 s at 470 KB/s). */
 #define SKIFF_DOWNLOAD_CHECKPOINT_BYTES ((uint64_t)4 * 1024 * 1024)

@@ -168,8 +168,14 @@ network is back.
   on a PSP-1000), continued from the saved value on resume, so resuming never re-reads the `.part`
   file. A finished file that does not match is deleted with its progress (206): the usual cause is a
   file replaced on the server without a rescan, so RomM's checksum is stale.
-- **Throughput**: writes go to the Memory Stick in 128 KB blocks
-  (`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`); it is slow with the small chunks the network delivers.
+- **Throughput**: writes go to the Memory Stick in 1 MiB blocks
+  (`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`), on the download's own thread. While the Memory Stick
+  writes, Wi-Fi data stops arriving, and each pause costs about 0.1 s before the transfer is back
+  to speed, so fewer, larger writes are faster. On a PSP-1000 at 333 MHz a 64 MiB download ran at
+  296 KB/s with 128 KB writes, 386 KB/s with 1 MiB writes, and 310 KB/s with 128 KB writes on a
+  separate writer thread: the Memory Stick blocks reception whichever thread writes, so a writer
+  thread is not worth its complexity. The network alone delivered about 480 KB/s
+  (`tests/hardware/resume_probe.c`, `scenarios=speed`).
 - **Storage seam**: the download writes through `include/skiff/storage.h`, not the C library. On the
   PSP newlib's `off_t` is 32 bits, so stdio cannot place a file position past 2 GiB; the PSP
   implementation uses `sceIo` with 64-bit offsets. A rename never replaces a file (FAT cannot do it

@@ -238,7 +238,7 @@ static void test_fresh_download_completes_and_is_renamed(void) {
     TEST_PRINTF("%d progress calls, %d .part writes, %d syncs", progress.calls, storage.writes,
                 storage.syncs);
     TEST_ASSERT_EQUAL_INT_MESSAGE(blocks, storage.writes,
-                                  "128 KB blocks, not one write per network chunk");
+                                  "1 MiB blocks, not one write per network chunk");
 }
 
 static void test_cut_mid_body_saves_the_exact_offset_and_resumes(void) {
@@ -546,7 +546,7 @@ static void test_memory_stick_full_keeps_the_last_durable_checkpoint(void) {
 static void test_handle_lost_to_a_suspend_costs_one_attempt(void) {
     serve(ETAG);
     storage.fail_suffix = SKIFF_DOWNLOAD_PART_SUFFIX;
-    /* 128 KB blocks: the handle goes stale after 5 MiB. */
+    /* Write-buffer blocks: the handle goes stale after 5 MiB. */
     storage.stale_after_writes = (int)(5 * MIB / SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, attempt());
     TEST_ASSERT_EQUAL_INT(1, storage.handles_lost);

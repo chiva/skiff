@@ -210,7 +210,8 @@ otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a
 tree and its strings stay within the budget above) and fills a screen in one request. They also turn off
 `with_char_index`, `with_filter_values` and `with_rom_id_index`: RomM includes those by default,
 and they grow with the whole library, not the page. A page that is not the one asked for (another
-offset, more ROMs than the limit) is refused, as is a ROM returned under another id. List items
+offset, more ROMs than the limit or than the total leaves, a ROM of another platform) is refused, as
+is a ROM returned under another id or listing a file of another ROM. List items
 carry the ROM's name, file name, size and CRC-32; `files[]` comes with `GET /api/roms/{id}`. RomM
 records CRC32, MD5 and SHA-1 for every file, so the integrity check can use any of them; its
 `crc_hash` is hexadecimal, read with or without leading zeros.

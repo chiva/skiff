@@ -49,7 +49,8 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_LOG_TIMESTAMP "2038-01-19 03:14:08.123Z"
 /* A RomM page whose numbers need more than 32 bits, and a CRC-32 with a leading zero. */
 #define SKIFF_SELFTEST_ROMM_PAGE                                                                   \
-    "{\"items\":[{\"id\":1099511627776,\"name\":\"Caf\xC3\xA9\",\"fs_name\":\"a.iso\","            \
+    "{\"items\":[{\"id\":1099511627776,\"platform_id\":1,\"name\":\"Caf\xC3\xA9\",\"fs_name\":"    \
+    "\"a.iso\","                                                                                   \
     "\"fs_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\"}],\"total\":1,\"offset\":0}"
 #define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
 #define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL

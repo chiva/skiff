@@ -89,6 +89,7 @@ typedef struct skiff_romm_platform {
 /* A ROM as a list shows it. size and crc32 are the whole ROM's (one file for a PSP game). */
 typedef struct skiff_romm_rom_summary {
     uint64_t id;
+    uint64_t platform_id;
     /* The title RomM shows; empty when it has none, then show fs_name. */
     char name[SKIFF_ROMM_NAME_MAX];
     char fs_name[SKIFF_ROMM_FILE_NAME_MAX];
@@ -157,12 +158,15 @@ skiff_err skiff_romm_find_platform(skiff_romm_client *client, const char *slug,
 /*
  * GET /api/roms: up to limit (1 to SKIFF_ROMM_PAGE_SIZE) ROMs of platform_id from offset, ordered
  * by name, without the per-library extras RomM adds by default. A page past the end is empty with
- * the total. SKIFF_ERR_INVALID_ARG for a limit out of range.
+ * the total. A page that is not the one asked for (another offset, more ROMs than limit or than the
+ * total leaves, a ROM of another platform) is SKIFF_ERR_ROMM_BAD_RESPONSE. SKIFF_ERR_INVALID_ARG
+ * for a limit out of range.
  */
 skiff_err skiff_romm_list_roms(skiff_romm_client *client, uint64_t platform_id, uint64_t offset,
                                size_t limit, skiff_romm_rom_page *out);
 
-/* GET /api/roms/{rom_id}: the ROM with its files. */
+/* GET /api/roms/{rom_id}: the ROM with its files. A response for another ROM, or listing a file of
+ * another ROM, is SKIFF_ERR_ROMM_BAD_RESPONSE. */
 skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_romm_rom *out);
 
 /*

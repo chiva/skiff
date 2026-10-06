@@ -100,6 +100,7 @@ static int read_flag(const cJSON *object, const char *name) {
 static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     memset(out, 0, sizeof *out);
     if (!cJSON_IsObject(item) || !read_count(item, "id", &out->id) ||
+        !read_count(item, "platform_id", &out->platform_id) ||
         !read_optional_text(item, "name", out->name, sizeof out->name) ||
         !read_text(item, "fs_name", out->fs_name, sizeof out->fs_name) || out->fs_name[0] == '\0' ||
         !read_count(item, "fs_size_bytes", &out->size) ||
@@ -110,9 +111,11 @@ static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     return 1;
 }
 
-static int parse_file(const cJSON *item, skiff_romm_file *out) {
+static int parse_file(const cJSON *item, uint64_t rom_id, skiff_romm_file *out) {
     memset(out, 0, sizeof *out);
-    return cJSON_IsObject(item) &&
+    uint64_t owner = 0;
+    /* A file listed under another ROM would download the wrong bytes under this one's name. */
+    return cJSON_IsObject(item) && read_count(item, "rom_id", &owner) && owner == rom_id &&
            read_text(item, "file_name", out->file_name, sizeof out->file_name) &&
            out->file_name[0] != '\0' && read_count(item, "file_size_bytes", &out->size) &&
            read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32);
@@ -184,8 +187,22 @@ static int fill_rom_page(const cJSON *root, skiff_romm_rom_page *out) {
         return 0;
     }
     out->count = (size_t)count;
+    /* Past the total there is nothing to list. */
+    if (out->offset > out->total || out->count > out->total - out->offset) {
+        return 0;
+    }
     for (int i = 0; i < count; i++) {
         if (!parse_summary(cJSON_GetArrayItem(items, i), &out->items[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Every ROM of a page belongs to platform_id. */
+static int on_platform(const skiff_romm_rom_page *page, uint64_t platform_id) {
+    for (size_t i = 0; i < page->count; i++) {
+        if (page->items[i].platform_id != platform_id) {
             return 0;
         }
     }
@@ -218,7 +235,7 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
     }
     out->file_count = (size_t)count;
     for (int i = 0; i < count && i < SKIFF_ROMM_FILES_MAX; i++) {
-        if (!parse_file(cJSON_GetArrayItem(files, i), &out->files[i])) {
+        if (!parse_file(cJSON_GetArrayItem(files, i), out->summary.id, &out->files[i])) {
             return 0;
         }
     }
@@ -524,8 +541,8 @@ skiff_err skiff_romm_list_roms(skiff_romm_client *client, uint64_t platform_id, 
     cJSON *root = NULL;
     skiff_err err = get_json(client, path, 1, &root);
     /* The page must be the one asked for: never show another page's ROMs under this offset. */
-    if (err == SKIFF_OK &&
-        (!fill_rom_page(root, out) || out->offset != offset || out->count > limit)) {
+    if (err == SKIFF_OK && (!fill_rom_page(root, out) || out->offset != offset ||
+                            out->count > limit || !on_platform(out, platform_id))) {
         err = SKIFF_ERR_ROMM_BAD_RESPONSE;
     }
     cJSON_Delete(root);

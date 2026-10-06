@@ -220,8 +220,8 @@ static void test_another_page_than_the_one_asked_for_is_refused(void) {
 static void test_a_page_longer_than_asked_is_refused(void) {
     char raw[RAW_MAX];
     snprintf(raw, sizeof raw, JSON_OK "{\"items\":[%s,%s],\"total\":2,\"limit\":1,\"offset\":0}",
-             "{\"id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
-             "{\"id\":2,\"fs_name\":\"b.iso\",\"fs_size_bytes\":1}");
+             "{\"id\":1,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
+             "{\"id\":2,\"platform_id\":1,\"fs_name\":\"b.iso\",\"fs_size_bytes\":1}");
     serve_raw(PAGE_PATH(0), raw);
     skiff_romm_rom_page page;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
@@ -248,44 +248,58 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
     char too_long[SKIFF_ROMM_NAME_MAX + 32];
     memset(too_long, 'n', SKIFF_ROMM_NAME_MAX);
     too_long[SKIFF_ROMM_NAME_MAX] = '\0';
-    snprintf(long_name, sizeof long_name,
-             "{\"id\":1,\"name\":\"%s\",\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}", too_long);
+    snprintf(
+        long_name, sizeof long_name,
+        "{\"id\":1,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
+        too_long);
     const item_case cases[] = {
-        {"minimal", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}", SKIFF_OK},
+        {"minimal", "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
+         SKIFF_OK},
         {"name and crc null",
-         "{\"id\":7,\"name\":null,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,"
+         "{\"id\":7,\"platform_id\":1,\"name\":null,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,"
          "\"crc_hash\":null}",
          SKIFF_OK},
-        {"crc empty", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"\"}",
+        {"crc empty",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"\"}",
          SKIFF_OK},
         {"crc without leading zeros",
-         "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"abc\"}", SKIFF_OK},
-        {"4 GiB - 1 bytes", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":4294967295}",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":"
+         "\"abc\"}",
+         SKIFF_OK},
+        {"4 GiB - 1 bytes",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":4294967295}",
          SKIFF_OK},
         {"no id", "{\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}", SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"id as text", "{\"id\":\"7\",\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"no fs_name", "{\"id\":7,\"fs_size_bytes\":1}", SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"empty fs_name", "{\"id\":7,\"fs_name\":\"\",\"fs_size_bytes\":1}",
+        {"no fs_name", "{\"id\":7,\"platform_id\":1,\"fs_size_bytes\":1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"negative size", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":-1}",
+        {"empty fs_name", "{\"id\":7,\"platform_id\":1,\"fs_name\":\"\",\"fs_size_bytes\":1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"fractional size", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1.5}",
+        {"negative size", "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":-1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"size past 2^53", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1e300}",
+        {"fractional size",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1.5}",
+         SKIFF_ERR_ROMM_BAD_RESPONSE},
+        {"size past 2^53",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1e300}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"id 2^53 + 1, which a double reads as 2^53",
-         "{\"id\":9007199254740993,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
+         "{\"id\":9007199254740993,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"fs_name with an escaped NUL",
-         "{\"id\":7,\"fs_name\":\"a.iso\\u0000.txt\",\"fs_size_bytes\":1}",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\\u0000.txt\",\"fs_size_bytes\":1}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"an escaped backslash before u0000 is just text",
-         "{\"id\":7,\"fs_name\":\"a\\\\u0000.iso\",\"fs_size_bytes\":1}", SKIFF_OK},
-        {"crc not hex", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"xyz\"}",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a\\\\u0000.iso\",\"fs_size_bytes\":1}",
+         SKIFF_OK},
+        {"crc not hex",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":"
+         "\"xyz\"}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"crc of nine digits",
-         "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"123456789\"}",
+         "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":"
+         "\"123456789\"}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"name too long for its field", long_name, SKIFF_ERR_ROMM_BAD_RESPONSE},
     };
@@ -307,8 +321,36 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
     }
 }
 
+static void test_a_rom_of_another_platform_is_refused(void) {
+    serve_page_item("{\"id\":7,\"platform_id\":2,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
+    TEST_ASSERT_EQUAL_size_t(0, page.count);
+}
+
+static void test_a_page_beyond_its_total_is_refused(void) {
+    serve_raw(PAGE_PATH(0), JSON_OK "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":"
+                                    "\"a.iso\",\"fs_size_bytes\":1}],\"total\":0,\"offset\":0}");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
+    static const char past_the_end[] = "{\"items\":[],\"total\":1,\"offset\":2}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(past_the_end, sizeof past_the_end - 1, &page));
+}
+
+static void test_a_file_of_another_rom_is_refused(void) {
+    static const char json[] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"a.iso\","
+                               "\"fs_size_bytes\":1,\"files\":[{\"rom_id\":4,\"file_name\":"
+                               "\"a.iso\",\"file_size_bytes\":1}]}";
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom(json, sizeof json - 1, &rom));
+    TEST_ASSERT_EQUAL_size_t(0, rom.file_count);
+}
+
 static void test_the_largest_exact_id_is_accepted(void) {
-    serve_page_item("{\"id\":9007199254740991,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}");
+    serve_page_item(
+        "{\"id\":9007199254740991,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}");
     skiff_romm_rom_page page;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_first_page(&page));
     TEST_ASSERT_EQUAL_UINT64(9007199254740991ULL, page.items[0].id);
@@ -362,8 +404,9 @@ static void test_a_body_of_too_many_tiny_values_is_refused_before_parsing(void) 
 }
 
 static void test_a_crc_without_leading_zeros_keeps_its_value(void) {
-    serve_page_item("{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":4294967295,"
-                    "\"crc_hash\":\"abc\"}");
+    serve_page_item(
+        "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":4294967295,"
+        "\"crc_hash\":\"abc\"}");
     skiff_romm_rom_page page;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_first_page(&page));
     TEST_ASSERT_EQUAL_HEX32(0xabcU, page.items[0].crc32);
@@ -380,7 +423,8 @@ static void test_a_proxy_login_page_is_a_bad_response(void) {
 }
 
 static void test_a_cut_response_is_a_bad_response(void) {
-    serve_raw(PAGE_PATH(0), JSON_OK "{\"items\":[{\"id\":1,\"fs_name\":\"a.iso\",\"fs_si");
+    serve_raw(PAGE_PATH(0),
+              JSON_OK "{\"items\":[{\"id\":1,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_si");
     skiff_romm_rom_page page;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
 }
@@ -483,12 +527,13 @@ static void test_another_rom_under_the_id_is_refused(void) {
 }
 
 static void test_a_rom_with_many_files_counts_them_all(void) {
-    char json[RAW_MAX] = "{\"id\":3,\"fs_name\":\"Folder\",\"fs_size_bytes\":20,"
+    char json[RAW_MAX] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Folder\",\"fs_size_bytes\":20,"
                          "\"has_multiple_files\":true,\"files\":[";
     const size_t files = SKIFF_ROMM_FILES_MAX + 4;
     for (size_t i = 0; i < files; i++) {
         char file[96];
-        snprintf(file, sizeof file, "%s{\"file_name\":\"part%zu.bin\",\"file_size_bytes\":1}",
+        snprintf(file, sizeof file,
+                 "%s{\"rom_id\":3,\"file_name\":\"part%zu.bin\",\"file_size_bytes\":1}",
                  i == 0 ? "" : ",", i);
         const size_t used = strlen(json);
         TEST_ASSERT_LESS_THAN_size_t(sizeof json - 4, used + strlen(file));
@@ -503,13 +548,13 @@ static void test_a_rom_with_many_files_counts_them_all(void) {
     TEST_ASSERT_FALSE(rom.files[0].has_crc32);
 }
 
-#define ROM_HEAD "{\"id\":3,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1"
+#define ROM_HEAD "{\"id\":3,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1"
 
 static void test_a_rom_without_files_or_with_a_broken_file_is_refused(void) {
     static const char *const BROKEN[] = {
         ROM_HEAD "}",
-        ROM_HEAD ",\"files\":[{\"file_name\":\"\",\"file_size_bytes\":1}]}",
-        ROM_HEAD ",\"files\":[{\"file_name\":\"a\"}]}",
+        ROM_HEAD ",\"files\":[{\"rom_id\":3,\"file_name\":\"\",\"file_size_bytes\":1}]}",
+        ROM_HEAD ",\"files\":[{\"rom_id\":3,\"file_name\":\"a\"}]}",
     };
     for (size_t i = 0; i < sizeof BROKEN / sizeof BROKEN[0]; i++) {
         skiff_romm_rom rom;
@@ -654,6 +699,9 @@ int main(void) {
     RUN_TEST(test_a_page_longer_than_asked_is_refused);
     RUN_TEST(test_page_limits_are_checked);
     RUN_TEST(test_every_field_is_checked_before_a_rom_is_shown);
+    RUN_TEST(test_a_rom_of_another_platform_is_refused);
+    RUN_TEST(test_a_page_beyond_its_total_is_refused);
+    RUN_TEST(test_a_file_of_another_rom_is_refused);
     RUN_TEST(test_the_largest_exact_id_is_accepted);
     RUN_TEST(test_valid_json_followed_by_junk_is_refused);
     RUN_TEST(test_a_body_of_too_many_tiny_values_is_refused_before_parsing);

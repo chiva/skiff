@@ -9,8 +9,9 @@
 - Usable by people who are not technical: every failure becomes a sentence and a code, in the
   PSP's system language.
 - Extensible to other platforms (PS1, emulated systems) without touching the core.
-- A download can take an hour (2–4 Mbit/s real Wi-Fi throughput), so everything is designed around
-  long, interruptible transfers.
+- A download can take most of an hour (a PSP-1000 reaches 1.7–3.8 Mbit/s over HTTPS, see
+  [Hardware findings](hardware-findings.md)), so everything is designed around long,
+  interruptible transfers.
 
 ## Layers
 

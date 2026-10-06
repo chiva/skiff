@@ -66,7 +66,12 @@ typedef struct span {
 
 static int is_blank(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
-static char ascii_lower(char c) { return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c; }
+static char ascii_lower(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 'a');
+    }
+    return c;
+}
 
 static span trim(span s) {
     while (s.length > 0 && is_blank(s.data[0])) {

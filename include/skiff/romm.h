@@ -35,9 +35,13 @@
  * alternative names, screenshots) several times that, so 25 keeps a page well under the body cap
  * while a 20-line screen needs one request. */
 #define SKIFF_ROMM_PAGE_SIZE 25
-/* The largest response read: room for a page of 25 ROMs at 20 KB each. cJSON's tree takes about as
- * much again while parsing, so a request peaks near 1 MB, a few percent of the PSP's heap. */
+/* The largest response read: room for a page of 25 ROMs at 20 KB each. */
 #define SKIFF_ROMM_BODY_MAX ((size_t)512 * 1024)
+/* The most JSON values a response may hold, checked before cJSON builds its tree (about 44 bytes a
+ * value on the PSP). RomM's responses run near one value per 20 bytes, so a full-size real response
+ * fits; a body made of tiny values is refused instead of costing megabytes. A request then peaks
+ * near 2 MB: the body, the tree and its strings. */
+#define SKIFF_ROMM_JSON_NODES_MAX 32768
 /* Files of one ROM kept by skiff_romm_get_rom(); a PSP game is one file. */
 #define SKIFF_ROMM_FILES_MAX 16
 

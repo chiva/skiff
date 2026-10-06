@@ -274,6 +274,14 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"size past 2^53", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1e300}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
+        {"id 2^53 + 1, which a double reads as 2^53",
+         "{\"id\":9007199254740993,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
+         SKIFF_ERR_ROMM_BAD_RESPONSE},
+        {"fs_name with an escaped NUL",
+         "{\"id\":7,\"fs_name\":\"a.iso\\u0000.txt\",\"fs_size_bytes\":1}",
+         SKIFF_ERR_ROMM_BAD_RESPONSE},
+        {"an escaped backslash before u0000 is just text",
+         "{\"id\":7,\"fs_name\":\"a\\\\u0000.iso\",\"fs_size_bytes\":1}", SKIFF_OK},
         {"crc not hex", "{\"id\":7,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":\"xyz\"}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
         {"crc of nine digits",
@@ -297,6 +305,60 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
             TEST_ASSERT_EQUAL_UINT64(0, page.items[0].id);
         }
     }
+}
+
+static void test_the_largest_exact_id_is_accepted(void) {
+    serve_page_item("{\"id\":9007199254740991,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_first_page(&page));
+    TEST_ASSERT_EQUAL_UINT64(9007199254740991ULL, page.items[0].id);
+}
+
+static void test_valid_json_followed_by_junk_is_refused(void) {
+    serve_raw(PAGE_PATH(0), JSON_OK "{\"items\":[],\"total\":0,\"offset\":0}<html>login</html>");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
+    tearDown();
+    setUp();
+    serve_raw(PAGE_PATH(0), JSON_OK "{\"items\":[],\"total\":0,\"offset\":0}{\"items\":[]}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_first_page(&page));
+    tearDown();
+    setUp();
+    serve_raw(PAGE_PATH(0), JSON_OK "{\"items\":[],\"total\":0,\"offset\":0}\r\n\t ");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_first_page(&page));
+}
+
+/* A ROM page padded with an array of `values` zeros, which cJSON would turn into that many nodes.
+ */
+static char *padded_page(size_t values) {
+    static const char head[] = "{\"items\":[],\"total\":0,\"offset\":0,\"pad\":[";
+    const size_t length = sizeof head - 1 + 2 * values + 2;
+    char *json = malloc(length + 1);
+    TEST_ASSERT_NOT_NULL(json);
+    memcpy(json, head, sizeof head - 1);
+    size_t used = sizeof head - 1;
+    for (size_t i = 0; i < values; i++) {
+        json[used++] = '0';
+        json[used++] = i + 1 < values ? ',' : ']';
+    }
+    json[used++] = '}';
+    json[used] = '\0';
+    return json;
+}
+
+static void test_a_body_of_too_many_tiny_values_is_refused_before_parsing(void) {
+    skiff_romm_rom_page page;
+    /* The page itself opens '{' and '[' and has 3 commas before "pad" opens its '['. */
+    const size_t fixed_openings = 6;
+    char *json = padded_page(SKIFF_ROMM_JSON_NODES_MAX - fixed_openings);
+    TEST_PRINTF("%zu bytes holding %d values: just under the limit", strlen(json),
+                SKIFF_ROMM_JSON_NODES_MAX - (int)fixed_openings);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(json, strlen(json), &page));
+    free(json);
+    json = padded_page(SKIFF_ROMM_JSON_NODES_MAX - fixed_openings + 1);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(json, strlen(json), &page));
+    free(json);
 }
 
 static void test_a_crc_without_leading_zeros_keeps_its_value(void) {
@@ -592,6 +654,9 @@ int main(void) {
     RUN_TEST(test_a_page_longer_than_asked_is_refused);
     RUN_TEST(test_page_limits_are_checked);
     RUN_TEST(test_every_field_is_checked_before_a_rom_is_shown);
+    RUN_TEST(test_the_largest_exact_id_is_accepted);
+    RUN_TEST(test_valid_json_followed_by_junk_is_refused);
+    RUN_TEST(test_a_body_of_too_many_tiny_values_is_refused_before_parsing);
     RUN_TEST(test_a_crc_without_leading_zeros_keeps_its_value);
     RUN_TEST(test_a_proxy_login_page_is_a_bad_response);
     RUN_TEST(test_a_cut_response_is_a_bad_response);

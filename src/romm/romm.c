@@ -26,8 +26,13 @@
 #define ASCII_DELETE 0x7F
 /* First size of the response buffer; it doubles up to SKIFF_ROMM_BODY_MAX. */
 #define BODY_INITIAL_BYTES ((size_t)16 * 1024)
-/* Integers a double holds exactly: ids and sizes arrive as JSON numbers. */
-#define JSON_INTEGER_MAX 9007199254740992.0
+/* 2^53: ids and sizes arrive as JSON numbers, which cJSON reads as doubles. Every whole number
+ * below it is exact; at it and above, a neighbour would round to the same value (2^53 + 1 reads as
+ * 2^53). */
+#define JSON_INTEGER_LIMIT 9007199254740992.0
+/* "\u0000": an escaped NUL would cut a name short where C strings end. */
+#define JSON_ESCAPED_NUL "u0000"
+#define JSON_ESCAPED_NUL_LENGTH 5
 
 /* ---- Fields ---- */
 
@@ -40,7 +45,7 @@ static int read_count(const cJSON *object, const char *name, uint64_t *out) {
         return 0;
     }
     const double value = item->valuedouble;
-    if (!(value >= 0.0 && value <= JSON_INTEGER_MAX) || value != (double)(uint64_t)value) {
+    if (!(value >= 0.0 && value < JSON_INTEGER_LIMIT) || value != (double)(uint64_t)value) {
         return 0;
     }
     *out = (uint64_t)value;
@@ -115,8 +120,57 @@ static int parse_file(const cJSON *item, skiff_romm_file *out) {
 
 /* ---- Parsing whole responses ---- */
 
+static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+/*
+ * Checks a body before cJSON builds a tree from it: at most SKIFF_ROMM_JSON_NODES_MAX values (each
+ * value but the first follows a ',' or opens its '[' or '{', so counting those outside strings
+ * bounds them without parsing), and no escaped NUL inside a string.
+ */
+static int json_shape_ok(const char *json, size_t length) {
+    size_t openings = 0;
+    int in_string = 0;
+    for (size_t i = 0; i < length; i++) {
+        const char c = json[i];
+        if (in_string) {
+            if (c == '\\') {
+                if (length - i > JSON_ESCAPED_NUL_LENGTH &&
+                    memcmp(json + i + 1, JSON_ESCAPED_NUL, JSON_ESCAPED_NUL_LENGTH) == 0) {
+                    return 0;
+                }
+                i++;
+            } else if (c == '"') {
+                in_string = 0;
+            }
+        } else if (c == '"') {
+            in_string = 1;
+        } else if (c == ',' || c == '[' || c == '{') {
+            if (++openings >= SKIFF_ROMM_JSON_NODES_MAX) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* The whole body as one JSON value, followed by nothing but blanks. */
 static cJSON *parse_json(const char *json, size_t length) {
-    return json == NULL || length == 0 ? NULL : cJSON_ParseWithLength(json, length);
+    if (json == NULL || length == 0 || !json_shape_ok(json, length)) {
+        return NULL;
+    }
+    const char *end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, 0);
+    if (root == NULL || end == NULL || end < json || (size_t)(end - json) > length) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+    for (const char *rest = end; rest < json + length; rest++) {
+        if (!is_json_blank(*rest)) {
+            cJSON_Delete(root);
+            return NULL;
+        }
+    }
+    return root;
 }
 
 static int fill_rom_page(const cJSON *root, skiff_romm_rom_page *out) {

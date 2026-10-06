@@ -396,6 +396,28 @@ static void parse_with_fs_name(const char *name, skiff_romm_rom_page *page) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(json, strlen(json), page));
 }
 
+static void test_a_clean_file_of_a_rom_with_an_unusable_name_gets_no_url(void) {
+    static const char rom_json[] =
+        "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Fold\\u001ber\",\"fs_size_bytes\":1,"
+        "\"files\":[{\"rom_id\":3,\"file_name\":\"clean.iso\",\"file_size_bytes\":1}]}";
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(rom_json, sizeof rom_json - 1, &rom));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.summary.name_status);
+    TEST_ASSERT_EQUAL_STRING("clean.iso", rom.files[0].file_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.files[0].name_status);
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+}
+
+static void test_a_raw_delete_byte_in_a_name_is_still_refused(void) {
+    static const char page_json[] = "{\"items\":[{\"id\":5,\"platform_id\":1,\"fs_name\":"
+                                    "\"a\x7f.iso\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(page_json, sizeof page_json - 1, &page));
+}
+
 static void test_an_overlong_name_is_cut_at_a_character_with_a_marker(void) {
     enum { FIELD = SKIFF_ROMM_FILE_NAME_MAX };
     char name[FIELD + 8];
@@ -943,6 +965,8 @@ int main(void) {
     RUN_TEST(test_a_rom_with_a_control_character_is_listed_but_not_downloadable);
     RUN_TEST(test_a_title_with_a_control_character_marks_its_rom);
     RUN_TEST(test_a_file_with_a_control_character_is_listed_but_not_downloadable);
+    RUN_TEST(test_a_clean_file_of_a_rom_with_an_unusable_name_gets_no_url);
+    RUN_TEST(test_a_raw_delete_byte_in_a_name_is_still_refused);
     RUN_TEST(test_an_overlong_name_is_cut_at_a_character_with_a_marker);
     RUN_TEST(test_an_overlong_file_name_is_listed_but_not_downloadable);
     RUN_TEST(test_structural_problems_still_refuse_the_page);

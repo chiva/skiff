@@ -208,7 +208,7 @@ than a name (a slug, a CRC, the server version) longer than its field or holding
 character. A name (a ROM's title or file name, or a file's name) with an escaped control character,
 or too long for its field, does not refuse its page: the item is listed with each control character
 shown as `?` and a long name cut at a UTF-8 character boundary and ended with `~`, but it is not
-downloadable, since that is not the name RomM serves the file under. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
+downloadable (a ROM's files neither), since that is not the name RomM serves the file under. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
 44 bytes each on the PSP): RomM's responses run near one value per 20 bytes, while a body of tiny
 values would otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a page,
 ordered by name: an unidentified ROM is about 2.6 KB of JSON and one with metadata several times

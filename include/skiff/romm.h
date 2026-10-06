@@ -133,8 +133,9 @@ typedef struct skiff_romm_file {
     uint64_t size;
     int has_crc32;
     uint32_t crc32;
-    /* Anything but SKIFF_ROMM_NAME_OK: file_name is only for display, and
-     * skiff_romm_content_url() refuses the file. */
+    /* Anything but SKIFF_ROMM_NAME_OK: file_name is only for display, or the ROM's own names are
+     * not usable (the file then carries the ROM's status), and skiff_romm_content_url() refuses the
+     * file. */
     skiff_romm_name_status name_status;
 } skiff_romm_file;
 

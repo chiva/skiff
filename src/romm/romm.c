@@ -210,16 +210,17 @@ static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || 
 /*
  * Checks a body before cJSON builds a tree from it: at most SKIFF_ROMM_JSON_NODES_MAX values (each
  * value but the first follows a ',' or opens its '[' or '{', so counting those outside strings
- * bounds them without parsing), and no NUL, raw or escaped, or other control character in a string,
- * where it would cut a name short at the C string's end.
+ * bounds them without parsing), no NUL anywhere, raw or escaped (it would cut a name short at the
+ * C string's end), and no raw control character in a string.
  */
 static int json_shape_ok(const char *json, size_t length) {
     size_t openings = 0;
     int in_string = 0;
     for (size_t i = 0; i < length; i++) {
         const char c = json[i];
-        /* JSON has no raw control characters inside a string, and no NUL anywhere. */
-        if (c == '\0' || (in_string && (unsigned char)c < (unsigned char)' ')) {
+        /* JSON has no raw C0 control characters inside a string and no NUL anywhere; a raw DEL is
+         * refused with them, so only an escaped control character reaches a name. */
+        if (c == '\0' || (in_string && is_control_byte(c))) {
             return 0;
         }
         if (in_string) {
@@ -328,6 +329,10 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
             return 0;
         }
         if (i < SKIFF_ROMM_FILES_MAX) {
+            /* A file of a ROM whose own names are not usable is not downloadable either. */
+            if (file.name_status == SKIFF_ROMM_NAME_OK) {
+                file.name_status = out->summary.name_status;
+            }
             out->files[i] = file;
             out->stored_count++;
         }

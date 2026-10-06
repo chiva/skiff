@@ -17,6 +17,15 @@
 
 #include "skiff/error.h"
 
+/* FAT32 cannot hold a file of 4 GiB or more. */
+#define SKIFF_STORAGE_MAX_FILE_BYTES 0xFFFFFFFFULL
+/* The longest path the storage helpers build or walk, terminator included. */
+#define SKIFF_STORAGE_PATH_MAX 256
+/* Left free on top of what a download needs: its .resume file, skiff.log, config.ini, and the
+ * file system's own room for directory entries, so a full Memory Stick never stops Skiff saving its
+ * settings or the player saving a game. */
+#define SKIFF_STORAGE_FREE_MARGIN_BYTES ((uint64_t)8 * 1024 * 1024)
+
 typedef enum skiff_file_mode {
     /* An existing file, read from its start. */
     SKIFF_FILE_READ,
@@ -40,6 +49,8 @@ typedef struct skiff_storage_ops {
     skiff_err (*size)(skiff_storage *storage, const char *path, uint64_t *out);
     skiff_err (*rename)(skiff_storage *storage, const char *from, const char *to);
     skiff_err (*remove)(skiff_storage *storage, const char *path);
+    skiff_err (*mkdir)(skiff_storage *storage, const char *path);
+    skiff_err (*free_space)(skiff_storage *storage, const char *path, uint64_t *out);
     void (*destroy)(skiff_storage *storage);
 } skiff_storage_ops;
 
@@ -77,6 +88,28 @@ skiff_err skiff_storage_size(skiff_storage *storage, const char *path, uint64_t 
 skiff_err skiff_storage_rename(skiff_storage *storage, const char *from, const char *to);
 
 skiff_err skiff_storage_remove(skiff_storage *storage, const char *path);
+
+/* Creates the folder path; one that already exists is not an error, a file by that name is
+ * (SKIFF_ERR_STORAGE_IO). Its parent must exist: see skiff_storage_mkdirs(). */
+skiff_err skiff_storage_mkdir(skiff_storage *storage, const char *path);
+
+/* Creates path and every missing folder above it, from the device ("ms0:") or the file system's
+ * root ("/") down. */
+skiff_err skiff_storage_mkdirs(skiff_storage *storage, const char *path);
+
+/* Free bytes on the device that holds the folder path (or the device itself, "ms0:").
+ * SKIFF_ERR_STORAGE_NOT_FOUND for a missing folder, SKIFF_ERR_STORAGE_IO when path is a file,
+ * SKIFF_ERR_NOT_IMPLEMENTED when the device cannot tell (PPSSPP, for some devices). */
+skiff_err skiff_storage_free_space(skiff_storage *storage, const char *path, uint64_t *out);
+
+/*
+ * Whether a file of needed bytes fits in the folder path, with
+ * SKIFF_STORAGE_FREE_MARGIN_BYTES to spare: SKIFF_ERR_STORAGE_FILE_TOO_LARGE for more than
+ * SKIFF_STORAGE_MAX_FILE_BYTES (FAT32 cannot store it whatever the space),
+ * SKIFF_ERR_STORAGE_NO_SPACE when it does not fit, otherwise skiff_storage_free_space()'s error or
+ * SKIFF_OK. For a download being resumed, needed is what is still to come.
+ */
+skiff_err skiff_storage_check_room(skiff_storage *storage, const char *path, uint64_t needed);
 
 /* Frees the storage. Does nothing for NULL. */
 void skiff_storage_destroy(skiff_storage *storage);

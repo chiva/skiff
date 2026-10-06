@@ -260,6 +260,67 @@ static void test_cut_mid_body_saves_the_exact_offset_and_resumes(void) {
     assert_complete();
 }
 
+static void test_no_room_refuses_before_any_request(void) {
+    serve(ETAG);
+    storage.has_free_bytes = 1;
+    storage.free_bytes = BODY_BYTES + SKIFF_STORAGE_FREE_MARGIN_BYTES - 1;
+    TEST_PRINTF("free %llu: one byte short of the file plus the margin",
+                (unsigned long long)storage.free_bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, transport.request_count, "nothing was asked for");
+    TEST_ASSERT_FALSE_MESSAGE(exists(part), "no .part file was started");
+    TEST_ASSERT_FALSE(exists(state_file));
+    storage.free_bytes++;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    assert_complete();
+}
+
+static void test_free_space_errors_stop_the_attempt_unless_the_device_cannot_tell(void) {
+    serve(ETAG);
+    storage.free_space_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, attempt());
+    storage.free_space_error = SKIFF_ERR_STORAGE_NO_MEDIA;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_MEDIA, attempt());
+    TEST_ASSERT_EQUAL_size_t(0, transport.request_count);
+    TEST_PRINTF("a device that cannot report free space is left to the writes");
+    storage.free_space_error = SKIFF_ERR_NOT_IMPLEMENTED;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    assert_complete();
+}
+
+static void test_a_missing_target_folder_fails_before_any_request(void) {
+    serve(ETAG);
+    char missing[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Skiff Test.iso", missing, sizeof missing));
+    spec.target_path = missing;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, attempt());
+    TEST_ASSERT_EQUAL_size_t(0, transport.request_count);
+    TEST_PRINTF("a file where the folder should be fails the same way, before any request");
+    char blocker[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", blocker, sizeof blocker));
+    skiff_file *file = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_open(posix, blocker, SKIFF_FILE_REPLACE, 0, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, attempt());
+    TEST_ASSERT_EQUAL_size_t(0, transport.request_count);
+    spec.target_path = "Skiff Test.iso";
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_INVALID_ARG, attempt(), "a target needs a folder");
+}
+
+static void test_a_resume_needs_room_only_for_what_is_still_to_come(void) {
+    fake_route *route = serve(ETAG);
+    const uint64_t cut = 5 * MIB;
+    cut_after(route, cut);
+    storage.has_free_bytes = 1;
+    storage.free_bytes = BODY_BYTES - cut + SKIFF_STORAGE_FREE_MARGIN_BYTES;
+    TEST_PRINTF("free %llu: the rest of the file plus the margin, not the whole file",
+                (unsigned long long)storage.free_bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_EQUAL_UINT64(cut, result.resumed_from);
+    assert_complete();
+}
+
 static void test_cut_before_the_first_checkpoint_and_at_the_very_start(void) {
     fake_route *route = serve(ETAG);
     cut_after(route, 1000);
@@ -703,6 +764,10 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_fresh_download_completes_and_is_renamed);
     RUN_TEST(test_cut_mid_body_saves_the_exact_offset_and_resumes);
+    RUN_TEST(test_no_room_refuses_before_any_request);
+    RUN_TEST(test_free_space_errors_stop_the_attempt_unless_the_device_cannot_tell);
+    RUN_TEST(test_a_missing_target_folder_fails_before_any_request);
+    RUN_TEST(test_a_resume_needs_room_only_for_what_is_still_to_come);
     RUN_TEST(test_cut_before_the_first_checkpoint_and_at_the_very_start);
     RUN_TEST(test_cut_while_resuming_keeps_both_parts);
     RUN_TEST(test_stale_etag_restarts_with_the_whole_file);

@@ -5,6 +5,7 @@
  * fake that injects Memory Stick failures (tests/support/fake_storage.h).
  */
 #include <string.h>
+#include <sys/stat.h>
 
 #include "skiff/storage.h"
 
@@ -247,6 +248,129 @@ static void test_fake_loses_open_handles_and_fails_syncs_and_renames(void) {
     TEST_ASSERT_EQUAL_INT(3, fake.opens);
 }
 
+static int is_folder(const char *target) {
+    struct stat status;
+    return stat(target, &status) == 0 && S_ISDIR(status.st_mode);
+}
+
+static void test_mkdir_creates_a_folder_once_and_keeps_an_existing_one(void) {
+    char folder[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", folder, sizeof folder));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdir(storage, folder));
+    TEST_ASSERT_TRUE(is_folder(folder));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, skiff_storage_mkdir(storage, folder),
+                                  "an existing folder is fine");
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, skiff_storage_mkdir(storage, path),
+                                  "a file by that name is not a folder");
+    char orphan[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "missing/child", orphan, sizeof orphan));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, skiff_storage_mkdir(storage, orphan));
+}
+
+static void test_mkdirs_creates_every_missing_folder(void) {
+    char deep[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "PSP/SAVEDATA/ULUS10064DATA00/", deep, sizeof deep));
+    TEST_PRINTF("mkdirs %s", deep);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, deep));
+    char check[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "PSP/SAVEDATA/ULUS10064DATA00", check, sizeof check));
+    TEST_ASSERT_TRUE(is_folder(check));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, skiff_storage_mkdirs(storage, deep),
+                                  "running again finds them all in place");
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "PSP//GAME", deep, sizeof deep));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, skiff_storage_mkdirs(storage, deep),
+                                  "a doubled separator is one");
+
+    write_file(path, CONTENT);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "file.bin/below", deep, sizeof deep));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, skiff_storage_mkdirs(storage, deep),
+                                  "a file in the way stops it");
+
+    char too_long[SKIFF_STORAGE_PATH_MAX + 1];
+    memset(too_long, 'x', sizeof too_long - 1);
+    too_long[sizeof too_long - 1] = '\0';
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(storage, too_long));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(storage, "ms0:"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(storage, "ms0:/"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(storage, "/"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(storage, ""));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdirs(NULL, deep));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdir(storage, ""));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mkdir(NULL, deep));
+}
+
+static void test_mkdirs_walks_a_device_path_from_its_first_folder(void) {
+    fake_storage fake;
+    fake_storage_init(&fake, storage);
+    fake.mkdir_error = SKIFF_ERR_STORAGE_NO_MEDIA;
+    TEST_PRINTF("\"ms0:/PSP/GAME\": the walk starts at ms0:/PSP, never at the device");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_MEDIA,
+                          skiff_storage_mkdirs(&fake.base, "ms0:/PSP/GAME"));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, fake.mkdirs, "stops at the first failure, ms0:/PSP");
+    skiff_storage_destroy(&fake.base);
+}
+
+static void test_free_space_of_the_host_device(void) {
+    uint64_t free_bytes = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_free_space(storage, dir, &free_bytes));
+    TEST_PRINTF("free under %s: %llu bytes", dir, (unsigned long long)free_bytes);
+    TEST_ASSERT_TRUE(free_bytes > 0);
+    char missing[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "missing", missing, sizeof missing));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND,
+                          skiff_storage_free_space(storage, missing, &free_bytes));
+    TEST_ASSERT_EQUAL_UINT64(0, free_bytes);
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO,
+                                  skiff_storage_free_space(storage, path, &free_bytes),
+                                  "a file is not a folder");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_free_space(storage, dir, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_free_space(storage, "", &free_bytes));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_free_space(NULL, dir, &free_bytes));
+}
+
+#define GAME_BYTES ((uint64_t)700 * 1024 * 1024)
+
+/* The free space the fake reports from now on. */
+static void report_free_bytes(fake_storage *fake, uint64_t free_bytes) {
+    fake->has_free_bytes = 1;
+    fake->free_bytes = free_bytes;
+}
+
+static void test_room_needs_the_file_plus_a_margin(void) {
+    fake_storage fake;
+    fake_storage_init(&fake, storage);
+    report_free_bytes(&fake, GAME_BYTES + SKIFF_STORAGE_FREE_MARGIN_BYTES);
+    TEST_PRINTF("free %llu: a 700 MiB game fits exactly with the margin",
+                (unsigned long long)fake.free_bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_check_room(&fake.base, dir, GAME_BYTES));
+    report_free_bytes(&fake, GAME_BYTES + SKIFF_STORAGE_FREE_MARGIN_BYTES - 1);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE,
+                          skiff_storage_check_room(&fake.base, dir, GAME_BYTES));
+    report_free_bytes(&fake, 0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, skiff_storage_check_room(&fake.base, dir, 0));
+
+    TEST_PRINTF("4 GiB and up cannot be stored on FAT32, whatever the space");
+    report_free_bytes(&fake, UINT64_MAX);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_check_room(&fake.base, dir, SKIFF_STORAGE_MAX_FILE_BYTES));
+    const int queries = fake.free_space_queries;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_STORAGE_FILE_TOO_LARGE,
+        skiff_storage_check_room(&fake.base, dir, SKIFF_STORAGE_MAX_FILE_BYTES + 1));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(queries, fake.free_space_queries, "refused without asking");
+    skiff_storage_destroy(&fake.base);
+
+    TEST_PRINTF("the device's own error comes through");
+    char missing[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "missing", missing, sizeof missing));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND,
+                          skiff_storage_check_room(storage, missing, 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_check_room(storage, dir, 1));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_replace_write_read_and_size);
@@ -258,5 +382,10 @@ int main(void) {
     RUN_TEST(test_arguments_are_checked_before_the_implementation);
     RUN_TEST(test_fake_fills_up_mid_write_for_matching_paths_only);
     RUN_TEST(test_fake_loses_open_handles_and_fails_syncs_and_renames);
+    RUN_TEST(test_mkdir_creates_a_folder_once_and_keeps_an_existing_one);
+    RUN_TEST(test_mkdirs_creates_every_missing_folder);
+    RUN_TEST(test_mkdirs_walks_a_device_path_from_its_first_folder);
+    RUN_TEST(test_free_space_of_the_host_device);
+    RUN_TEST(test_room_needs_the_file_plus_a_margin);
     return UNITY_END();
 }

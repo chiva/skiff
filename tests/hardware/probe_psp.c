@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "skiff/selftest.h"
+#include "skiff/storage_paths.h"
 
 enum { BYTES_PER_KB = 1024 };
 
@@ -77,7 +78,7 @@ void skiff_probe_report_net_failure(skiff_psp_report *report, const skiff_psp_ne
 }
 
 int skiff_probe_sibling(const char *program_path, const char *file_name, char *out) {
-    return skiff_selftest_sibling_path(program_path, file_name, out, SKIFF_PROBE_PATH_MAX) ==
+    return skiff_storage_sibling_path(program_path, file_name, out, SKIFF_PROBE_PATH_MAX) ==
            SKIFF_OK;
 }
 

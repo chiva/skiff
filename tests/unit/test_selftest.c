@@ -111,33 +111,6 @@ static void test_result_path_needs_room_for_the_terminator(void) {
                           skiff_selftest_result_path("ms0:/EBOOT.PBP", out, 0));
 }
 
-static void test_sibling_path_uses_the_given_file_name(void) {
-    char out[RESULT_PATH_MAX];
-    const skiff_err err = skiff_selftest_sibling_path("ms0:/PSP/GAME/SkiffKIRKProbe/EBOOT.PBP",
-                                                      "kirk-log.txt", out, sizeof out);
-    TEST_PRINTF("sibling -> %s (%s)", out, skiff_err_name(err));
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
-    TEST_ASSERT_EQUAL_STRING("ms0:/PSP/GAME/SkiffKIRKProbe/kirk-log.txt", out);
-}
-
-static void test_sibling_path_rejects_a_null_file_name(void) {
-    char out[RESULT_PATH_MAX] = "stale";
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_selftest_sibling_path("ms0:/EBOOT.PBP", NULL, out, sizeof out));
-    TEST_ASSERT_EQUAL_STRING("", out);
-}
-
-/* "ms0:/" + "a.log" + NUL is exactly 11 bytes: the limit follows the file name, not result.txt. */
-static void test_sibling_path_sizes_the_buffer_for_its_own_name(void) {
-    char out[RESULT_PATH_MAX];
-    const size_t exact = strlen("ms0:/a.log") + 1;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_selftest_sibling_path("ms0:/EBOOT.PBP", "a.log", out, exact));
-    TEST_ASSERT_EQUAL_STRING("ms0:/a.log", out);
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_selftest_sibling_path("ms0:/EBOOT.PBP", "a.log", out, exact - 1));
-}
-
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_all_checks_pass_on_host);
@@ -150,8 +123,5 @@ int main(void) {
     RUN_TEST(test_result_path_rejects_a_path_without_a_directory);
     RUN_TEST(test_result_path_rejects_null_arguments);
     RUN_TEST(test_result_path_needs_room_for_the_terminator);
-    RUN_TEST(test_sibling_path_uses_the_given_file_name);
-    RUN_TEST(test_sibling_path_rejects_a_null_file_name);
-    RUN_TEST(test_sibling_path_sizes_the_buffer_for_its_own_name);
     return UNITY_END();
 }

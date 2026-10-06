@@ -5,9 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #define NEW_FILE_PERMISSIONS 0644
+#define NEW_FOLDER_PERMISSIONS 0755
 
 typedef struct posix_file {
     skiff_file base; /* first, so a skiff_file * is a posix_file * */
@@ -142,11 +144,42 @@ static skiff_err posix_remove(skiff_storage *storage, const char *path) {
     return unlink(path) == 0 ? SKIFF_OK : from_errno(errno);
 }
 
+static skiff_err posix_mkdir(skiff_storage *storage, const char *path) {
+    (void)storage;
+    if (mkdir(path, NEW_FOLDER_PERMISSIONS) == 0) {
+        return SKIFF_OK;
+    }
+    const int error = errno;
+    struct stat status;
+    if (error == EEXIST) {
+        return stat(path, &status) == 0 && S_ISDIR(status.st_mode) ? SKIFF_OK
+                                                                   : SKIFF_ERR_STORAGE_IO;
+    }
+    return from_errno(error);
+}
+
+static skiff_err posix_free_space(skiff_storage *storage, const char *path, uint64_t *out) {
+    (void)storage;
+    struct stat status;
+    if (stat(path, &status) != 0) {
+        return from_errno(errno);
+    }
+    if (!S_ISDIR(status.st_mode)) {
+        return SKIFF_ERR_STORAGE_IO;
+    }
+    struct statvfs device;
+    if (statvfs(path, &device) != 0) {
+        return from_errno(errno);
+    }
+    *out = (uint64_t)device.f_bavail * (uint64_t)device.f_frsize;
+    return SKIFF_OK;
+}
+
 static void posix_destroy(skiff_storage *storage) { free(storage); }
 
 static const skiff_storage_ops POSIX_STORAGE_OPS = {
-    posix_open, posix_read,   posix_write,  posix_sync,    posix_close,
-    posix_size, posix_rename, posix_remove, posix_destroy,
+    posix_open,   posix_read,   posix_write, posix_sync,       posix_close,   posix_size,
+    posix_rename, posix_remove, posix_mkdir, posix_free_space, posix_destroy,
 };
 
 skiff_err skiff_posix_storage_create(skiff_storage **out) {

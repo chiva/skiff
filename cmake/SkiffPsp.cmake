@@ -125,6 +125,8 @@ target_compile_options(skiff_psp_storage PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_link_libraries(skiff_psp_storage PUBLIC skiff_core)
 target_include_directories(skiff_psp_storage PUBLIC src/platform/psp)
 skiff_set_warnings(skiff_psp_storage)
+# The self-test reports the free space of its device (hardware row S1).
+target_link_libraries(skiff_selftest PRIVATE skiff_psp_storage)
 
 # Helpers shared by the hardware probes (tests/hardware/): the plain-C part, also unit-tested on the
 # host, and the PSP part (check lines, memory, configuration file, network stack, TLS session). Like

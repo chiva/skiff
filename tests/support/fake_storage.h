@@ -37,7 +37,17 @@ typedef struct fake_storage {
      * call with SKIFF_ERR_STORAGE_IO, as a handle lost to a suspend; 0 for never. Files opened
      * afterwards work. */
     int stale_after_writes;
+    /* Every folder creation of a matching path fails with this; SKIFF_OK for none. */
+    skiff_err mkdir_error;
+    /* When set, free_space reports free_bytes instead of asking the inner storage. */
+    int has_free_bytes;
+    uint64_t free_bytes;
+    /* When not SKIFF_OK, free_space fails with this (SKIFF_ERR_NOT_IMPLEMENTED: a device that
+     * cannot tell). */
+    skiff_err free_space_error;
     /* What the fake saw. */
+    int mkdirs;
+    int free_space_queries;
     uint64_t bytes_written;
     int writes;
     int syncs;

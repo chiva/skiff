@@ -53,6 +53,7 @@ add_library(
   src/net/http.c
   src/net/transport.c
   src/romm/romm.c
+  src/storage/paths.c
   src/storage/storage.c)
 target_include_directories(
   skiff_core

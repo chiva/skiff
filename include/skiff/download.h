@@ -27,7 +27,7 @@
 /* Room for a target path with either suffix and its terminator. */
 #define SKIFF_DOWNLOAD_PATH_MAX 256
 /* FAT32 cannot hold a file of 4 GiB or more. */
-#define SKIFF_DOWNLOAD_MAX_BYTES 0xFFFFFFFFULL
+#define SKIFF_DOWNLOAD_MAX_BYTES SKIFF_STORAGE_MAX_FILE_BYTES
 /* Writes go to the Memory Stick in blocks this large. While the Memory Stick writes, Wi-Fi data
  * stops arriving and the transfer takes a while to pick up again, so fewer, larger writes are
  * faster: on a PSP-1000 at 333 MHz, 64 MiB downloaded at 386 KB/s with 1 MiB writes and 296 KB/s
@@ -111,9 +111,13 @@ typedef struct skiff_download_result {
 /*
  * Runs one attempt and fills result. SKIFF_OK means the target is complete; otherwise the progress
  * made is kept for the next attempt, except as noted:
- *   - SKIFF_ERR_INVALID_ARG: a NULL argument, a missing URL or target, a zero size, a path too
- *     long for SKIFF_DOWNLOAD_PATH_MAX;
+ *   - SKIFF_ERR_INVALID_ARG: a NULL argument, a missing URL or target, a target without a folder,
+ *     a zero size, a path too long for SKIFF_DOWNLOAD_PATH_MAX;
  *   - SKIFF_ERR_STORAGE_FILE_TOO_LARGE: expected_size above SKIFF_DOWNLOAD_MAX_BYTES;
+ *   - before any request, skiff_storage_check_room()'s error for the target's folder:
+ *     SKIFF_ERR_STORAGE_NO_SPACE when it has less free space than what is still to come plus
+ *     SKIFF_STORAGE_FREE_MARGIN_BYTES, SKIFF_ERR_STORAGE_NOT_FOUND when the folder is missing; a
+ *     device that cannot tell its free space (SKIFF_ERR_NOT_IMPLEMENTED) is not refused;
  *   - the transport's error (skiff_transport_perform()), or the stop hook's;
  *   - the RomM error for an HTTP status other than 200 or 206 (skiff_http_status_error()); the
  *     .part file is not touched;

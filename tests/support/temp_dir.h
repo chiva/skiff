@@ -13,7 +13,7 @@ int temp_dir_create(char *out, size_t out_size);
 /* "<dir>/<name>" into out; 0 if it does not fit. */
 int temp_dir_path(const char *dir, const char *name, char *out, size_t out_size);
 
-/* Removes dir and the files in it (the tests create no subdirectories). */
+/* Removes dir and everything in it, folders included. */
 void temp_dir_remove(const char *dir);
 
 #endif

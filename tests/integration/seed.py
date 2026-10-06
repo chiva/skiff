@@ -27,6 +27,12 @@ PLATFORM_SLUG = "psp"
 LIBRARY_DIR = Path("/romm/library/roms") / PLATFORM_SLUG
 PAYLOAD_NAME = "Skiff Test Payload.iso"
 DEFAULT_PAYLOAD_BYTES = 1024 * 1024
+# A second, small file: a second ROM for pagination, and a name that only downloads when every
+# reserved character in it is percent-encoded ('#' would end the path, '&' and '+' change its
+# meaning, 'é' is two UTF-8 bytes).
+EXTRA_NAME = "Skiff Extra #2 (Café & Co+).iso"
+EXTRA_BYTES = 1536
+EXTRA_SEED = b"skiff-integration-extra"
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
 # same hashes on every run and every machine.
 PAYLOAD_SEED = b"skiff-integration-payload"
@@ -54,15 +60,15 @@ def log(message):
     print(f"seed: {message}", file=sys.stderr, flush=True)
 
 
-def write_payload(size):
-    """Create the payload once and return its size and hashes (the ones RomM records)."""
+def write_payload(size, name=PAYLOAD_NAME, seed=PAYLOAD_SEED):
+    """Create a payload once and return its size and hashes (the ones RomM records)."""
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    path = LIBRARY_DIR / PAYLOAD_NAME
+    path = LIBRARY_DIR / name
     sha1, md5, crc = hashlib.sha1(), hashlib.md5(), 0
     with path.open("wb") as out:
         written, counter = 0, 0
         while written < size:
-            block = hashlib.sha256(PAYLOAD_SEED + counter.to_bytes(8, "big")).digest()
+            block = hashlib.sha256(seed + counter.to_bytes(8, "big")).digest()
             block = block[: size - written]
             out.write(block)
             sha1.update(block)
@@ -71,7 +77,7 @@ def write_payload(size):
             written += len(block)
             counter += 1
     return {
-        "file_name": PAYLOAD_NAME,
+        "file_name": name,
         "size": size,
         "sha1": sha1.hexdigest(),
         "md5": md5.hexdigest(),
@@ -148,17 +154,21 @@ async def scan(cookie):
         await client.disconnect()
 
 
-def find_rom(auth):
+def find_roms(auth, names):
+    """The platform's id and the ROM id of each file name, in order."""
     status, platforms = request("GET", "/api/platforms", auth)
     platform = next((p for p in platforms or [] if p["fs_slug"] == PLATFORM_SLUG), None)
     if status != HTTP_OK or platform is None:
         raise SystemExit(f"seed: platform {PLATFORM_SLUG} missing after the scan (HTTP {status})")
     status, page = request("GET", f"/api/roms?platform_ids={platform['id']}", auth)
     items = (page or {}).get("items", [])
-    rom = next((r for r in items if r["fs_name"] == PAYLOAD_NAME), None)
-    if status != HTTP_OK or rom is None:
-        raise SystemExit(f"seed: {PAYLOAD_NAME} missing after the scan (HTTP {status})")
-    return platform["id"], rom["id"]
+    ids = []
+    for name in names:
+        rom = next((r for r in items if r["fs_name"] == name), None)
+        if status != HTTP_OK or rom is None:
+            raise SystemExit(f"seed: {name} missing after the scan (HTTP {status})")
+        ids.append(rom["id"])
+    return platform["id"], ids
 
 
 def create_token(auth):
@@ -177,14 +187,22 @@ def main():
     auth = basic_auth(user, password)
 
     payload = write_payload(size)
+    extra = write_payload(EXTRA_BYTES, EXTRA_NAME, EXTRA_SEED)
     create_admin(user, password, auth)
     started = time.monotonic()
     asyncio.run(scan(session_cookie(auth)))
-    platform_id, rom_id = find_rom(auth)
-    log(f"rom {rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")
+    platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
+    log(f"roms {rom_id}, {extra_rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")
+    extra["rom_id"] = extra_rom_id
     print(
         json.dumps(
-            {"platform_id": platform_id, "rom_id": rom_id, "token": create_token(auth), **payload}
+            {
+                "platform_id": platform_id,
+                "rom_id": rom_id,
+                "token": create_token(auth),
+                **payload,
+                "extra": extra,
+            }
         )
     )
 

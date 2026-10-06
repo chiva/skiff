@@ -10,6 +10,7 @@
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/log.h"
+#include "skiff/romm.h"
 #include "skiff/version.h"
 
 typedef const char *(*selftest_check_fn)(void);
@@ -46,6 +47,13 @@ typedef struct selftest_check {
 /* 2^31 seconds after 1970, in milliseconds: past what a 32-bit time_t holds. */
 #define SKIFF_SELFTEST_LOG_MS 2147483648123LL
 #define SKIFF_SELFTEST_LOG_TIMESTAMP "2038-01-19 03:14:08.123Z"
+/* A RomM page whose numbers need more than 32 bits, and a CRC-32 with a leading zero. */
+#define SKIFF_SELFTEST_ROMM_PAGE                                                                   \
+    "{\"items\":[{\"id\":1099511627776,\"name\":\"Caf\xC3\xA9\",\"fs_name\":\"a.iso\","            \
+    "\"fs_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\"}],\"total\":1,\"offset\":0}"
+#define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
+#define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL
+#define SKIFF_SELFTEST_ROMM_CRC32 0x0a1b2c3dU
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -178,6 +186,23 @@ static const char *check_log_timestamp(void) {
                : "a log timestamp past 2038 came out wrong";
 }
 
+/* RomM's JSON is parsed by cJSON with newlib's strtod on the PSP, and its numbers turned into
+ * 64-bit integers in software (libgcc): ids and sizes past 32 bits must come out exact. */
+static const char *check_romm_json(void) {
+    static const char page_text[] = SKIFF_SELFTEST_ROMM_PAGE;
+    static skiff_romm_rom_page page;
+    if (skiff_romm_parse_rom_page(page_text, sizeof page_text - 1, &page) != SKIFF_OK ||
+        page.count != 1) {
+        return "a RomM page did not parse";
+    }
+    return page.items[0].id == SKIFF_SELFTEST_ROMM_ID &&
+                   page.items[0].size == SKIFF_SELFTEST_ROMM_SIZE && page.items[0].has_crc32 &&
+                   page.items[0].crc32 == SKIFF_SELFTEST_ROMM_CRC32 &&
+                   strcmp(page.items[0].name, "Caf\xC3\xA9") == 0
+               ? NULL
+               : "a RomM page came back with other values";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -190,6 +215,7 @@ static const selftest_check CHECKS[] = {
     {"download-state", check_download_state},
     {"config-parse", check_config_parsing},
     {"log-timestamp", check_log_timestamp},
+    {"romm-json", check_romm_json},
 };
 // clang-format on
 

@@ -25,6 +25,20 @@ configure_file(src/core/version_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generat
 # zlib1g-dev.
 find_package(ZLIB REQUIRED)
 
+# cJSON for RomM's responses (src/romm/): pspdev packages 1.7.16 for the PSP, and the host image
+# builds the same version (docker/host.Dockerfile). Neither installs a CMake package, so it is found
+# by header and library; the imported target keeps its header off our strict warnings.
+find_path(SKIFF_CJSON_INCLUDE_DIR cjson/cJSON.h REQUIRED)
+find_library(SKIFF_CJSON_LIBRARY cjson REQUIRED)
+add_library(skiff_cjson UNKNOWN IMPORTED)
+set_target_properties(
+  skiff_cjson PROPERTIES IMPORTED_LOCATION "${SKIFF_CJSON_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES
+                                                                    "${SKIFF_CJSON_INCLUDE_DIR}")
+if(PSP)
+  # newlib's libm, which cJSON's number printing needs (pkg-config: Libs.private).
+  set_property(TARGET skiff_cjson PROPERTY INTERFACE_LINK_LIBRARIES m)
+endif()
+
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
 add_library(
   skiff_core STATIC
@@ -38,12 +52,13 @@ add_library(
   src/net/entropy.c
   src/net/http.c
   src/net/transport.c
+  src/romm/romm.c
   src/storage/storage.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB)
+target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB skiff_cjson)
 skiff_set_warnings(skiff_core)
 
 # Skiff's TLS stack, built with the same profile for both targets (docker/toolchain/build-tls.sh):

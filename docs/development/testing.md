@@ -82,7 +82,9 @@ the PSP's network checks:
   from an untrusted CA. They are kept while valid, so copies on a PSP keep working; the proxy's
   certificate is reissued when its addresses change.
 - `seed.py` runs inside the RomM container. It creates the admin, writes a synthetic 1 MiB file to
-  the `psp` platform (the same bytes every run), scans it and creates an API token.
+  the `psp` platform (the same bytes every run) and a second, small one named
+  `Skiff Extra #2 (Café & Co+).iso` (a second ROM for paging, and a name that only downloads when
+  `#`, `&`, `+` and `é` are percent-encoded), scans them and creates an API token.
 
 | Command | What it does |
 |---|---|
@@ -111,9 +113,9 @@ that another checkout (a parallel worktree) started.
 
 ### Integration tests
 
-`romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c` and
-`tests/integration/test_download_romm.c` on the host and runs them on the compose network. The
-first checks the error codes a player would see, over the TLS stack the PSP uses:
+`romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c`,
+`tests/integration/test_download_romm.c` and `tests/integration/test_client_romm.c` on the host and
+runs them on the compose network. The first checks the error codes a player would see, over the TLS stack the PSP uses:
 
 - HTTPS through the test CA works, and without the CA the server is untrusted (105);
 - with the clock set to 2000 (a PSP whose battery ran flat) the failure is the clock (108); with
@@ -129,6 +131,12 @@ The second runs resumable downloads (`include/skiff/download.h`) into a temporar
 download stopped at 40% by its stop hook continues on a new connection with 206 from the saved
 offset, a `.resume` file with an ETag the server no longer has restarts with 200, and both match
 the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind.
+
+The third drives the RomM client (`include/skiff/romm.h`): the version check passes, the `psp`
+platform holds both seeded ROMs, pages of one ROM return each once and then an empty page, a full
+page lists them in name order, the second file's details match the seed, and its download URL,
+built from the name with reserved characters, brings back exactly its bytes; a wrong token is a
+RomM refusal (200).
 
 Everything generated lives in `build/integration/` (git-ignored):
 

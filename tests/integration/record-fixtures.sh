@@ -16,15 +16,17 @@ readonly SEED="$DIR/romm.json"
 readonly BASE="https://proxy:8443"
 readonly CONNECT_TIMEOUT_SECONDS=5
 readonly REQUEST_TIMEOUT_SECONDS=30
-# The page size the PSP will ask for, with the per-library extras RomM adds by default turned off
-# (docs/development/architecture.md, "RomM integration").
-readonly ROM_PAGE_QUERY="limit=10&offset=0&with_char_index=false&with_filter_values=false&with_rom_id_index=false"
+# The query skiff_romm_list_roms() sends after platform_ids, limit and offset: ordered by name, the
+# per-library extras RomM adds by default turned off (docs/development/architecture.md, "RomM
+# integration"). Pages of one ROM, so the two seeded ROMs make two pages and an empty third.
+readonly ROM_LIST_QUERY="order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false&with_rom_id_index=false"
 
 TOKEN="$(jq -r .token "$SEED")"
 PLATFORM_ID="$(jq -r .platform_id "$SEED")"
 ROM_ID="$(jq -r .rom_id "$SEED")"
+EXTRA_ROM_ID="$(jq -r .extra.rom_id "$SEED")"
 FILE_NAME="$(jq -rn --arg n "$(jq -r .file_name "$SEED")" '$n | @uri')"
-readonly TOKEN PLATFORM_ID ROM_ID FILE_NAME
+readonly TOKEN PLATFORM_ID ROM_ID EXTRA_ROM_ID FILE_NAME
 WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
@@ -44,7 +46,11 @@ mkdir -p "$OUT"
 auth=(-H "Authorization: Bearer $TOKEN")
 record heartbeat /api/heartbeat
 record platforms /api/platforms "${auth[@]}"
-record roms-page "/api/roms?platform_ids=$PLATFORM_ID&$ROM_PAGE_QUERY" "${auth[@]}"
+for offset in 0 1 2; do
+  record "roms-page-$offset" \
+    "/api/roms?platform_ids=$PLATFORM_ID&limit=1&offset=$offset&$ROM_LIST_QUERY" "${auth[@]}"
+done
 record rom "/api/roms/$ROM_ID" "${auth[@]}"
+record rom-extra "/api/roms/$EXTRA_ROM_ID" "${auth[@]}"
 record rom-content "/api/roms/$ROM_ID/content/$FILE_NAME" "${auth[@]}"
 record roms-unauthorized /api/roms

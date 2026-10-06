@@ -39,8 +39,8 @@ Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on
 what makes it unit-testable and lets sanitizers run over it.
 
 Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `net/` (transport, TLS entropy
-source), `storage/` (the storage seam), `jobs/` (resumable downloads) and `platform/psp/`
-(lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+source), `romm/` (version check, platforms, ROM pages), `storage/` (the storage seam), `jobs/`
+(resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
 them.
 
 ## Threads, power and suspend
@@ -181,9 +181,9 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Need | RomM API |
 |---|---|
 | Version check | `GET /api/heartbeat` |
-| Pairing | Device-code flow: `POST /api/auth/device/init`, the user approves in the web UI, the PSP polls for the token |
+| Pairing | Device-code flow: `POST /api/auth/device/init` (`client_device_identifier`, `name`, `client`, `platform`, `client_version`, `requested_scopes`) gives a `device_code` and a `user_code`; the user approves in the web UI while the PSP polls `POST /api/auth/device/token` for an `access_token` and its `device_id` |
 | Fallback auth | Client API token (`rmm_…`) as `Authorization: Bearer` |
-| Browse | Platforms and ROMs endpoints, **paginated** so one JSON page stays small |
+| Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files from `GET /api/roms/{id}` |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Saves | `POST /api/saves`, `GET /api/saves/{id}/content`, `POST /api/sync/negotiate`, tagged with this PSP's `device_id` |
 
@@ -193,15 +193,34 @@ proxy access schemes the PSP cannot otherwise satisfy — notably Cloudflare Acc
 a few lines in the transport and a cheaper alternative to mTLS for users already behind such a
 proxy. Header values are secrets: redacted in logs, same caveats as the token.
 
-Version policy: below the minimum supported RomM version, Skiff refuses to run
-(`SKIFF_ERR_ROMM_UNSUPPORTED_VERSION`). Newer versions are allowed with a one-time notice, because
-refusing every untested release would break Skiff with each RomM update.
+Version policy (`skiff_romm_check_version()`): below 5.3, the release that brought device-code
+pairing and per-file hashes, Skiff refuses to run (`SKIFF_ERR_ROMM_UNSUPPORTED_VERSION`, 205). A
+newer release line than the one tested (5.3) is allowed with a one-time notice, because refusing
+every untested release would break Skiff with each RomM update; a patch release gets no notice. A
+version that does not start with a number (a development build) is allowed with the notice too.
 
-JSON is parsed one page at a time with cJSON (packaged by pspdev); responses are never held whole.
-ROM lists are requested with `with_char_index`, `with_filter_values` and `with_rom_id_index` set
-to false: RomM includes those by default, and they grow with the whole library, not the page.
-RomM records CRC32, MD5 and SHA-1 for every file (`files[]` in a ROM), so the integrity check can
-use any of them.
+The client (`include/skiff/romm.h`) reads each response into a buffer of at most 512 KiB and parses
+it with cJSON 1.7.16 (pspdev's package; the host image builds the same version). A larger response
+is refused (204), never cut, and so is anything that is not RomM's JSON: a proxy's login page, a cut
+body, valid JSON followed by anything but blanks, a missing field, a number that is not a whole,
+non-negative value below 2^53, a string longer than its field or holding a control character, raw or
+escaped. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
+44 bytes each on the PSP): RomM's responses run near one value per 20 bytes, while a body of tiny
+values would otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a page,
+ordered by name: an unidentified ROM is about 2.6 KB of JSON and one with metadata several times
+that, so a page stays well under the cap (cJSON's tree and its strings stay within the budget above)
+and fills a screen in one request. They also turn off `with_char_index`, `with_filter_values` and
+`with_rom_id_index`: RomM includes those by default, and they grow with the whole library, not the
+page. A page that is not the one asked for (another offset, more ROMs than the limit or than the
+total leaves, a ROM of another platform) is refused, as is a ROM returned under another id or
+listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
+`files[]` comes with `GET /api/roms/{id}`. RomM records CRC32, MD5 and SHA-1 for every file, so the
+integrity check can use any of them; its `crc_hash` is hexadecimal, read with or without leading
+zeros.
+
+Download URLs percent-encode every byte of the file name except letters, digits and `-._~`: a `#`
+would otherwise end the path, a `?` start a query, a `/` split it. The heartbeat is public and is
+sent without the token.
 
 ## Downloads and storage
 

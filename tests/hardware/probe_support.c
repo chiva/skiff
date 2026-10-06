@@ -32,6 +32,7 @@ static const section_name SCENARIO_NAMES[] = {
     {"restart", SKIFF_PROBE_SCENARIO_RESTART}, {"wifi", SKIFF_PROBE_SCENARIO_WIFI},
     {"suspend", SKIFF_PROBE_SCENARIO_SUSPEND}, {"home", SKIFF_PROBE_SCENARIO_HOME},
     {"sleep", SKIFF_PROBE_SCENARIO_SLEEP},     {"all", SKIFF_PROBE_SCENARIO_ALL},
+    {"speed", SKIFF_PROBE_SCENARIO_SPEED},
 };
 
 void skiff_probe_config_defaults(skiff_probe_config *config) {

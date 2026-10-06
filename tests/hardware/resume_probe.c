@@ -13,7 +13,12 @@
  *   - home: the player opens the HOME menu for a while; the probe logs the longest pause between
  *     chunks;
  *   - sleep: back-to-back downloads with no input for awake_s seconds while Auto Sleep is set to
- *     its shortest: keep-awake (scePowerTick) must stop the PSP from sleeping.
+ *     its shortest: keep-awake (scePowerTick) must stop the PSP from sleeping;
+ *   - speed (only when named, about 15 minutes, no player needed): where a download's time goes.
+ *     The Memory Stick alone (the file's size in 128 KB writes, from a 64-byte-aligned buffer and
+ *     from one 8 bytes off, as malloc() returns), the network alone (no writes, without and with
+ *     the stop and progress hooks), then whole downloads as the engine writes them and with every
+ *     write copied to an aligned buffer first. Each line carries the signal and channel.
  *
  * A download left unfinished by an earlier run (HOME > Quit, a power-off) is resumed first, which
  * tests the .resume file across launches. Recovery is the same for every interruption: wait for the
@@ -29,11 +34,14 @@
  * libcurl refuses to start, and ends with SKIFF RESUME PROBE NO ARK OK.
  */
 #include <curl/curl.h>
+#include <malloc.h>
 #include <pspkernel.h>
 #include <psppower.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 
 #include "skiff/curl_transport.h"
 #include "skiff/download.h"
@@ -70,6 +78,7 @@ enum {
     /* https://<host>:8443/api/roms/<id>/content/<URL-encoded file name> */
     CONTENT_URL_MAX = 320,
     HTTPS_PORT = 8443,
+    HTTP_STATUS_OK = 200,
     HTTP_STATUS_PARTIAL = 206,
     US_PER_MS = 1000,
     BYTES_PER_KB = 1024,
@@ -84,6 +93,12 @@ enum {
     STORAGE_BLOCK_BYTES = 64 * 1024,
     STORAGE_BLOCKS = 3,
     STORAGE_PATCH_OFFSET = 100000,
+    /* speed: the download's write size, the alignment the Memory Stick's DMA works in, what
+     * newlib's malloc() guarantees, and how many parts of the file writes are timed in. */
+    SPEED_BLOCK_BYTES = SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES,
+    MS_ALIGNMENT = 64,
+    MALLOC_ALIGNMENT = 8,
+    SPEED_PARTS = 4,
 };
 
 #define US_PER_S (1000LL * 1000)
@@ -197,6 +212,9 @@ typedef struct timed_storage {
     skiff_storage base;
     skiff_storage *inner;
     op_timing ops[STORAGE_OPS];
+    /* When set (SPEED_BLOCK_BYTES, 64-byte aligned), writes are copied here before reaching the
+     * Memory Stick: the speed scenario's aligned download. */
+    unsigned char *bounce;
 } timed_storage;
 
 typedef struct timed_file {
@@ -243,8 +261,21 @@ static skiff_err timed_read(skiff_file *base, void *buffer, size_t size, size_t 
 }
 
 static skiff_err timed_write(skiff_file *base, const void *data, size_t size) {
+    skiff_file *inner = ((timed_file *)base)->inner;
     const long long start = sceKernelGetSystemTimeWide();
-    return timed_call(OP_WRITE, start, skiff_file_write(((timed_file *)base)->inner, data, size));
+    if (timed.bounce == NULL) {
+        return timed_call(OP_WRITE, start, skiff_file_write(inner, data, size));
+    }
+    const unsigned char *next = data;
+    skiff_err err = SKIFF_OK;
+    while (err == SKIFF_OK && size > 0) {
+        const size_t take = size < SPEED_BLOCK_BYTES ? size : SPEED_BLOCK_BYTES;
+        memcpy(timed.bounce, next, take);
+        err = skiff_file_write(inner, timed.bounce, take);
+        next += take;
+        size -= take;
+    }
+    return timed_call(OP_WRITE, start, err);
 }
 
 static skiff_err timed_sync(skiff_file *base) {
@@ -810,6 +841,149 @@ static int run_sleep(probe *p) {
     return report_scenario(p, "sleep", all_complete && suspends == 0, &total_w, &total, text);
 }
 
+/* ---- speed: where a download's time goes ---- */
+
+/*
+ * The Memory Stick alone: the seeded file's size written in the download's blocks from data,
+ * synced at every checkpoint as the download does, with the write time of each quarter of the file.
+ */
+static int speed_memory_stick(probe *p, const char *name, const unsigned char *data) {
+    const uint64_t size = p->config.size;
+    long long part_us[SPEED_PARTS] = {0};
+    long long sync_us = 0;
+    skiff_file *file = NULL;
+    const long long start = now_us();
+    skiff_err err = skiff_storage_open(p->psp_storage, p->target, SKIFF_FILE_REPLACE, 0, &file);
+    uint64_t written = 0;
+    while (err == SKIFF_OK && written < size) {
+        const size_t take =
+            size - written < SPEED_BLOCK_BYTES ? (size_t)(size - written) : SPEED_BLOCK_BYTES;
+        const long long write_start = now_us();
+        err = skiff_file_write(file, data, take);
+        part_us[written * SPEED_PARTS / size] += now_us() - write_start;
+        written += take;
+        if (err == SKIFF_OK && written % SKIFF_DOWNLOAD_CHECKPOINT_BYTES == 0) {
+            const long long sync_start = now_us();
+            err = skiff_file_sync(file);
+            sync_us += now_us() - sync_start;
+        }
+    }
+    if (file != NULL) {
+        const skiff_err closed = skiff_file_close(file);
+        err = err != SKIFF_OK ? err : closed;
+    }
+    const long long elapsed_us = now_us() - start;
+    skiff_storage_remove(p->psp_storage, p->target);
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(1, environment, sizeof environment);
+    char text[LONG_LINE_MAX];
+    snprintf(text, sizeof text,
+             "speed=%s ok=%d err=%s bytes=%llu total_ms=%lld kb_s=%llu sync_ms=%lld "
+             "quarters_write_ms=%lld/%lld/%lld/%lld %s",
+             name, err == SKIFF_OK, skiff_err_name(err), (unsigned long long)written,
+             elapsed_us / US_PER_MS, skiff_probe_kb_per_s(written, elapsed_us), sync_us / US_PER_MS,
+             part_us[0] / US_PER_MS, part_us[1] / US_PER_MS, part_us[2] / US_PER_MS,
+             part_us[3] / US_PER_MS, environment);
+    report_check(p, err == SKIFF_OK, text);
+    return append_log(p, text) && err == SKIFF_OK;
+}
+
+/* The network alone: the body's CRC-32 is computed and nothing is written. */
+typedef struct speed_sink {
+    /* The download's hooks run on every chunk when set, as they do for a real download. */
+    watch *w;
+    long long start_us;
+    long long first_byte_us;
+    uint64_t bytes;
+    uLong crc32;
+} speed_sink;
+
+static skiff_err speed_body(void *ctx, const unsigned char *data, size_t size) {
+    speed_sink *sink = ctx;
+    if (sink->bytes == 0) {
+        sink->first_byte_us = now_us() - sink->start_us;
+    }
+    sink->crc32 = crc32(sink->crc32, data, (uInt)size);
+    sink->bytes += size;
+    if (sink->w != NULL) {
+        on_progress(sink->w, sink->bytes, sink->w->p->config.size);
+    }
+    return SKIFF_OK;
+}
+
+static int speed_network(probe *p, const char *name, int with_hooks) {
+    watch w;
+    outcome o;
+    watch_init(&w, p, NULL);
+    memset(&o, 0, sizeof o);
+    speed_sink sink = {.w = with_hooks ? &w : NULL, .crc32 = crc32(0L, Z_NULL, 0)};
+    skiff_http_request request = {.url = p->url, .on_body = speed_body, .body_ctx = &sink};
+    if (with_hooks) {
+        request.should_stop = should_stop;
+        request.stop_ctx = &w;
+    }
+    skiff_http_response response;
+    memset(&response, 0, sizeof response);
+    sink.start_us = now_us();
+    w.attempt_start_us = sink.start_us;
+    const skiff_err err = skiff_transport_perform(p->transport, &request, &response);
+    o.elapsed_us = now_us() - sink.start_us;
+    o.attempts = 1;
+    o.bytes = sink.bytes;
+    o.last_status = response.status;
+    o.complete = err == SKIFF_OK && response.status == HTTP_STATUS_OK &&
+                 sink.bytes == p->config.size && sink.crc32 == p->config.crc32;
+    w.first_byte_us = sink.first_byte_us;
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(1, environment, sizeof environment);
+    return report_scenario(p, name, o.complete, &w, &o, environment);
+}
+
+/* A whole download through the engine; with bounce, every write is first copied there. */
+static int speed_download(probe *p, const char *name, unsigned char *bounce) {
+    skiff_download_discard(p->storage, p->target);
+    watch w;
+    outcome o;
+    watch_init(&w, p, NULL);
+    memset(&o, 0, sizeof o);
+    timed.bounce = bounce;
+    download(p, &w, &o);
+    timed.bounce = NULL;
+    skiff_storage_remove(p->storage, p->target);
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(1, environment, sizeof environment);
+    return report_scenario(p, name, o.complete && o.attempts == 1, &w, &o, environment);
+}
+
+static int run_speed(probe *p) {
+    report_line(p, "-- scenario speed: where a download's time goes (about 15 min, no action)");
+    unsigned char *area = memalign(MS_ALIGNMENT, SPEED_BLOCK_BYTES + MS_ALIGNMENT);
+    if (area == NULL) {
+        report_check(p, 0, "speed: no memory for the test block");
+        return 0;
+    }
+    for (size_t i = 0; i < SPEED_BLOCK_BYTES + MS_ALIGNMENT; i++) {
+        area[i] = (unsigned char)(i * 7U + 3U);
+    }
+    /* The engine's write buffer comes from malloc(): show where such a block lands. */
+    void *like_the_engine = malloc(SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
+    char text[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(text, sizeof text,
+             "speed: malloc(%d KB) returned a block %u bytes past a %d-byte boundary",
+             SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES / BYTES_PER_KB,
+             (unsigned)((uintptr_t)like_the_engine % MS_ALIGNMENT), MS_ALIGNMENT);
+    report_line(p, text);
+    free(like_the_engine);
+    int ok = speed_memory_stick(p, "ms-aligned", area);
+    ok &= speed_memory_stick(p, "ms-unaligned", area + MALLOC_ALIGNMENT);
+    ok &= speed_network(p, "network", 0);
+    ok &= speed_network(p, "network-hooks", 1);
+    ok &= speed_download(p, "download", NULL);
+    ok &= speed_download(p, "download-aligned", area);
+    free(area);
+    return ok;
+}
+
 static int run_scenarios(probe *p) {
     const unsigned chosen = p->config.scenarios;
     reset_storage_timing();
@@ -834,6 +1008,9 @@ static int run_scenarios(probe *p) {
     }
     if ((chosen & SKIFF_PROBE_SCENARIO_SLEEP) != 0) {
         ok &= run_sleep(p);
+    }
+    if ((chosen & SKIFF_PROBE_SCENARIO_SPEED) != 0) {
+        ok &= run_speed(p);
     }
     skiff_download_discard(p->storage, p->target);
     skiff_storage_remove(p->storage, p->target);

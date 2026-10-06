@@ -30,10 +30,8 @@
 #include <pspiofilemgr.h>
 #include <pspiofilemgr_devctl.h>
 #include <pspkernel.h>
-#include <pspnet_apctl.h>
 #include <psppower.h>
 #include <pspthreadman.h>
-#include <psputility.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -97,7 +95,6 @@ enum {
     URL_MAX = 320,
     BEARER_MAX = SKIFF_PROBE_TOKEN_MAX + sizeof BEARER_PREFIX,
     AUTHORIZATION_MAX = BEARER_MAX + sizeof AUTHORIZATION_HEADER + 1,
-    ENVIRONMENT_MAX = 160,
     LINE_MAX_BENCH = SKIFF_PROBE_LONG_LINE_MAX,
     CONNECT_TIMEOUT_S = 10,
     STALL_TIMEOUT_S = 30,
@@ -275,42 +272,13 @@ static void check(bench *b, int ok, const char *text) {
     b->failures += ok ? 0 : 1;
 }
 
-static int apctl_info(int code, SceNetApctlInfo *info) {
-    memset(info, 0, sizeof *info);
-    return sceNetApctlGetInfo(code, info) >= 0;
-}
-
-/* What can change a result between runs: clock, power source, Wi-Fi power save and signal. */
-static void describe_environment(const bench *b, char *out, size_t out_size) {
-    int wlan_power_save = -1;
-    if (sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_WLAN_POWERSAVE, &wlan_power_save) < 0) {
-        wlan_power_save = -1;
-    }
-    int written = snprintf(out, out_size, "cpu=%d bus=%d ac=%d wlan_ps_setting=%d",
-                           scePowerGetCpuClockFrequency(), scePowerGetBusClockFrequency(),
-                           scePowerIsPowerOnline(), wlan_power_save);
-    if (!b->joined || written < 0 || (size_t)written >= out_size) {
-        return;
-    }
-    SceNetApctlInfo strength;
-    SceNetApctlInfo channel;
-    SceNetApctlInfo security;
-    SceNetApctlInfo power_save;
-    snprintf(
-        out + written, out_size - (size_t)written, " signal=%d channel=%d security=%d wlan_ps=%d",
-        apctl_info(PSP_NET_APCTL_INFO_STRENGTH, &strength) ? (int)strength.strength : -1,
-        apctl_info(PSP_NET_APCTL_INFO_CHANNEL, &channel) ? (int)channel.channel : -1,
-        apctl_info(PSP_NET_APCTL_INFO_SECURITY_TYPE, &security) ? (int)security.securityType : -1,
-        apctl_info(PSP_NET_APCTL_INFO_POWER_SAVE, &power_save) ? (int)power_save.powerSave : -1);
-}
-
 /* One line in bench-log.txt: the environment, then "item=<id>" and the values. */
 static void log_item(bench *b, const char *id, const char *values) {
     if (b->log == NULL) {
         return;
     }
-    char environment[ENVIRONMENT_MAX];
-    describe_environment(b, environment, sizeof environment);
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(b->joined, environment, sizeof environment);
     fprintf(b->log, "%s item=%s %s\n", environment, id, values);
     fflush(b->log);
 }
@@ -1290,8 +1258,8 @@ static int wants(const bench *b, skiff_probe_section section) {
 }
 
 static void report_environment(bench *b) {
-    char environment[ENVIRONMENT_MAX];
-    describe_environment(b, environment, sizeof environment);
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(b->joined, environment, sizeof environment);
     char text[LINE_MAX_BENCH];
     snprintf(text, sizeof text, "environment: %s", environment);
     say(b, text);

@@ -331,7 +331,7 @@ CRC-32 and Memory Stick code on small sizes and ends with `SKIFF BENCH NO ARK OK
 PSP, through the PSP storage (`sceIo`) and the app's transport, against the
 [integration server](#integration-server), and interrupts them the ways a player does. Every
 scenario downloads the seeded file next to the EBOOT and ends with RomM's CRC-32; `scenarios=`
-picks them (default all):
+picks them (default `all`, every one but speed):
 
 - **restart:** the probe stops the download at 40% and resumes it on a new connection: 206 from
   the saved offset;
@@ -343,7 +343,15 @@ picks them (default all):
 - **home:** at 20% the screen asks to open the HOME menu for 10 s and go back. The download must
   finish; the longest pause between chunks shows whether it stopped meanwhile;
 - **sleep:** back-to-back downloads with no input for `awake_s=` seconds (default 200): with Auto
-  Sleep at its shortest, keep-awake (`scePowerTick`) must keep the PSP from sleeping.
+  Sleep at its shortest, keep-awake (`scePowerTick`) must keep the PSP from sleeping;
+- **speed** (only when named, `scenarios=speed`; about 15 minutes, nothing to do): where a
+  download's time goes, each part measured alone in one session. First the Memory Stick alone: the
+  file's size in the download's 128 KB writes, synced every 4 MiB, from a 64-byte-aligned buffer
+  and from one 8 bytes off (where `malloc()` puts blocks; the probe logs where it put one), with
+  the write time of each quarter of the file. Then the network alone, computing the CRC-32 and
+  writing nothing, without and then with the download's stop and progress hooks. Last, two whole
+  downloads: as the engine writes them, and with every write copied to an aligned buffer first.
+  Each line ends with the clock, power, signal and channel.
 
 After any interruption the probe waits up to `wait_s=` seconds (default 60) for the Wi-Fi switch,
 rejoins the profile, or reloads the network modules if rejoining fails, makes a new transport and

@@ -11,9 +11,14 @@
 #define SCE_ERRNO_VALUE 0x0000FFFFU
 /* The device in a path is gone: no Memory Stick inserted. */
 #define SCE_KERNEL_NO_SUCH_DEVICE 0x80020321U
+/* SCE_KERNEL_ERROR_UNSUP (pspkerror.h): the device does not answer this request. */
+#define SCE_KERNEL_UNSUPPORTED 0x80020325U
+/* What sceIoMkdir returns for a name that exists (errno EEXIST): a folder, or a file. */
+#define SCE_EEXIST_RESULT (SCE_ERRNO_BASE | 17U)
 
 enum {
     NEW_FILE_PERMISSIONS = 0777,
+    NEW_FOLDER_PERMISSIONS = 0777,
     /* errno values the firmware reports in SCE_ERRNO_BASE | errno. */
     SCE_ENOENT = 2,
     SCE_ENXIO = 6,
@@ -200,11 +205,66 @@ static skiff_err psp_remove(skiff_storage *base, const char *path) {
     return step((psp_storage *)base, "sceIoRemove", sceIoRemove(path));
 }
 
+static skiff_err psp_mkdir(skiff_storage *base, const char *path) {
+    const int result = sceIoMkdir(path, NEW_FOLDER_PERMISSIONS);
+    if ((unsigned)result == SCE_EEXIST_RESULT) {
+        SceIoStat status;
+        memset(&status, 0, sizeof status);
+        return sceIoGetstat(path, &status) >= 0 && FIO_S_ISDIR(status.st_mode)
+                   ? SKIFF_OK
+                   : SKIFF_ERR_STORAGE_IO;
+    }
+    return step((psp_storage *)base, "sceIoMkdir", result);
+}
+
+/* The device's cluster counts (pspiofilemgr_devctl.h): free bytes = free clusters x sectors per
+ * cluster x bytes per sector. */
+static skiff_err psp_free_space(skiff_storage *base, const char *path, uint64_t *out) {
+    char device[DEVICE_MAX];
+    if (!device_of(path, device)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    /* The request goes to the device, so check the path itself is a folder, as the host version
+     * does: a download into a missing folder (or a file by that name) must fail before it starts.
+     * The device itself ("ms0:" or "ms0:/") needs no check. */
+    const size_t device_length = strlen(device);
+    const int device_only = path[device_length] == '\0' ||
+                            (path[device_length] == '/' && path[device_length + 1] == '\0');
+    if (!device_only) {
+        SceIoStat status;
+        memset(&status, 0, sizeof status);
+        const skiff_err err =
+            step((psp_storage *)base, "sceIoGetstat", sceIoGetstat(path, &status));
+        if (err != SKIFF_OK) {
+            return err;
+        }
+        if (!FIO_S_ISDIR(status.st_mode)) {
+            return SKIFF_ERR_STORAGE_IO;
+        }
+    }
+    SceDevInf info;
+    memset(&info, 0, sizeof info);
+    SceDevctlCmd command = {&info};
+    const int result = sceIoDevctl(device, SCE_PR_GETDEV, &command, sizeof command, NULL, 0);
+    const skiff_err err = step((psp_storage *)base, "sceIoDevctl(SCE_PR_GETDEV)", result);
+    if ((unsigned)result == SCE_KERNEL_UNSUPPORTED) {
+        return SKIFF_ERR_NOT_IMPLEMENTED;
+    }
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    if (info.sectorSize < 0 || info.sectorCount < 0) {
+        return SKIFF_ERR_STORAGE_IO;
+    }
+    *out = (uint64_t)info.freeClusters * (uint64_t)info.sectorCount * (uint64_t)info.sectorSize;
+    return SKIFF_OK;
+}
+
 static void psp_destroy(skiff_storage *base) { free(base); }
 
 static const skiff_storage_ops PSP_STORAGE_OPS = {
-    psp_open, psp_read,   psp_write,  psp_sync,    psp_close,
-    psp_size, psp_rename, psp_remove, psp_destroy,
+    psp_open,   psp_read,   psp_write, psp_sync,       psp_close,   psp_size,
+    psp_rename, psp_remove, psp_mkdir, psp_free_space, psp_destroy,
 };
 
 skiff_err skiff_psp_storage_create(skiff_storage **out) {

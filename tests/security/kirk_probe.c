@@ -33,6 +33,7 @@
 #include <unistd.h>
 
 #include "skiff/selftest.h"
+#include "skiff/storage_paths.h"
 
 #include "ark_sysctrl.h"
 #include "kirk_entropy.h"
@@ -282,7 +283,7 @@ static double byte_chi_squared(void) {
 static int differs_from_earlier_runs(skiff_psp_report *report, const char *program_path) {
     char path[PROBE_PATH_MAX];
     char line[SKIFF_SELFTEST_LINE_MAX];
-    if (skiff_selftest_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
+    if (skiff_storage_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
         skiff_psp_report_line(report, "FAIL earlier runs: no EBOOT path to find " PROBE_LOG_FILE);
         return 0;
     }
@@ -317,7 +318,7 @@ static int append_fingerprint(skiff_psp_report *report, const char *program_path
                               long long uptime_us, const gather_timing *kirk,
                               const gather_timing *baseline, const stack_timing *stack) {
     char path[PROBE_PATH_MAX];
-    if (skiff_selftest_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
+    if (skiff_storage_sibling_path(program_path, PROBE_LOG_FILE, path, sizeof path) != SKIFF_OK) {
         skiff_psp_report_line(report, "FAIL fingerprint log: not written (no EBOOT path)");
         return 0;
     }

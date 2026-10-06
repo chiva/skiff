@@ -166,7 +166,9 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    returns to the XMB when done.
 4. Back in USB mode: `scripts/memstick.sh results <mount>` → expect `SKIFF SELFTEST OK` and
    `SKIFF TLS PROBE OK`. A missing or truncated `result.txt` means the EBOOT crashed; its last line
-   shows how far it got.
+   shows how far it got. The self-test's last line, `free space ms0: <bytes> bytes (<MiB> MiB)`,
+   should match the free space the XMB shows (Settings → System Settings → Memory Stick, or System
+   Storage on a PSP Go) to within 1 MB: it is what downloads check before they start.
 5. Run **Skiff**: check the version on screen and that START exits; then HOME → Quit must exit
    without freezing.
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).

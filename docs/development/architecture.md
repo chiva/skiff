@@ -39,8 +39,9 @@ Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on
 what makes it unit-testable and lets sanitizers run over it.
 
 Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `net/` (transport, TLS entropy
-source), `romm/` (version check, platforms, ROM pages), `storage/` (the storage seam), `jobs/`
-(resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+source), `romm/` (version check, platforms, ROM pages), `storage/` (the storage seam, logical
+roots, free space, safe names), `jobs/` (resumable downloads) and `platform/psp/` (lifecycle,
+network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
 them.
 
 ## Threads, power and suspend
@@ -269,13 +270,31 @@ network is back.
   PSP newlib's `off_t` is 32 bits, so stdio cannot place a file position past 2 GiB; the PSP
   implementation uses `sceIo` with 64-bit offsets. A rename never replaces a file (FAT cannot do it
   in one step): the target is removed first.
-- **Limits**: check free space before starting; refuse files over 4 GB (FAT32, 304).
-- **Names**: names from RomM are sanitised: no path separators, no `..`, FAT-safe characters only.
+- **Limits**: every download attempt checks free space before its request
+  (`skiff_storage_check_room()`): what is still to come plus 8 MiB
+  (`SKIFF_STORAGE_FREE_MARGIN_BYTES`) for the `.resume` file, the log, `config.ini` and the file
+  system's own entries, so a download never fills the Memory Stick to the last byte. The target's
+  folder must exist (`skiff_storage_mkdirs()`), or the attempt fails with 303 before any request. A
+  device that cannot report its free space is not refused: a full one still fails the write with
+  301. A file
+  of 4 GiB or more is refused whatever the space (FAT32, 304). On the PSP free space comes from the
+  device's cluster counts (`sceIoDevctl`, `SCE_PR_GETDEV`).
+- **Names**: a file name from RomM passes through `skiff_storage_safe_name()` before it becomes part
+  of a path (`include/skiff/storage_paths.h`). Characters FAT refuses (`\ / : * ? " < > |`), control
+  characters and bytes that are not UTF-8 become `_`, so a name can never add a folder or a device;
+  blanks at the start and blanks and dots at the end go (FAT drops trailing dots); a DOS device name
+  (`CON`, `NUL`, `COM1`…) gets a leading `_`; a name over 127 bytes is shortened between characters,
+  keeping its extension. A name that cleans to nothing (`..`) is refused.
 - **Installed state**: a manifest (`PSP/GAME/Skiff/installed.json`: RomM ID → path, size, hash)
   records what Skiff installed. Scanning folders and matching names is only a fallback for games
   copied by hand.
-- **Logical roots**: code addresses `games:`, `saves:`, `app:`; `storage/` maps them to `ms0:` or
-  `ef0:` (PSP Go) on hardware, and to a temporary directory in host tests.
+- **Logical roots**: code addresses `games:` (`<device>/ISO`), `saves:` (`<device>/PSP/SAVEDATA`)
+  and `app:` (the EBOOT's folder). The device is the one the EBOOT runs from, read from `argv[0]`:
+  `ms0:` for a Memory Stick, `ef0:` for a PSP Go's internal storage. `skiff_storage_resolve()` turns
+  `games:/Game.iso` into a real path and refuses `..`, `.`, empty parts, `\` and `:`, so nothing
+  resolves outside its root. Host tests point the roots at a temporary directory.
+  `skiff_storage_mkdirs()` creates a missing folder and the ones above it (`ISO` on a new Memory
+  Stick).
 
 ## Installers (the platform plugin seam)
 
@@ -319,8 +338,9 @@ A game and Skiff never run at the same time, so a save is never synced while it 
 - `storage/` exposes a `storage` interface (`include/skiff/storage.h`). Host tests use a POSIX
   implementation over a temporary directory (`src/platform/host/storage_posix.h`), wrapped by a
   fake that injects what a Memory Stick does to a long download: it fills up mid-write, a sync or
-  rename fails, open file handles stop working as after a suspend (`tests/support/fake_storage.h`).
-  `storage/` roots will point at a temporary directory on the host.
+  rename fails, open file handles stop working as after a suspend, a folder cannot be created, or
+  the device has a given amount of free space (`tests/support/fake_storage.h`). `storage/` roots
+  point at a temporary directory on the host.
 - The self-test checks what differs between host, emulator and hardware (C library, heap, clock,
   byte order) and grows with each layer. See [Testing](testing.md).
 

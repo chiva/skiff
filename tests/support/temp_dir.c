@@ -1,6 +1,6 @@
 #include "temp_dir.h"
 
-#include <dirent.h>
+#include <ftw.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +8,8 @@
 
 #define TEMP_DIR_TEMPLATE "skiff-test-XXXXXX"
 #define DEFAULT_TMP "/tmp"
+/* File descriptors nftw() may keep open while it walks. */
+#define TEMP_DIR_OPEN_FOLDERS 16
 
 int temp_dir_create(char *out, size_t out_size) {
     const char *base = getenv("TMPDIR");
@@ -26,18 +28,15 @@ int temp_dir_path(const char *dir, const char *name, char *out, size_t out_size)
     return written > 0 && (size_t)written < out_size;
 }
 
+static int remove_entry(const char *path, const struct stat *status, int type, struct FTW *walk) {
+    (void)status;
+    (void)type;
+    (void)walk;
+    remove(path);
+    return 0;
+}
+
 void temp_dir_remove(const char *dir) {
-    DIR *listing = opendir(dir);
-    if (listing == NULL) {
-        return;
-    }
-    char path[TEMP_DIR_PATH_MAX];
-    for (const struct dirent *entry = readdir(listing); entry != NULL; entry = readdir(listing)) {
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0 &&
-            temp_dir_path(dir, entry->d_name, path, sizeof path)) {
-            unlink(path);
-        }
-    }
-    closedir(listing);
-    rmdir(dir);
+    /* Children before their folder, without following links out of dir. */
+    nftw(dir, remove_entry, TEMP_DIR_OPEN_FOLDERS, FTW_DEPTH | FTW_PHYS);
 }

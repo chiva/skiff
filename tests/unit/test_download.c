@@ -233,11 +233,12 @@ static void test_fresh_download_completes_and_is_renamed(void) {
     TEST_ASSERT_FALSE_MESSAGE(last_request()->has_range, "nothing to resume");
     TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, progress.last_done);
     TEST_ASSERT_FALSE(progress.went_backwards);
-    const int blocks = (int)((BODY_BYTES + SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES - 1) /
-                             SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
     TEST_PRINTF("%d progress calls, %d .part writes, %d syncs", progress.calls, storage.writes,
                 storage.syncs);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(blocks, storage.writes,
+    /* 9 MiB + 77 bytes: nine full 1 MiB blocks and the tail. Fewer, larger writes are the point
+     * (each write pauses Wi-Fi reception on a PSP), so this pins the block size, not just "some".
+     */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(10, storage.writes,
                                   "1 MiB blocks, not one write per network chunk");
 }
 

@@ -233,12 +233,13 @@ static void test_fresh_download_completes_and_is_renamed(void) {
     TEST_ASSERT_FALSE_MESSAGE(last_request()->has_range, "nothing to resume");
     TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, progress.last_done);
     TEST_ASSERT_FALSE(progress.went_backwards);
-    const int blocks = (int)((BODY_BYTES + SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES - 1) /
-                             SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
     TEST_PRINTF("%d progress calls, %d .part writes, %d syncs", progress.calls, storage.writes,
                 storage.syncs);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(blocks, storage.writes,
-                                  "128 KB blocks, not one write per network chunk");
+    /* 9 MiB + 77 bytes: nine full 1 MiB blocks and the tail. Fewer, larger writes are the point
+     * (each write pauses Wi-Fi reception on a PSP), so this pins the block size, not just "some".
+     */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(10, storage.writes,
+                                  "1 MiB blocks, not one write per network chunk");
 }
 
 static void test_cut_mid_body_saves_the_exact_offset_and_resumes(void) {
@@ -546,7 +547,7 @@ static void test_memory_stick_full_keeps_the_last_durable_checkpoint(void) {
 static void test_handle_lost_to_a_suspend_costs_one_attempt(void) {
     serve(ETAG);
     storage.fail_suffix = SKIFF_DOWNLOAD_PART_SUFFIX;
-    /* 128 KB blocks: the handle goes stale after 5 MiB. */
+    /* Write-buffer blocks: the handle goes stale after 5 MiB. */
     storage.stale_after_writes = (int)(5 * MIB / SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, attempt());
     TEST_ASSERT_EQUAL_INT(1, storage.handles_lost);

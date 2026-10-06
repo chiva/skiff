@@ -94,9 +94,10 @@ enum {
     STORAGE_BLOCK_BYTES = 64 * 1024,
     STORAGE_BLOCKS = 3,
     STORAGE_PATCH_OFFSET = 100000,
-    /* speed: the download's write size, the alignment the Memory Stick's DMA works in, what
-     * newlib's malloc() guarantees, and how many parts of the file writes are timed in. */
-    SPEED_BLOCK_BYTES = SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES,
+    /* speed: the Memory Stick tests' write size (the engine's before it moved to 1 MiB), the
+     * alignment the Memory Stick's DMA works in, what newlib's malloc() guarantees, and how many
+     * parts of the file writes are timed in. */
+    SPEED_BLOCK_BYTES = 128 * 1024,
     MS_ALIGNMENT = 64,
     MALLOC_ALIGNMENT = 8,
     SPEED_PARTS = 4,
@@ -223,7 +224,8 @@ typedef struct op_timing {
 /* How the speed scenario's downloads reach the Memory Stick; every other scenario writes directly.
  */
 typedef enum write_mode {
-    /* Each write as the engine makes it (128 KB blocks), on the download's thread. */
+    /* Each write as the engine makes it (SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES), on the download's
+     * thread. */
     WRITE_DIRECT,
     /* Gathered into SPEED_COALESCE_BYTES per file before writing: fewer, larger writes. */
     WRITE_COALESCED,

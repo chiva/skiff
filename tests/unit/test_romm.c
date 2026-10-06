@@ -253,14 +253,6 @@ typedef struct item_case {
 } item_case;
 
 static void test_every_field_is_checked_before_a_rom_is_shown(void) {
-    char long_name[SKIFF_ROMM_NAME_MAX + 128];
-    char too_long[SKIFF_ROMM_NAME_MAX + 32];
-    memset(too_long, 'n', SKIFF_ROMM_NAME_MAX);
-    too_long[SKIFF_ROMM_NAME_MAX] = '\0';
-    snprintf(
-        long_name, sizeof long_name,
-        "{\"id\":1,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
-        too_long);
     const item_case cases[] = {
         {"minimal", "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1}",
          SKIFF_OK},
@@ -310,7 +302,6 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
          "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"crc_hash\":"
          "\"123456789\"}",
          SKIFF_ERR_ROMM_BAD_RESPONSE},
-        {"name too long for its field", long_name, SKIFF_ERR_ROMM_BAD_RESPONSE},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         tearDown();
@@ -327,6 +318,156 @@ static void test_every_field_is_checked_before_a_rom_is_shown(void) {
             TEST_ASSERT_EQUAL_size_t(0, page.count);
             TEST_ASSERT_EQUAL_UINT64(0, page.items[0].id);
         }
+    }
+}
+
+/* ---- Names that cannot be used as they are ---- */
+
+#define ROM_ITEM(id, fs_name)                                                                      \
+    "{\"id\":" #id ",\"platform_id\":1,\"name\":\"Game " #id "\",\"fs_name\":\"" fs_name "\","     \
+    "\"fs_size_bytes\":" #id "}"
+
+static void assert_usable(const skiff_romm_rom_summary *rom, uint64_t id, const char *fs_name) {
+    TEST_ASSERT_EQUAL_UINT64(id, rom->id);
+    TEST_ASSERT_EQUAL_STRING(fs_name, rom->fs_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom->name_status);
+}
+
+static void test_a_rom_with_a_control_character_is_listed_but_not_downloadable(void) {
+    static const char page_json[] = "{\"items\":[" ROM_ITEM(1, "a.iso") "," ROM_ITEM(
+        2, "b\\u001b[2Jc\\td.iso") "," ROM_ITEM(3, "e.iso") "],\"total\":3,\"offset\":0}";
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_rom_page(page_json, sizeof page_json - 1, &page));
+    TEST_PRINTF("middle ROM shows as '%s', status %d", page.items[1].fs_name,
+                page.items[1].name_status);
+    TEST_ASSERT_EQUAL_size_t(3, page.count);
+    assert_usable(&page.items[0], 1, "a.iso");
+    TEST_ASSERT_EQUAL_UINT64(2, page.items[1].id);
+    TEST_ASSERT_EQUAL_STRING("b?[2Jc?d.iso", page.items[1].fs_name);
+    TEST_ASSERT_EQUAL_STRING("Game 2", page.items[1].name);
+    TEST_ASSERT_EQUAL_UINT64(2, page.items[1].size);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, page.items[1].name_status);
+    assert_usable(&page.items[2], 3, "e.iso");
+}
+
+static void test_a_title_with_a_control_character_marks_its_rom(void) {
+    static const char page_json[] =
+        "{\"items\":[{\"id\":4,\"platform_id\":1,\"name\":\"Bad\\u0007Title\",\"fs_name\":"
+        "\"ok.iso\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_rom_page(page_json, sizeof page_json - 1, &page));
+    TEST_ASSERT_EQUAL_STRING("Bad?Title", page.items[0].name);
+    TEST_ASSERT_EQUAL_STRING("ok.iso", page.items[0].fs_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, page.items[0].name_status);
+}
+
+static void test_a_file_with_a_control_character_is_listed_but_not_downloadable(void) {
+    static const char rom_json[] =
+        "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Folder\",\"fs_size_bytes\":3,\"files\":["
+        "{\"rom_id\":3,\"file_name\":\"one.bin\",\"file_size_bytes\":1},"
+        "{\"rom_id\":3,\"file_name\":\"tw\\u000ao.bin\",\"file_size_bytes\":1},"
+        "{\"rom_id\":3,\"file_name\":\"three.bin\",\"file_size_bytes\":1}]}";
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(rom_json, sizeof rom_json - 1, &rom));
+    TEST_ASSERT_EQUAL_size_t(3, rom.stored_count);
+    TEST_ASSERT_EQUAL_STRING("one.bin", rom.files[0].file_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom.files[0].name_status);
+    TEST_ASSERT_EQUAL_STRING("tw?o.bin", rom.files[1].file_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.files[1].name_status);
+    TEST_ASSERT_EQUAL_STRING("three.bin", rom.files[2].file_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom.files[2].name_status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom.summary.name_status);
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 3, &rom.files[1], url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_content_url(&client, 3, &rom.files[2], url, sizeof url));
+}
+
+/* A ROM page of one item whose fs_name is `name`. */
+static void parse_with_fs_name(const char *name, skiff_romm_rom_page *page) {
+    static char json[RAW_MAX];
+    snprintf(json, sizeof json,
+             "{\"items\":[{\"id\":5,\"platform_id\":1,\"fs_name\":\"%s\",\"fs_size_bytes\":1}],"
+             "\"total\":1,\"offset\":0}",
+             name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(json, strlen(json), page));
+}
+
+static void test_an_overlong_name_is_cut_at_a_character_with_a_marker(void) {
+    enum { FIELD = SKIFF_ROMM_FILE_NAME_MAX };
+    char name[FIELD + 8];
+    skiff_romm_rom_page page;
+
+    TEST_PRINTF("a name that just fits is kept whole");
+    memset(name, 'a', FIELD - 1);
+    name[FIELD - 1] = '\0';
+    parse_with_fs_name(name, &page);
+    TEST_ASSERT_EQUAL_STRING(name, page.items[0].fs_name);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, page.items[0].name_status);
+
+    TEST_PRINTF("one byte more is cut, with the marker in its last byte");
+    memset(name, 'a', FIELD);
+    name[FIELD] = '\0';
+    parse_with_fs_name(name, &page);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_TOO_LONG, page.items[0].name_status);
+    TEST_ASSERT_EQUAL_size_t(FIELD - 1, strlen(page.items[0].fs_name));
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_NAME_CUT_MARKER, page.items[0].fs_name + FIELD - 2);
+
+    TEST_PRINTF("a two-byte 'e acute' across the cut is dropped whole, never split");
+    memset(name, 'a', FIELD - 3);
+    memcpy(name + FIELD - 3, "\xC3\xA9xyz", 6);
+    parse_with_fs_name(name, &page);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_TOO_LONG, page.items[0].name_status);
+    TEST_ASSERT_EQUAL_size_t(FIELD - 2, strlen(page.items[0].fs_name));
+    TEST_ASSERT_EQUAL_CHAR('a', page.items[0].fs_name[FIELD - 4]);
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_NAME_CUT_MARKER, page.items[0].fs_name + FIELD - 3);
+
+    TEST_PRINTF("too long and a control character: the control character is reported");
+    memset(name, 'a', FIELD + 2);
+    memcpy(name, "\\u0001", 6);
+    name[FIELD + 2] = '\0';
+    parse_with_fs_name(name, &page);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, page.items[0].name_status);
+    TEST_ASSERT_EQUAL_CHAR(SKIFF_ROMM_NAME_REPLACEMENT, page.items[0].fs_name[0]);
+}
+
+static void test_an_overlong_file_name_is_listed_but_not_downloadable(void) {
+    char json[RAW_MAX];
+    char name[SKIFF_ROMM_FILE_NAME_MAX + 1];
+    memset(name, 'f', sizeof name - 1);
+    name[sizeof name - 1] = '\0';
+    snprintf(json, sizeof json,
+             "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Folder\",\"fs_size_bytes\":1,\"files\":["
+             "{\"rom_id\":3,\"file_name\":\"%s\",\"file_size_bytes\":1}]}",
+             name);
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(json, strlen(json), &rom));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_TOO_LONG, rom.files[0].name_status);
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+}
+
+static void test_structural_problems_still_refuse_the_page(void) {
+    static const char *const BROKEN[] = {
+        "{\"items\":[" ROM_ITEM(1, "a.iso") ",{\"id\":2,\"platform_id\":1,\"fs_name\":7,"
+                                            "\"fs_size_bytes\":1}],\"total\":2,\"offset\":0}",
+        "{\"items\":[" ROM_ITEM(1, "a.iso") ",{\"id\":2,\"platform_id\":1,\"fs_name\":\"\","
+                                            "\"fs_size_bytes\":1}],\"total\":2,\"offset\":0}",
+        "{\"items\":[" ROM_ITEM(1,
+                                "a.iso") ",{\"id\":2,\"platform_id\":1,\"fs_name\":\"b\\u0000"
+                                         "c.iso\",\"fs_size_bytes\":1}],\"total\":2,\"offset\":0}",
+        "{\"items\":[" ROM_ITEM(1, "a.iso") ",{\"platform_id\":1,\"fs_name\":\"b.iso\","
+                                            "\"fs_size_bytes\":1}],\"total\":2,\"offset\":0}",
+    };
+    for (size_t i = 0; i < sizeof BROKEN / sizeof BROKEN[0]; i++) {
+        skiff_romm_rom_page page;
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                              skiff_romm_parse_rom_page(BROKEN[i], strlen(BROKEN[i]), &page));
+        TEST_ASSERT_EQUAL_size_t(0, page.count);
     }
 }
 
@@ -382,6 +523,8 @@ static void test_control_characters_in_a_string_are_refused(void) {
                           skiff_romm_parse_rom_page(with_newline, sizeof with_newline - 1, &page));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
                           skiff_romm_parse_rom_page(nul_after, sizeof nul_after - 1, &page));
+    TEST_PRINTF(
+        "an escaped control character is not structure: the ROM is listed, not downloadable");
     static const char *const ESCAPED[] = {"\\u000a", "\\u000D", "\\u001b", "\\u001f",
                                           "\\u007f", "\\n",     "\\t"};
     for (size_t i = 0; i < sizeof ESCAPED / sizeof ESCAPED[0]; i++) {
@@ -390,16 +533,11 @@ static void test_control_characters_in_a_string_are_refused(void) {
                  "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":\"a%s.iso\","
                  "\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}",
                  ESCAPED[i]);
-        TEST_PRINTF("fs_name with %s", ESCAPED[i]);
-        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
-                              skiff_romm_parse_rom_page(item, strlen(item), &page));
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(item, strlen(item), &page));
+        TEST_PRINTF("fs_name with %s shows as '%s'", ESCAPED[i], page.items[0].fs_name);
+        TEST_ASSERT_EQUAL_STRING("a?.iso", page.items[0].fs_name);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, page.items[0].name_status);
     }
-    static const char file_escape[] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"a.iso\","
-                                      "\"fs_size_bytes\":1,\"files\":[{\"rom_id\":3,\"file_name\":"
-                                      "\"a\\u001b.iso\",\"file_size_bytes\":1}]}";
-    skiff_romm_rom rom;
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
-                          skiff_romm_parse_rom(file_escape, sizeof file_escape - 1, &rom));
     TEST_PRINTF("an escaped non-ASCII character is text");
     static const char accented[] =
         "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":"
@@ -649,6 +787,14 @@ typedef struct url_case {
     const char *expected_tail;
 } url_case;
 
+/* A file whose name RomM serves it under, as skiff_romm_get_rom() fills it. */
+static skiff_romm_file file_named(const char *name) {
+    skiff_romm_file file;
+    memset(&file, 0, sizeof file);
+    snprintf(file.file_name, sizeof file.file_name, "%s", name);
+    return file;
+}
+
 static void test_download_urls_encode_every_reserved_byte(void) {
     static const url_case CASES[] = {
         {PAYLOAD_NAME, "Skiff%20Test%20Payload.iso"},
@@ -663,8 +809,8 @@ static void test_download_urls_encode_every_reserved_byte(void) {
         char expected[SKIFF_ROMM_CONTENT_URL_MAX];
         snprintf(expected, sizeof expected, BASE_URL "/api/roms/7/content/%s",
                  CASES[i].expected_tail);
-        TEST_ASSERT_EQUAL_INT(
-            SKIFF_OK, skiff_romm_content_url(&client, 7, CASES[i].file_name, url, sizeof url));
+        const skiff_romm_file file = file_named(CASES[i].file_name);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_content_url(&client, 7, &file, url, sizeof url));
         TEST_PRINTF("'%s' -> %s", CASES[i].file_name, url);
         TEST_ASSERT_EQUAL_STRING(expected, url);
     }
@@ -672,17 +818,36 @@ static void test_download_urls_encode_every_reserved_byte(void) {
 
 static void test_a_download_url_that_does_not_fit_is_refused(void) {
     const char *expected = BASE_URL "/api/roms/7/content/a%20b";
+    const skiff_romm_file file = file_named("a b");
     char url[64];
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_romm_content_url(&client, 7, "a b", url, strlen(expected)));
+                          skiff_romm_content_url(&client, 7, &file, url, strlen(expected)));
     TEST_ASSERT_EQUAL_STRING("", url);
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_romm_content_url(&client, 7, "a b", url, 8));
+                          skiff_romm_content_url(&client, 7, &file, url, 8));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_romm_content_url(&client, 7, "a b", url, strlen(expected) + 1));
+                          skiff_romm_content_url(&client, 7, &file, url, strlen(expected) + 1));
     TEST_ASSERT_EQUAL_STRING(expected, url);
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_content_url(&client, 7, "", url, 64));
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_content_url(NULL, 7, "a", url, 64));
+    const skiff_romm_file unnamed = file_named("");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 7, &unnamed, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(NULL, 7, &file, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_content_url(&client, 7, NULL, url, sizeof url));
+}
+
+static void test_a_file_that_is_not_downloadable_gets_no_url(void) {
+    static const skiff_romm_name_status UNUSABLE[] = {SKIFF_ROMM_NAME_CONTROL_CHAR,
+                                                      SKIFF_ROMM_NAME_TOO_LONG};
+    for (size_t i = 0; i < sizeof UNUSABLE / sizeof UNUSABLE[0]; i++) {
+        skiff_romm_file file = file_named("a?.iso");
+        file.name_status = UNUSABLE[i];
+        char url[SKIFF_ROMM_CONTENT_URL_MAX] = "untouched";
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                              skiff_romm_content_url(&client, 7, &file, url, sizeof url));
+        TEST_ASSERT_EQUAL_STRING("", url);
+    }
 }
 
 static void test_the_longest_file_name_fits_the_content_url_buffer(void) {
@@ -692,12 +857,12 @@ static void test_the_longest_file_name_fits_the_content_url_buffer(void) {
     long_base[sizeof long_base - 1] = '\0';
     skiff_romm_client wide;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_client_init(&wide, &fake.base, long_base, NULL));
-    char name[SKIFF_ROMM_FILE_NAME_MAX];
-    memset(name, '#', sizeof name - 1);
-    name[sizeof name - 1] = '\0';
+    skiff_romm_file file = file_named("");
+    memset(file.file_name, '#', sizeof file.file_name - 1);
+    file.file_name[sizeof file.file_name - 1] = '\0';
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_romm_content_url(&wide, UINT64_MAX, name, url, sizeof url));
+                          skiff_romm_content_url(&wide, UINT64_MAX, &file, url, sizeof url));
 }
 
 /* ---- The client ---- */
@@ -775,6 +940,12 @@ int main(void) {
     RUN_TEST(test_a_page_longer_than_asked_is_refused);
     RUN_TEST(test_page_limits_are_checked);
     RUN_TEST(test_every_field_is_checked_before_a_rom_is_shown);
+    RUN_TEST(test_a_rom_with_a_control_character_is_listed_but_not_downloadable);
+    RUN_TEST(test_a_title_with_a_control_character_marks_its_rom);
+    RUN_TEST(test_a_file_with_a_control_character_is_listed_but_not_downloadable);
+    RUN_TEST(test_an_overlong_name_is_cut_at_a_character_with_a_marker);
+    RUN_TEST(test_an_overlong_file_name_is_listed_but_not_downloadable);
+    RUN_TEST(test_structural_problems_still_refuse_the_page);
     RUN_TEST(test_a_rom_of_another_platform_is_refused);
     RUN_TEST(test_a_page_beyond_its_total_is_refused);
     RUN_TEST(test_a_file_of_another_rom_is_refused);
@@ -797,6 +968,7 @@ int main(void) {
     RUN_TEST(test_a_rom_without_files_or_with_a_broken_file_is_refused);
     RUN_TEST(test_download_urls_encode_every_reserved_byte);
     RUN_TEST(test_a_download_url_that_does_not_fit_is_refused);
+    RUN_TEST(test_a_file_that_is_not_downloadable_gets_no_url);
     RUN_TEST(test_the_longest_file_name_fits_the_content_url_buffer);
     RUN_TEST(test_the_client_checks_its_settings);
     RUN_TEST(test_the_token_header_is_offered_and_wiped);

@@ -86,6 +86,23 @@ typedef struct skiff_romm_platform {
     uint64_t rom_count;
 } skiff_romm_platform;
 
+/*
+ * Whether a name from RomM can be used as it is. A name with a control character, or too long for
+ * its field, does not refuse its page: the item is still listed with its name made displayable
+ * (each control character shown as SKIFF_ROMM_NAME_REPLACEMENT; a long name cut at a UTF-8
+ * character boundary and ended with SKIFF_ROMM_NAME_CUT_MARKER), and is not downloadable, since the
+ * shown name is not the file's real name. A name with both problems reports the control character.
+ */
+typedef enum skiff_romm_name_status {
+    SKIFF_ROMM_NAME_OK,
+    SKIFF_ROMM_NAME_CONTROL_CHAR,
+    SKIFF_ROMM_NAME_TOO_LONG,
+} skiff_romm_name_status;
+
+#define SKIFF_ROMM_NAME_REPLACEMENT '?'
+/* ASCII, so the PSP's Latin firmware font draws it (it has no "…"). */
+#define SKIFF_ROMM_NAME_CUT_MARKER "~"
+
 /* A ROM as a list shows it. size and crc32 are the whole ROM's (one file for a PSP game). */
 typedef struct skiff_romm_rom_summary {
     uint64_t id;
@@ -98,6 +115,9 @@ typedef struct skiff_romm_rom_summary {
     uint32_t crc32;
     /* A folder of several files rather than one file. */
     int multiple_files;
+    /* For name and fs_name together: anything but SKIFF_ROMM_NAME_OK means the ROM is listed but
+     * cannot be downloaded. */
+    skiff_romm_name_status name_status;
 } skiff_romm_rom_summary;
 
 typedef struct skiff_romm_rom_page {
@@ -113,6 +133,9 @@ typedef struct skiff_romm_file {
     uint64_t size;
     int has_crc32;
     uint32_t crc32;
+    /* Anything but SKIFF_ROMM_NAME_OK: file_name is only for display, and
+     * skiff_romm_content_url() refuses the file. */
+    skiff_romm_name_status name_status;
 } skiff_romm_file;
 
 typedef struct skiff_romm_rom {
@@ -173,14 +196,15 @@ skiff_err skiff_romm_list_roms(skiff_romm_client *client, uint64_t platform_id, 
 skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_romm_rom *out);
 
 /*
- * Writes the URL file_name of rom_id downloads from, "<base>/api/roms/<id>/content/<name>", with
- * every byte of the name other than letters, digits and "-._~" percent-encoded (a '#', '?' or '/'
- * in a file name must not end or split the path). SKIFF_ERR_INVALID_ARG for a NULL or empty
- * argument, SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit (SKIFF_ROMM_CONTENT_URL_MAX always
- * does); out is empty on error.
+ * Writes the URL file (of the ROM rom_id) downloads from, "<base>/api/roms/<id>/content/<name>",
+ * with every byte of the name other than letters, digits and "-._~" percent-encoded (a '#', '?' or
+ * '/' in a file name must not end or split the path). SKIFF_ERR_INVALID_ARG for a NULL argument, an
+ * empty name, or a file whose name_status is not SKIFF_ROMM_NAME_OK (its file_name is a display
+ * form, not the name RomM serves it under); SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit
+ * (SKIFF_ROMM_CONTENT_URL_MAX always does). out is empty on error.
  */
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
-                                 const char *file_name, char *out, size_t out_size);
+                                 const skiff_romm_file *file, char *out, size_t out_size);
 
 /* ---- Parsing, exposed for the tests and the self-test ---- */
 

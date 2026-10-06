@@ -32,6 +32,13 @@ the logic.
 - **Local HTTP server** (`local_http_server.h`): a scripted server on `127.0.0.1` that sends exact
   bytes back (a cut-off body, a stalled connection, garbage to a TLS client), for the curl
   transport's tests without a network.
+- **Fake storage** (`fake_storage.h`): wraps the POSIX storage (`src/platform/host/storage_posix.h`)
+  over a temporary directory (`temp_dir.h`) and injects Memory Stick failures: full after N bytes, a
+  failing sync or rename, every open file handle lost after N writes (as a suspend may do), limited
+  to paths with a given suffix such as `.part`. `tests/unit/test_download.c` drives resumable
+  downloads through it and the fake transport: cuts at every stage, a changed ETag, a server
+  without ranges, error pages during a resume, a wrong CRC-32, and each Memory Stick failure, each
+  followed by the attempt that completes the file.
 
 The fixtures are recorded, not written by hand: `scripts/dev.sh romm-record` starts a fresh test
 RomM with a 4 KiB synthetic file, saves each response byte for byte (CRLF headers, de-chunked body;
@@ -103,9 +110,9 @@ that another checkout (a parallel worktree) started.
 
 ### Integration tests
 
-`romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c` on the
-host and runs it on the compose network. It checks the error codes a player would see, over the TLS
-stack the PSP uses:
+`romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c` and
+`tests/integration/test_download_romm.c` on the host and runs them on the compose network. The
+first checks the error codes a player would see, over the TLS stack the PSP uses:
 
 - HTTPS through the test CA works, and without the CA the server is untrusted (105);
 - with the clock set to 2000 (a PSP whose battery ran flat) the failure is the clock (108); with
@@ -116,6 +123,11 @@ stack the PSP uses:
 - a second request reuses the connection (no new handshake);
 - the token is required (401 maps to 200), the whole file downloads, a `Range` with the current
   ETag resumes with exactly the missing bytes, and a stale ETag restarts with the whole file.
+
+The second runs resumable downloads (`include/skiff/download.h`) into a temporary directory: a
+download stopped at 40% by its stop hook continues on a new connection with 206 from the saved
+offset, a `.resume` file with an ETag the server no longer has restarts with 200, and both match
+the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind.
 
 Everything generated lives in `build/integration/` (git-ignored):
 

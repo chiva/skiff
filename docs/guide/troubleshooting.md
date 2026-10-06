@@ -32,7 +32,7 @@ with your PSP model and firmware.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–205)
+## RomM errors (200–206)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -42,6 +42,7 @@ with your PSP model and firmware.
 | 203 | Server error | Check RomM's logs |
 | 204 | Unexpected response | Often a proxy login page (e.g. Authelia, Cloudflare Access) in front of RomM. Exempt `/api/` for devices, or use mTLS |
 | 205 | Unsupported RomM version | Update RomM to 5.3 or newer |
+| 206 | The file does not match RomM's checksum | The whole file arrived, but its CRC32 is not the one RomM recorded, so Skiff deleted it rather than install a damaged game. This usually means the file was replaced on the server after RomM scanned it: rescan the platform in RomM, then download again. If it keeps happening with the same file, the copy on the server may be damaged |
 
 ## Memory Stick errors (300–304)
 

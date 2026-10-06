@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/version.h"
 
@@ -29,6 +30,12 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_RANGE_START 4294967296ULL
 #define SKIFF_SELFTEST_RANGE_END 6442450943ULL
 #define SKIFF_SELFTEST_RANGE_TOTAL 6442450944ULL
+/* A .resume file for a download cut just short of the FAT32 limit: values a 32-bit long cannot
+ * hold. */
+#define SKIFF_SELFTEST_STATE_SIZE 4294967295ULL
+#define SKIFF_SELFTEST_STATE_OFFSET 4294967290ULL
+#define SKIFF_SELFTEST_STATE_CRC32 0xCBF43926U
+#define SKIFF_SELFTEST_STATE_ETAG "\"6ac37763-1000\""
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -102,6 +109,31 @@ static const char *check_http_range_parsing(void) {
                : "Content-Range above 4 GiB parsed wrongly";
 }
 
+/* The .resume file is written and read with newlib's printf and strtoull on the PSP, and its check
+ * line with zlib's CRC-32: a 64-bit offset must survive the round trip. */
+static const char *check_download_state(void) {
+    skiff_download_state state;
+    memset(&state, 0, sizeof state);
+    state.size = SKIFF_SELFTEST_STATE_SIZE;
+    state.offset = SKIFF_SELFTEST_STATE_OFFSET;
+    state.crc32 = SKIFF_SELFTEST_STATE_CRC32;
+    state.has_expected_crc32 = 1;
+    state.expected_crc32 = SKIFF_SELFTEST_STATE_CRC32;
+    snprintf(state.etag, sizeof state.etag, "%s", SKIFF_SELFTEST_STATE_ETAG);
+    char text[SKIFF_DOWNLOAD_STATE_MAX];
+    size_t length = 0;
+    skiff_download_state parsed;
+    if (skiff_download_state_format(&state, text, sizeof text, &length) != SKIFF_OK ||
+        skiff_download_state_parse(text, length, &parsed) != SKIFF_OK) {
+        return "a .resume file did not survive a round trip";
+    }
+    return parsed.size == state.size && parsed.offset == state.offset &&
+                   parsed.crc32 == state.crc32 && parsed.expected_crc32 == state.expected_crc32 &&
+                   strcmp(parsed.etag, state.etag) == 0
+               ? NULL
+               : "a .resume file came back with other values";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -111,6 +143,7 @@ static const selftest_check CHECKS[] = {
     {"clock", check_clock_advances},
     {"little-endian", check_little_endian},
     {"http-range", check_http_range_parsing},
+    {"download-state", check_download_state},
 };
 // clang-format on
 

@@ -23,6 +23,13 @@ add_library(skiff_host_tls OBJECT src/platform/host/tls_hooks.c)
 target_link_libraries(skiff_host_tls PUBLIC CURL::libcurl MbedTLS::mbedtls)
 skiff_set_warnings(skiff_host_tls)
 
+# skiff_storage over POSIX file calls, standing in for the PSP's sceIo storage in host tests
+# (src/platform/host/storage_posix.h).
+add_library(skiff_host_storage OBJECT src/platform/host/storage_posix.c)
+target_link_libraries(skiff_host_storage PUBLIC skiff_core)
+target_include_directories(skiff_host_storage PUBLIC src/platform/host)
+skiff_set_warnings(skiff_host_storage)
+
 if(SKIFF_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

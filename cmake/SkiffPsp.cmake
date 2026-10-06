@@ -140,7 +140,6 @@ target_link_libraries(skiff_net_probe PRIVATE skiff_net skiff_probe_support skif
 # cipher, plain HTTP and CPU clock, with the CPU's busy share; hash and cipher speed; Memory Stick
 # speed; first-request latency after joining (see tests/hardware/bench.c). zlib's CRC-32 is one of
 # the candidates for the integrity check.
-find_package(ZLIB REQUIRED)
 skiff_add_psp_app(skiff_bench "${SKIFF_PBP_TITLE} benchmark" tests/hardware/bench.c)
 target_link_libraries(skiff_bench PRIVATE skiff_net skiff_probe_support skiff_psp_check skiff_psp_net
                                           skiff_psp_ark skiff_psp_tls skiff_psp_entropy ZLIB::ZLIB)

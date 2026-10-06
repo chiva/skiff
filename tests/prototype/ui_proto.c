@@ -2,9 +2,12 @@
  * UI stack prototype (Phase 1 hardware spike). Confirms the UI design in
  * docs/development/architecture.md before the real ui/ layer is written:
  *
- *   - GU draws a 20-item list with intraFont, using the firmware's fonts (flash0:/font/): a Latin
- *     font with the Japanese font as its fallback, so one UTF-8 string can mix both scripts;
- *   - the d-pad moves the selection; how long a frame takes to draw and render is measured;
+ *   - Skiff's renderer (src/platform/psp/ui_psp.h) draws a scrolling list, a progress bar and the
+ *     header and footer with intraFont, using the firmware's fonts (flash0:/font/): a Latin font
+ *     with the Japanese font as its fallback, so one UTF-8 string can mix both scripts; a title too
+ *     long for its row is cut to fit (skiff_ui_fit_text());
+ *   - the d-pad and L/R move the selection through skiff/ui.h's input and list models; how long a
+ *     frame takes to draw and render is measured;
  *   - the on-screen keyboard (sceUtilityOsk) and the network picker (sceUtilityNetconf) open from
  *     the render loop and close cleanly, with the network modules loaded only for the picker;
  *   - HOME -> Quit ends the loop through the exit callback, like START.
@@ -27,9 +30,6 @@
 #include <malloc.h>
 #include <pspctrl.h>
 #include <pspdebug.h>
-#include <pspdisplay.h>
-#include <pspge.h>
-#include <pspgu.h>
 #include <pspkernel.h>
 #include <psputility.h>
 #include <stdint.h>
@@ -37,10 +37,12 @@
 #include <string.h>
 
 #include "skiff/selftest.h"
+#include "skiff/ui.h"
 
 #include "lifecycle.h"
 #include "net_psp.h"
 #include "report.h"
+#include "ui_psp.h"
 
 #define PROTO_OK_MARKER "SKIFF UI PROTO OK"
 #define PROTO_FAIL_MARKER "SKIFF UI PROTO FAIL"
@@ -55,45 +57,36 @@
 #define JAPANESE_SAMPLE "日本語: ゲームを選択してください"
 /* Japanese characters only, so a missing fallback font leaves its rows empty. */
 #define JAPANESE_CHECK_TEXT "日本語のゲームを選択"
-#define HINT_TEXT "Up/Down move   Triangle keyboard   Square network   START quit"
+/* Too long for a row: drawn cut to fit, as RomM's longer titles will be. */
+#define LONG_TITLE_SAMPLE                                                                          \
+    "A homebrew title far too long to fit on a single row of the PSP's screen, cut"
+#define PROGRESS_LABEL "Progress bar"
 
-/* Colours are 0xAABBGGRR. */
-#define COLOUR_BACKGROUND 0xFF302010U
-#define COLOUR_TEXT 0xFFFFFFFFU
-#define COLOUR_DIM_TEXT 0xFFB0B0B0U
-#define COLOUR_SHADOW 0xFF000000U
-#define COLOUR_SELECTION 0xFF805020U
-/* Laid over the list while a system dialog is open, as games do, so the dialog stands out. */
-#define COLOUR_DIALOG_DIM 0xB0000000U
 /* A clear without the stencil bit leaves the frame buffer's alpha alone, so compare colour only. */
 #define COLOUR_RGB_MASK 0x00FFFFFFU
 
-#define TITLE_SIZE 0.8f
 #define SAMPLE_SIZE 0.7f
-#define ITEM_SIZE 0.6f
-#define HINT_SIZE 0.5f
 
 enum {
-    SCREEN_WIDTH = 480,
-    SCREEN_HEIGHT = 272,
-    BUFFER_WIDTH = 512,
-    BYTES_PER_PIXEL = 4,
-    FRAME_BUFFER_BYTES = BUFFER_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL,
-    /* GU's virtual coordinate space is 4096 wide; the screen sits at its centre. */
-    GU_VIRTUAL_CENTRE = 2048,
-    DISPLAY_LIST_WORDS = 0x40000,
+    SCREEN_WIDTH = SKIFF_PSP_UI_SCREEN_WIDTH,
 
     ITEM_COUNT = 20,
-    ITEM_LABEL_MAX = 48,
-    TEXT_LEFT = 12,
-    TITLE_BASELINE = 16,
-    SAMPLE_BASELINE = 32,
-    LIST_FIRST_BASELINE = 48,
-    LIST_ROW_HEIGHT = 11,
-    SELECTION_ASCENT = 9,
-    SELECTION_DESCENT = 2,
-    HINT_BASELINE = 269,
-    STATUS_LEFT = 260,
+    ITEM_LABEL_MAX = 96,
+    TEXT_LEFT = SKIFF_PSP_UI_MARGIN,
+    SAMPLE_BASELINE = 36,
+    LIST_TOP = 42,
+    LIST_ROWS = 14,
+    /* Room the list leaves its text: the screen less both margins and the scroll bar. */
+    LIST_TEXT_WIDTH = SKIFF_PSP_UI_SCREEN_WIDTH - 3 * SKIFF_PSP_UI_MARGIN,
+    PROGRESS_BASELINE = 239,
+    PROGRESS_LEFT = 120,
+    PROGRESS_TOP = 233,
+    PROGRESS_WIDTH = 240,
+    PROGRESS_HEIGHT = 6,
+    /* The progress bar fills in this many frames, then starts again. */
+    PROGRESS_FRAMES = 300,
+    PERCENT_FULL = 100,
+    STATUS_TEXT_MAX = 96,
 
     /* First frame: one line per script, far enough apart that their rows read back separately. */
     CHECK_LATIN_BASELINE = 60,
@@ -104,9 +97,6 @@ enum {
     CHECK_RECT_TOP = 200,
     CHECK_RECT_HEIGHT = 10,
 
-    /* Held d-pad: first repeat after 20 frames, then every 4 (at 60 frames per second). */
-    REPEAT_DELAY_FRAMES = 20,
-    REPEAT_INTERVAL_FRAMES = 4,
     /* A 60 Hz frame. */
     FRAME_BUDGET_US = 16667,
     US_PER_MS = 1000,
@@ -142,15 +132,6 @@ enum {
     (PSP_CTRL_SELECT | PSP_CTRL_START | PSP_CTRL_UP | PSP_CTRL_RIGHT | PSP_CTRL_DOWN |             \
      PSP_CTRL_LEFT | PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_TRIANGLE | PSP_CTRL_CIRCLE | \
      PSP_CTRL_CROSS | PSP_CTRL_SQUARE)
-
-static unsigned int __attribute__((aligned(16))) display_list[DISPLAY_LIST_WORDS];
-
-typedef struct sprite_vertex {
-    unsigned int colour;
-    short x;
-    short y;
-    short z;
-} sprite_vertex;
 
 typedef struct memory_snapshot {
     size_t heap_used;
@@ -211,12 +192,13 @@ typedef struct ui_state {
     skiff_psp_report *report;
     intraFont *latin;
     intraFont *japanese;
+    skiff_psp_ui gu;
+    skiff_ui_list list;
+    skiff_ui_input input;
+    /* Item labels as drawn: fitted to the list's width once the font is loaded. */
     char items[ITEM_COUNT][ITEM_LABEL_MAX];
-    int selected;
-    unsigned int held_buttons;
-    int held_frames;
+    int frame;
     unsigned short osk_text[OSK_TEXT_MAX + 1];
-    int draw_buffer_index;
 } ui_state;
 
 /* The calls each system dialog offers, so one loop can run either. */
@@ -298,109 +280,53 @@ static void unload_fonts(ui_state *ui) {
     intraFontShutdown();
 }
 
-static void start_gu(void) {
-    sceGuInit();
-    sceGuStart(GU_DIRECT, display_list);
-    sceGuDrawBuffer(GU_PSM_8888, (void *)0, BUFFER_WIDTH);
-    sceGuDispBuffer(SCREEN_WIDTH, SCREEN_HEIGHT, (void *)FRAME_BUFFER_BYTES, BUFFER_WIDTH);
-    sceGuOffset(GU_VIRTUAL_CENTRE - SCREEN_WIDTH / 2, GU_VIRTUAL_CENTRE - SCREEN_HEIGHT / 2);
-    sceGuViewport(GU_VIRTUAL_CENTRE, GU_VIRTUAL_CENTRE, SCREEN_WIDTH, SCREEN_HEIGHT);
-    sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-    sceGuEnable(GU_SCISSOR_TEST);
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-    sceGuFinish();
-    sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
-    sceDisplayWaitVblankStart();
-    sceGuDisplay(GU_TRUE);
+/* The label skiff_psp_ui_list() draws for an item. */
+static const char *item_label(void *ctx, size_t index) {
+    const ui_state *ui = ctx;
+    return ui->items[index];
 }
 
-static void stop_gu(void) {
-    sceGuDisplay(GU_FALSE);
-    sceGuTerm();
-}
-
-static void draw_rect(int x, int y, int width, int height, unsigned int colour) {
-    sprite_vertex *vertices = sceGuGetMemory(2 * sizeof(sprite_vertex));
-    vertices[0] = (sprite_vertex){colour, (short)x, (short)y, 0};
-    vertices[1] = (sprite_vertex){colour, (short)(x + width), (short)(y + height), 0};
-    /* The GE reads RAM, not the CPU's data cache, so the vertices are written back first. */
-    sceKernelDcacheWritebackRange(vertices, 2 * sizeof(sprite_vertex));
-    /*
-     * intraFont turns the depth test back on after every print, and there is no depth buffer: on
-     * hardware the test then discards the rectangle (PPSSPP lets it through).
-     */
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, NULL,
-                   vertices);
-    sceGuEnable(GU_TEXTURE_2D);
-}
-
-/* Sets the style on the font and its fallback: the fallback draws characters with its own style. */
-static void set_style(intraFont *font, float size, unsigned int colour) {
-    for (intraFont *styled = font; styled != NULL;
-         styled = styled->altFont != font ? styled->altFont : NULL) {
-        intraFontSetStyle(styled, size, colour, COLOUR_SHADOW, 0.0f, INTRAFONT_ALIGN_LEFT);
-    }
-}
-
-static void print_text(intraFont *font, int x, int y, float size, unsigned int colour,
-                       const char *text) {
-    set_style(font, size, colour);
-    intraFontPrint(font, (float)x, (float)y, text);
-}
-
-static void begin_frame(void) {
-    sceGuStart(GU_DIRECT, display_list);
-    sceGuClearColor(COLOUR_BACKGROUND);
-    sceGuClear(GU_COLOR_BUFFER_BIT);
-}
-
-static void end_frame(void) {
-    sceGuFinish();
-    sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
-}
-
-static void present_frame(ui_state *ui) {
-    sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
-    ui->draw_buffer_index ^= 1;
-}
-
-static void draw_list(const ui_state *ui, const proto_results *results) {
-    print_text(ui->latin, TEXT_LEFT, TITLE_BASELINE, TITLE_SIZE, COLOUR_TEXT, TITLE_TEXT);
-    print_text(ui->latin, TEXT_LEFT, SAMPLE_BASELINE, SAMPLE_SIZE, COLOUR_TEXT, JAPANESE_SAMPLE);
-    if (results->osk_typed_length > 0) {
-        set_style(ui->latin, ITEM_SIZE, COLOUR_DIM_TEXT);
-        intraFontPrintUCS2(ui->latin, (float)STATUS_LEFT, (float)TITLE_BASELINE, ui->osk_text);
-    }
-    if (results->net_ip[0] != '\0') {
-        print_text(ui->latin, STATUS_LEFT, SAMPLE_BASELINE, ITEM_SIZE, COLOUR_DIM_TEXT,
-                   results->net_ip);
-    }
+/* Cuts each label to the list's width, once: measuring is too slow to repeat every frame. */
+static void fit_items(ui_state *ui) {
+    skiff_psp_ui_style style = {&ui->gu, SKIFF_PSP_UI_TEXT_SIZE};
     for (int item = 0; item < ITEM_COUNT; item++) {
-        const int baseline = LIST_FIRST_BASELINE + item * LIST_ROW_HEIGHT;
-        if (item == ui->selected) {
-            draw_rect(0, baseline - SELECTION_ASCENT, SCREEN_WIDTH,
-                      SELECTION_ASCENT + SELECTION_DESCENT, COLOUR_SELECTION);
-        }
-        print_text(ui->latin, TEXT_LEFT, baseline, ITEM_SIZE, COLOUR_TEXT, ui->items[item]);
+        char fitted[ITEM_LABEL_MAX];
+        skiff_ui_fit_text(ui->items[item], (float)LIST_TEXT_WIDTH, skiff_psp_ui_measure, &style,
+                          fitted, sizeof fitted);
+        memcpy(ui->items[item], fitted, sizeof fitted);
     }
-    print_text(ui->latin, TEXT_LEFT, HINT_BASELINE, HINT_SIZE, COLOUR_DIM_TEXT, HINT_TEXT);
+}
+
+static void draw_screen(ui_state *ui, const proto_results *results, const char *status) {
+    static const skiff_psp_ui_hint hints[] = {
+        {SKIFF_UI_ACTION_MENU, "Keyboard"},   {SKIFF_UI_ACTION_EXTRA, "Network"},
+        {SKIFF_UI_ACTION_PAGE_UP, "Page up"}, {SKIFF_UI_ACTION_PAGE_DOWN, "Page down"},
+        {SKIFF_UI_ACTION_START, "Quit"},
+    };
+    skiff_psp_ui_header(&ui->gu, TITLE_TEXT, status != NULL ? status : results->net_ip);
+    skiff_psp_ui_text(&ui->gu, TEXT_LEFT, SAMPLE_BASELINE, SAMPLE_SIZE, SKIFF_PSP_UI_COLOUR_TEXT,
+                      JAPANESE_SAMPLE);
+    if (results->osk_typed_length > 0) {
+        intraFontPrintUCS2(ui->latin, (float)(SCREEN_WIDTH / 2), (float)SAMPLE_BASELINE,
+                           ui->osk_text);
+    }
+    skiff_psp_ui_list(&ui->gu, &ui->list, LIST_TOP, item_label, ui);
+    skiff_psp_ui_text(&ui->gu, TEXT_LEFT, PROGRESS_BASELINE, SKIFF_PSP_UI_HINT_SIZE,
+                      SKIFF_PSP_UI_COLOUR_DIM_TEXT, PROGRESS_LABEL);
+    skiff_psp_ui_progress_bar(&ui->gu, PROGRESS_LEFT, PROGRESS_TOP, PROGRESS_WIDTH, PROGRESS_HEIGHT,
+                              (unsigned)(ui->frame % PROGRESS_FRAMES) * PERCENT_FULL /
+                                  PROGRESS_FRAMES);
+    skiff_psp_ui_footer(&ui->gu, hints, sizeof hints / sizeof hints[0]);
 }
 
 /* Pixels in rows [top, bottom) of the frame just rendered whose colour is not the background's. */
 static long count_drawn_pixels(const ui_state *ui, int top, int bottom) {
-    const uintptr_t uncached_vram = (uintptr_t)sceGeEdramGetAddr() | 0x40000000U;
-    const uint32_t *buffer =
-        (const uint32_t *)(uncached_vram + (uintptr_t)ui->draw_buffer_index * FRAME_BUFFER_BYTES);
+    const uint32_t *buffer = skiff_psp_ui_drawn_frame(&ui->gu);
     long drawn = 0;
     for (int y = top; y < bottom; y++) {
         for (int x = 0; x < SCREEN_WIDTH; x++) {
-            if ((buffer[y * BUFFER_WIDTH + x] & COLOUR_RGB_MASK) !=
-                (COLOUR_BACKGROUND & COLOUR_RGB_MASK)) {
+            if ((buffer[y * SKIFF_PSP_UI_BUFFER_WIDTH + x] & COLOUR_RGB_MASK) !=
+                (SKIFF_PSP_UI_COLOUR_BACKGROUND & COLOUR_RGB_MASK)) {
                 drawn++;
             }
         }
@@ -414,12 +340,14 @@ static long count_drawn_pixels(const ui_state *ui, int top, int bottom) {
  * font) drew nothing.
  */
 static void check_glyphs(ui_state *ui, proto_results *results) {
-    begin_frame();
-    print_text(ui->latin, TEXT_LEFT, CHECK_LATIN_BASELINE, SAMPLE_SIZE, COLOUR_TEXT, LATIN_SAMPLE);
-    print_text(ui->latin, TEXT_LEFT, CHECK_JAPANESE_BASELINE, SAMPLE_SIZE, COLOUR_TEXT,
-               JAPANESE_CHECK_TEXT);
-    draw_rect(0, CHECK_RECT_TOP, SCREEN_WIDTH, CHECK_RECT_HEIGHT, COLOUR_SELECTION);
-    end_frame();
+    skiff_psp_ui_begin_frame(&ui->gu);
+    skiff_psp_ui_text(&ui->gu, TEXT_LEFT, CHECK_LATIN_BASELINE, SAMPLE_SIZE,
+                      SKIFF_PSP_UI_COLOUR_TEXT, LATIN_SAMPLE);
+    skiff_psp_ui_text(&ui->gu, TEXT_LEFT, CHECK_JAPANESE_BASELINE, SAMPLE_SIZE,
+                      SKIFF_PSP_UI_COLOUR_TEXT, JAPANESE_CHECK_TEXT);
+    skiff_psp_ui_rect(&ui->gu, 0, CHECK_RECT_TOP, SCREEN_WIDTH, CHECK_RECT_HEIGHT,
+                      SKIFF_PSP_UI_COLOUR_SELECTION);
+    skiff_psp_ui_end_frame(&ui->gu);
     results->rect_pixels =
         count_drawn_pixels(ui, CHECK_RECT_TOP, CHECK_RECT_TOP + CHECK_RECT_HEIGHT);
     results->latin_glyph_pixels = count_drawn_pixels(ui, CHECK_LATIN_BASELINE - GLYPH_BAND_ASCENT,
@@ -427,7 +355,7 @@ static void check_glyphs(ui_state *ui, proto_results *results) {
     results->japanese_glyph_pixels =
         count_drawn_pixels(ui, CHECK_JAPANESE_BASELINE - GLYPH_BAND_ASCENT,
                            CHECK_JAPANESE_BASELINE + GLYPH_BAND_DESCENT);
-    present_frame(ui);
+    skiff_psp_ui_present(&ui->gu);
 }
 
 static void fill_dialog_common(pspUtilityDialogCommon *base, unsigned int size) {
@@ -473,15 +401,15 @@ static void run_dialog(ui_state *ui, const proto_results *results, const dialog_
     long long give_up_at = 0; /* set once the dialog has been asked to close */
     int shutdown_accepted = 0;
     for (;;) {
-        begin_frame();
-        draw_list(ui, results);
-        draw_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOUR_DIALOG_DIM);
-        end_frame();
+        skiff_psp_ui_begin_frame(&ui->gu);
+        draw_screen(ui, results, NULL);
+        skiff_psp_ui_backdrop(&ui->gu);
+        skiff_psp_ui_end_frame(&ui->gu);
         const int status = ops->get_status();
         const long long now = now_us();
         if (status == PSP_UTILITY_DIALOG_NONE) {
             outcome->closed = 1;
-            present_frame(ui);
+            skiff_psp_ui_present(&ui->gu);
             return;
         }
         if (status == PSP_UTILITY_DIALOG_VISIBLE) {
@@ -513,10 +441,10 @@ static void run_dialog(ui_state *ui, const proto_results *results, const dialog_
             snprintf(line, sizeof line, "FAIL %s: still open (status %d), giving up", ops->name,
                      status);
             log_step(ui, line);
-            present_frame(ui);
+            skiff_psp_ui_present(&ui->gu);
             return;
         }
-        present_frame(ui);
+        skiff_psp_ui_present(&ui->gu);
     }
 }
 
@@ -701,10 +629,11 @@ static int network_ok(const proto_results *results) {
 }
 
 /*
- * Tester buttons pressed this frame, or a d-pad direction held long enough to repeat. A failed read
- * counts as no input (and is reported), so it can neither move the list nor end headless mode.
+ * This frame's actions (skiff/ui.h): tester buttons just pressed, or a held direction repeating. A
+ * failed read counts as no input (and is reported), so it can neither move the list nor end
+ * headless mode.
  */
-static unsigned int read_buttons(ui_state *ui, proto_results *results) {
+static unsigned int read_actions(ui_state *ui, proto_results *results) {
     SceCtrlData pad;
     const int read = sceCtrlReadBufferPositive(&pad, 1);
     if (read <= 0) {
@@ -717,20 +646,7 @@ static unsigned int read_buttons(ui_state *ui, proto_results *results) {
         results->controller_read_errors++;
         return 0;
     }
-    const unsigned int buttons = pad.Buttons & TESTER_BUTTONS;
-    const unsigned int pressed = buttons & ~ui->held_buttons;
-    unsigned int repeated = 0;
-    if (buttons != 0 && buttons == ui->held_buttons) {
-        ui->held_frames++;
-        if (ui->held_frames >= REPEAT_DELAY_FRAMES &&
-            (ui->held_frames - REPEAT_DELAY_FRAMES) % REPEAT_INTERVAL_FRAMES == 0) {
-            repeated = buttons & (PSP_CTRL_UP | PSP_CTRL_DOWN);
-        }
-    } else {
-        ui->held_frames = 0;
-    }
-    ui->held_buttons = buttons;
-    return pressed | repeated;
+    return skiff_ui_input_update(&ui->input, pad.Buttons & TESTER_BUTTONS);
 }
 
 static void record_frame(frame_stats *stats, long long elapsed_us) {
@@ -760,8 +676,8 @@ static void run_list(ui_state *ui, proto_results *results) {
     const long long headless_deadline = now_us() + HEADLESS_EXIT_US;
     int any_input = 0;
     while (!skiff_psp_exit_requested()) {
-        const unsigned int buttons = read_buttons(ui, results);
-        if (buttons != 0 && !any_input) {
+        const unsigned int actions = read_actions(ui, results);
+        if (actions != 0 && !any_input) {
             any_input = 1;
             log_step(ui, "input: a tester is here, headless exit cancelled");
         }
@@ -770,23 +686,18 @@ static void run_list(ui_state *ui, proto_results *results) {
             results->headless = 1;
             return;
         }
-        if (buttons & PSP_CTRL_START) {
+        if (actions & SKIFF_UI_ACTION_START) {
             return;
         }
-        if (buttons & PSP_CTRL_UP) {
-            ui->selected = (ui->selected + ITEM_COUNT - 1) % ITEM_COUNT;
-        }
-        if (buttons & PSP_CTRL_DOWN) {
-            ui->selected = (ui->selected + 1) % ITEM_COUNT;
-        }
-        if (buttons & PSP_CTRL_TRIANGLE) {
+        skiff_ui_list_apply(&ui->list, actions);
+        if (actions & SKIFF_UI_ACTION_MENU) {
             open_keyboard(ui, results);
             if (dialog_stuck(ui, &results->osk)) {
                 return;
             }
             continue;
         }
-        if (buttons & PSP_CTRL_SQUARE) {
+        if (actions & SKIFF_UI_ACTION_EXTRA) {
             open_network_picker(ui, results);
             if (dialog_stuck(ui, &results->netconf)) {
                 return;
@@ -795,18 +706,15 @@ static void run_list(ui_state *ui, proto_results *results) {
         }
 
         const long long start_us = now_us();
-        begin_frame();
-        draw_list(ui, results);
-        if (!any_input) {
-            char countdown[SKIFF_SELFTEST_LINE_MAX];
-            snprintf(countdown, sizeof countdown, "No input: exits in %lld s",
-                     headless_left_us / US_PER_S + 1);
-            print_text(ui->latin, STATUS_LEFT, TITLE_BASELINE, ITEM_SIZE, COLOUR_DIM_TEXT,
-                       countdown);
-        }
-        end_frame();
+        char countdown[STATUS_TEXT_MAX];
+        snprintf(countdown, sizeof countdown, "No input: exits in %lld s",
+                 headless_left_us / US_PER_S + 1);
+        skiff_psp_ui_begin_frame(&ui->gu);
+        draw_screen(ui, results, any_input ? NULL : countdown);
+        skiff_psp_ui_end_frame(&ui->gu);
+        ui->frame++;
         record_frame(&results->frames, now_us() - start_us);
-        present_frame(ui);
+        skiff_psp_ui_present(&ui->gu);
     }
 }
 
@@ -831,9 +739,9 @@ static void report_results(skiff_psp_report *report, const proto_results *result
     skiff_psp_report_line(report, line);
     if (results->frames.frames > 0) {
         snprintf(line, sizeof line,
-                 "frame (%d-item list, draw + render): mean %lld us, max %lld us, %d of %d over "
-                 "16.7 ms",
-                 ITEM_COUNT, results->frames.total_us / results->frames.frames,
+                 "frame (%d-row list, header, footer, progress bar; draw + render): mean %lld us, "
+                 "max %lld us, %d of %d over 16.7 ms",
+                 LIST_ROWS, results->frames.total_us / results->frames.frames,
                  results->frames.max_us, results->frames.over_budget, results->frames.frames);
     } else {
         snprintf(line, sizeof line, "FAIL frame: no list frame rendered");
@@ -909,7 +817,8 @@ int main(int argc, char *argv[]) {
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
     /* The first row shows the accented Latin sample, so a tester can check those glyphs too. */
     snprintf(ui.items[0], ITEM_LABEL_MAX, "%s", LATIN_SAMPLE);
-    for (int item = 1; item < ITEM_COUNT; item++) {
+    snprintf(ui.items[1], ITEM_LABEL_MAX, "%s", LONG_TITLE_SAMPLE);
+    for (int item = 2; item < ITEM_COUNT; item++) {
         snprintf(ui.items[item], ITEM_LABEL_MAX, "Homebrew sample %02d  (PSP, %d MB)", item + 1,
                  (item + 1) * 16);
     }
@@ -923,10 +832,13 @@ int main(int argc, char *argv[]) {
     }
 
     log_step(&ui, "GU: starting; the summary follows when the run ends");
-    start_gu();
+    skiff_psp_ui_start(&ui.gu, ui.latin);
+    skiff_ui_input_init(&ui.input, ui.gu.confirm_is_cross);
+    skiff_ui_list_init(&ui.list, ITEM_COUNT, LIST_ROWS);
+    fit_items(&ui);
     check_glyphs(&ui, &results);
     run_list(&ui, &results);
-    stop_gu();
+    skiff_psp_ui_stop(&ui.gu);
     unload_fonts(&ui);
 
     /* GU drew over the debug screen; give the report lines their screen back. */

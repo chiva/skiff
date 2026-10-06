@@ -38,11 +38,12 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `net/` (transport, TLS entropy
-source), `romm/` (version check, platforms, ROM pages), `storage/` (the storage seam, logical
-roots, free space, safe names), `jobs/` (resumable downloads) and `platform/psp/` (lifecycle,
-network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
-them.
+Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
+text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
+`storage/` (the storage seam, logical roots, free space, safe names), `jobs/` (resumable
+downloads), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
+network stack, TLS hooks, the GU renderer) exist. The other layers arrive with the
+[roadmap](roadmap.md) phases that need them.
 
 ## Threads, power and suspend
 
@@ -93,9 +94,25 @@ The UI draws with the PSP's GU directly and renders text with intraFont, rather 
 - `libintrafont` is packaged by pspdev. Its licence (CC BY-SA 3.0) ships with the release's
   third-party licences once the app links it (`scripts/psp-packages.txt`).
 
-Phase 1 confirms this with a prototype on hardware before the UI layer is written
-(`tests/prototype/ui_proto.c`, see [Testing](testing.md#ui-prototype)). The prototype still draws a
-Japanese line and measures both fonts, so the cost of adding Japanese later is known.
+Phase 1 confirmed this with a prototype on hardware (`tests/prototype/ui_proto.c`, see
+[Testing](testing.md#ui-prototype)). The prototype still draws a Japanese line and measures both
+fonts, so the cost of adding Japanese later is known.
+
+The UI is split along the platform line:
+
+- `include/skiff/ui.h` (`src/ui/`, host-tested) holds what is not drawing. Buttons become actions:
+  confirm and back follow the console's own setting, so Circle confirms on Japanese consoles and
+  Cross elsewhere. A held d-pad direction or shoulder button repeats after 20 frames, then every 4.
+  It also holds a scrolling list (up and down wrap, L and R page and stop at the ends), and text cut
+  to a width between UTF-8 characters with `...`, since the Latin firmware font has no `…`.
+  Measuring text costs time on the PSP, so labels are cut once, when they change, not every frame.
+  The rest is download progress (percent, a rate smoothed over 2-second windows, time left) and
+  sizes and durations as the player reads them (`1,5 GB` in Spanish, `2 h 05 min`).
+- `src/platform/psp/ui_psp.h` draws those models with GU and intraFont: a header and a footer of
+  button hints with the PlayStation symbols, a list with its highlight and scroll bar, a progress
+  bar, and the dim backdrop under a system dialog. It disables the depth test before every
+  rectangle and writes vertices back from the data cache (AGENTS.md). The UI prototype is drawn by
+  it, so the headless run in CI exercises the renderer.
 
 ## Errors and languages
 
@@ -105,9 +122,24 @@ names and the English messages. Codes are grouped by layer (1xx network, 2xx Rom
 [troubleshooting guide](../guide/troubleshooting.md) documents every code, and a pre-commit check
 (`scripts/check-error-docs.sh`) fails if a code is missing from it.
 
-When the UI arrives, the English messages become the fallback catalogue in `i18n/`. Other
-languages (Spanish first) are catalogues keyed by the same stable names, chosen from the PSP's
-system language setting. Logs always use the stable name and number, never translated text.
+What the player reads comes from `include/skiff/i18n.h` (`src/i18n/`), in English or Spanish:
+Spanish when the PSP's system language is Spanish, English otherwise. Both languages live in
+tables a missing string cannot get past:
+
+- UI strings are one X-macro table with the English and Spanish text side by side, so a row
+  without its translation does not compile. The unit test checks each row: both texts use exactly
+  the placeholders the row declares, and only characters the Latin firmware font draws (ASCII and
+  Latin-1).
+- English error sentences are `error.h`'s messages, so there is one source. Spanish ones are a
+  table naming each `error.h` code once: a misspelt code, or a code added to `error.h` without a
+  Spanish row, does not compile.
+- Placeholders are `{1}` to `{9}`, positional so a translation can reorder them, and filled only
+  with strings. A translation therefore cannot introduce a printf conversion that does not match
+  its argument. Numbers are formatted first, with the language's decimal separator.
+
+An error is shown as its sentence followed by its code, e.g. "Could not reach the RomM server
+[102]", which players quote in bug reports. Logs always use the stable name and number, never
+translated text.
 
 ## Configuration
 

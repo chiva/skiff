@@ -46,6 +46,8 @@ endfunction()
 
 skiff_add_unit_test(test_error)
 skiff_add_unit_test(test_version)
+skiff_add_unit_test(test_i18n)
+skiff_add_unit_test(test_ui)
 skiff_add_unit_test(test_selftest)
 skiff_add_unit_test(test_entropy)
 skiff_add_unit_test(test_http)

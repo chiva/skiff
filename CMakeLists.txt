@@ -46,6 +46,7 @@ add_library(
   src/core/error.c
   src/core/selftest.c
   src/core/version.c
+  src/i18n/i18n.c
   src/jobs/download.c
   src/jobs/download_state.c
   src/log/log.c
@@ -55,7 +56,8 @@ add_library(
   src/romm/romm.c
   src/storage/paths.c
   src/storage/storage.c
-  src/storage/whole_file.c)
+  src/storage/whole_file.c
+  src/ui/ui.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

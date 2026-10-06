@@ -9,9 +9,11 @@
 #include "skiff/config.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
+#include "skiff/i18n.h"
 #include "skiff/log.h"
 #include "skiff/romm.h"
 #include "skiff/storage_paths.h"
+#include "skiff/ui.h"
 #include "skiff/version.h"
 
 typedef const char *(*selftest_check_fn)(void);
@@ -65,6 +67,18 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_WIDE_EXTENSION ".iso"
 /* 123 bytes of stem room hold 30 whole four-byte characters. */
 #define SKIFF_SELFTEST_WIDE_KEPT_BYTES 124U
+/* The Spanish line for a full Memory Stick: accents through the catalogue, the code through
+ * snprintf. */
+#define SKIFF_SELFTEST_SPANISH_ERROR_LINE "No hay suficiente espacio libre en el Memory Stick [301]"
+/* A Spanish title cut to 9 one-unit characters: six of them and the ellipsis, the sixth a two-byte
+ * character. */
+#define SKIFF_SELFTEST_FIT_TEXT "Edici\xC3\xB3n especial"
+#define SKIFF_SELFTEST_FIT_WIDTH 9.0f
+#define SKIFF_SELFTEST_FIT_EXPECTED "Edici\xC3\xB3..."
+/* 1.5 GiB, with the Spanish decimal comma: 64-bit arithmetic and %llu on newlib. */
+#define SKIFF_SELFTEST_UI_BYTES 1610612736ULL
+#define SKIFF_SELFTEST_UI_BYTES_TEXT "1,5 GB"
+#define SKIFF_SELFTEST_TEXT_MAX 96
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -238,6 +252,45 @@ static const char *check_safe_names(void) {
                : "a long name was not cut between characters";
 }
 
+/* The player's text comes from UTF-8 tables and is filled with snprintf'd numbers on newlib. */
+static const char *check_spanish_text(void) {
+    char line[SKIFF_SELFTEST_TEXT_MAX];
+    const skiff_language spanish = skiff_language_from_psp(SKIFF_PSP_SYSTEM_LANGUAGE_SPANISH);
+    if (skiff_error_line(spanish, SKIFF_ERR_STORAGE_NO_SPACE, line, sizeof line) != SKIFF_OK ||
+        strcmp(line, SKIFF_SELFTEST_SPANISH_ERROR_LINE) != 0) {
+        return "a Spanish error line came out wrong";
+    }
+    char size[SKIFF_SELFTEST_TEXT_MAX];
+    return skiff_ui_format_bytes(SKIFF_SELFTEST_UI_BYTES,
+                                 skiff_text(spanish, SKIFF_TEXT_DECIMAL_SEPARATOR), size,
+                                 sizeof size) == SKIFF_OK &&
+                   strcmp(size, SKIFF_SELFTEST_UI_BYTES_TEXT) == 0
+               ? NULL
+               : "a size with a decimal comma came out wrong";
+}
+
+/* One unit per UTF-8 character, as the PSP's char is signed: lead and continuation bytes must
+ * still be told apart. */
+static float measure_characters(void *ctx, const char *text) {
+    (void)ctx;
+    float width = 0.0f;
+    for (const unsigned char *c = (const unsigned char *)text; *c != '\0'; c++) {
+        if ((*c & 0xC0U) != 0x80U) {
+            width += 1.0f;
+        }
+    }
+    return width;
+}
+
+static const char *check_ui_text_fitting(void) {
+    char out[SKIFF_SELFTEST_TEXT_MAX];
+    return skiff_ui_fit_text(SKIFF_SELFTEST_FIT_TEXT, SKIFF_SELFTEST_FIT_WIDTH, measure_characters,
+                             NULL, out, sizeof out) == SKIFF_OK &&
+                   strcmp(out, SKIFF_SELFTEST_FIT_EXPECTED) == 0
+               ? NULL
+               : "a title was not cut between characters";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -252,6 +305,8 @@ static const selftest_check CHECKS[] = {
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
     {"safe-name", check_safe_names},
+    {"spanish-text", check_spanish_text},
+    {"ui-fit", check_ui_text_fitting},
 };
 // clang-format on
 

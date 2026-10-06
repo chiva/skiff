@@ -21,8 +21,9 @@ static int make_save_paths(const char *path, save_paths *paths) {
            with_suffix(path, SKIFF_STORAGE_PENDING_SUFFIX, paths->pending, sizeof paths->pending);
 }
 
-static skiff_err read_all(skiff_storage *storage, const char *path, char *text, size_t text_size,
-                          size_t *length) {
+/* Reads the whole file into buffer; SKIFF_ERR_BUFFER_TOO_SMALL when it holds more than capacity. */
+static skiff_err read_all(skiff_storage *storage, const char *path, unsigned char *buffer,
+                          size_t capacity, size_t *length) {
     skiff_file *file = NULL;
     skiff_err err = skiff_storage_open(storage, path, SKIFF_FILE_READ, 0, &file);
     if (err != SKIFF_OK) {
@@ -30,12 +31,12 @@ static skiff_err read_all(skiff_storage *storage, const char *path, char *text, 
     }
     size_t used = 0;
     size_t got = 1;
-    while (err == SKIFF_OK && got > 0 && used < text_size - 1) {
-        err = skiff_file_read(file, text + used, text_size - 1 - used, &got);
+    while (err == SKIFF_OK && got > 0 && used < capacity) {
+        err = skiff_file_read(file, buffer + used, capacity - used, &got);
         used += err == SKIFF_OK ? got : 0;
     }
-    if (err == SKIFF_OK && used == text_size - 1) {
-        char extra = 0;
+    if (err == SKIFF_OK && used == capacity) {
+        unsigned char extra = 0;
         err = skiff_file_read(file, &extra, sizeof extra, &got);
         if (err == SKIFF_OK && got > 0) {
             err = SKIFF_ERR_BUFFER_TOO_SMALL;
@@ -45,13 +46,10 @@ static skiff_err read_all(skiff_storage *storage, const char *path, char *text, 
     if (err == SKIFF_OK) {
         err = close_err;
     }
-    if (err != SKIFF_OK) {
-        text[0] = '\0';
-        return err;
+    if (err == SKIFF_OK) {
+        *length = used;
     }
-    text[used] = '\0';
-    *length = used;
-    return SKIFF_OK;
+    return err;
 }
 
 /* Makes a rename or remove durable before the next step relies on it. The PSP flushes a whole
@@ -96,22 +94,19 @@ static skiff_err recover(skiff_storage *storage, const char *path, const save_pa
     return err;
 }
 
-skiff_err skiff_storage_read_whole(skiff_storage *storage, const char *path, char *text,
-                                   size_t text_size, size_t *length) {
-    if (text != NULL && text_size > 0) {
-        text[0] = '\0';
-    }
+skiff_err skiff_storage_read_whole(skiff_storage *storage, const char *path, void *buffer,
+                                   size_t capacity, size_t *length) {
     if (length != NULL) {
         *length = 0;
     }
     save_paths paths;
-    if (storage == NULL || path == NULL || text == NULL || text_size == 0 || length == NULL ||
+    if (storage == NULL || path == NULL || buffer == NULL || length == NULL ||
         !make_save_paths(path, &paths)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     skiff_err err = recover(storage, path, &paths);
     if (err == SKIFF_OK) {
-        err = read_all(storage, path, text, text_size, length);
+        err = read_all(storage, path, buffer, capacity, length);
     }
     return err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
 }

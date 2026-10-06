@@ -119,16 +119,16 @@ skiff_err skiff_storage_check_room(skiff_storage *storage, const char *path, uin
 #define SKIFF_STORAGE_PENDING_SUFFIX ".new"
 
 /*
- * Reads the file at path into text (text_size bytes, terminator included) and terminates it; the
- * length goes to *length. First finishes or undoes a replacement cut short by a power loss (see
+ * Reads the file at path into buffer (capacity bytes; any data, not terminated); its length goes to
+ * *length. First finishes or undoes a replacement cut short by a power loss (see
  * skiff_storage_replace_whole()): a .tmp file is deleted; a .new file without the file becomes the
  * file; a .new file beside the file is deleted when it can be, and the file is read either way. No
- * file at all reads as empty (length 0). SKIFF_ERR_BUFFER_TOO_SMALL when the file does not fit
- * (text is then empty), SKIFF_ERR_INVALID_ARG for a NULL argument or a path too long for
- * SKIFF_STORAGE_PATH_MAX with a suffix, otherwise the storage's error.
+ * file at all reads as empty (length 0). SKIFF_ERR_BUFFER_TOO_SMALL when the file holds more than
+ * capacity bytes, SKIFF_ERR_INVALID_ARG for a NULL argument or a path too long for
+ * SKIFF_STORAGE_PATH_MAX with a suffix, otherwise the storage's error; *length is 0 on any error.
  */
-skiff_err skiff_storage_read_whole(skiff_storage *storage, const char *path, char *text,
-                                   size_t text_size, size_t *length);
+skiff_err skiff_storage_read_whole(skiff_storage *storage, const char *path, void *buffer,
+                                   size_t capacity, size_t *length);
 
 /*
  * Replaces the file at path with length bytes of data: write and sync "<path>.tmp", rename it

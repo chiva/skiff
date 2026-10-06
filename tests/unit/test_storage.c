@@ -385,14 +385,13 @@ static void test_a_whole_file_round_trips_and_a_missing_one_reads_empty(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_storage_read_whole(storage, path, text, sizeof text, &length));
     TEST_ASSERT_EQUAL_size_t(0, length);
-    TEST_ASSERT_EQUAL_STRING("", text);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_storage_replace_whole(storage, path, CONTENT, CONTENT_BYTES));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(storage, path, "new", 3));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_storage_read_whole(storage, path, text, sizeof text, &length));
-    TEST_ASSERT_EQUAL_STRING("new", text);
     TEST_ASSERT_EQUAL_size_t(3, length);
+    TEST_ASSERT_EQUAL_MEMORY("new", text, 3);
     char draft[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_DRAFT_SUFFIX];
     char pending[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_PENDING_SUFFIX];
     snprintf(draft, sizeof draft, "%s" SKIFF_STORAGE_DRAFT_SUFFIX, path);
@@ -403,15 +402,22 @@ static void test_a_whole_file_round_trips_and_a_missing_one_reads_empty(void) {
 
 static void test_a_whole_file_too_big_for_the_buffer_is_refused(void) {
     write_file(path, CONTENT);
-    char text[CONTENT_BYTES];
-    size_t length = 0;
+    char small[CONTENT_BYTES - 1];
+    size_t length = 99;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_storage_read_whole(storage, path, text, sizeof text, &length));
-    TEST_ASSERT_EQUAL_STRING("", text);
-    char exact[CONTENT_BYTES + 1];
+                          skiff_storage_read_whole(storage, path, small, sizeof small, &length));
+    TEST_ASSERT_EQUAL_size_t(0, length);
+}
+
+static void test_whole_files_are_binary_and_fill_an_exact_buffer(void) {
+    static const unsigned char data[] = {0x00, 0xFF, 'a', 0x00, '\n', 0x7F};
+    unsigned char exact[sizeof data];
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(storage, path, data, sizeof data));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_storage_read_whole(storage, path, exact, sizeof exact, &length));
-    TEST_ASSERT_EQUAL_STRING(CONTENT, exact);
+    TEST_ASSERT_EQUAL_size_t(sizeof data, length);
+    TEST_ASSERT_EQUAL_MEMORY(data, exact, sizeof data);
 }
 
 static void test_a_complete_pending_file_is_put_in_place(void) {
@@ -423,7 +429,8 @@ static void test_a_complete_pending_file_is_put_in_place(void) {
     size_t length = 0;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_storage_read_whole(storage, path, text, sizeof text, &length));
-    TEST_ASSERT_EQUAL_STRING(CONTENT, text);
+    TEST_ASSERT_EQUAL_size_t(CONTENT_BYTES, length);
+    TEST_ASSERT_EQUAL_MEMORY(CONTENT, text, CONTENT_BYTES);
     TEST_ASSERT_FALSE(exists(pending));
 }
 
@@ -438,7 +445,7 @@ static void test_whole_files_refuse_bad_arguments(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_storage_read_whole(NULL, path, text, sizeof text, &length));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_storage_read_whole(storage, path, text, 0, &length));
+                          skiff_storage_read_whole(storage, path, NULL, sizeof text, &length));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_storage_replace_whole(storage, long_path, "x", 1));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
@@ -464,6 +471,7 @@ int main(void) {
     RUN_TEST(test_room_needs_the_file_plus_a_margin);
     RUN_TEST(test_a_whole_file_round_trips_and_a_missing_one_reads_empty);
     RUN_TEST(test_a_whole_file_too_big_for_the_buffer_is_refused);
+    RUN_TEST(test_whole_files_are_binary_and_fill_an_exact_buffer);
     RUN_TEST(test_a_complete_pending_file_is_put_in_place);
     RUN_TEST(test_whole_files_refuse_bad_arguments);
     return UNITY_END();

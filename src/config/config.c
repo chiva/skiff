@@ -600,9 +600,19 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
 
 skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text, size_t text_size,
                             size_t *length) {
-    const skiff_err err = skiff_storage_read_whole(storage, path, text, text_size, length);
-    /* A file that does not fit is not one Skiff or a player wrote. */
-    return err == SKIFF_ERR_BUFFER_TOO_SMALL ? SKIFF_ERR_CONFIG_PARSE : err;
+    if (text == NULL || text_size == 0) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    text[0] = '\0';
+    /* One byte is kept for the terminator. */
+    const skiff_err err = skiff_storage_read_whole(storage, path, text, text_size - 1, length);
+    if (err != SKIFF_OK) {
+        text[0] = '\0';
+        /* A file that does not fit is not one Skiff or a player wrote. */
+        return err == SKIFF_ERR_BUFFER_TOO_SMALL ? SKIFF_ERR_CONFIG_PARSE : err;
+    }
+    text[*length] = '\0';
+    return SKIFF_OK;
 }
 
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,

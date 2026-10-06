@@ -53,6 +53,7 @@ static size_t edited_length;
 static char dir[TEMP_DIR_PATH_MAX];
 static char path[TEMP_DIR_PATH_MAX];
 static char new_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_CONFIG_NEW_SUFFIX];
+static char draft_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_CONFIG_DRAFT_SUFFIX];
 static skiff_storage *posix;
 static fake_storage storage;
 static char loaded[TEXT_BUFFER];
@@ -66,6 +67,7 @@ void setUp(void) {
     TEST_ASSERT_EQUAL_INT(0, temp_dir_create(dir, sizeof dir));
     TEST_ASSERT_TRUE(temp_dir_path(dir, SKIFF_CONFIG_FILE_NAME, path, sizeof path));
     snprintf(new_path, sizeof new_path, "%s" SKIFF_CONFIG_NEW_SUFFIX, path);
+    snprintf(draft_path, sizeof draft_path, "%s" SKIFF_CONFIG_DRAFT_SUFFIX, path);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_posix_storage_create(&posix));
     fake_storage_init(&storage, posix);
     memset(loaded, 0, sizeof loaded);
@@ -545,12 +547,13 @@ static void test_save_then_load_round_trips(void) {
 
 static void test_a_failed_write_or_sync_leaves_the_old_file(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
-    storage.fail_suffix = SKIFF_CONFIG_NEW_SUFFIX;
+    storage.fail_suffix = SKIFF_CONFIG_DRAFT_SUFFIX;
     storage.write_budget = 4;
     storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_NO_SPACE,
         skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
+    TEST_ASSERT_FALSE(file_exists(draft_path));
     TEST_ASSERT_FALSE(file_exists(new_path));
     storage.write_budget = 0;
     storage.write_error = SKIFF_OK;
@@ -558,19 +561,28 @@ static void test_a_failed_write_or_sync_leaves_the_old_file(void) {
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_IO,
         skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
-    TEST_ASSERT_FALSE(file_exists(new_path));
+    TEST_ASSERT_FALSE(file_exists(draft_path));
     storage.sync_error = SKIFF_OK;
+    storage.rename_error = SKIFF_ERR_STORAGE_IO;
+    TEST_PRINTF("a draft that never became .new is dropped");
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_STORAGE_IO,
+        skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
+    TEST_ASSERT_FALSE(file_exists(draft_path));
+    TEST_ASSERT_FALSE(file_exists(new_path));
+    storage.rename_error = SKIFF_OK;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_TOKEN_EXAMPLE, loaded);
 }
 
-static void test_a_save_cut_before_the_rename_is_finished_by_load(void) {
+static void test_a_save_cut_before_the_last_rename_is_finished_by_load(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
+    storage.fail_suffix = SKIFF_CONFIG_NEW_SUFFIX;
     storage.rename_error = SKIFF_ERR_STORAGE_IO;
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_IO,
         skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
-    TEST_PRINTF("as after a power cut: config.ini gone, the synced .new file left");
+    TEST_PRINTF("as after a power cut: config.ini gone, the complete .new file left");
     TEST_ASSERT_FALSE(file_exists(path));
     TEST_ASSERT_TRUE(file_exists(new_path));
     storage.rename_error = SKIFF_OK;
@@ -579,14 +591,52 @@ static void test_a_save_cut_before_the_rename_is_finished_by_load(void) {
     TEST_ASSERT_FALSE(file_exists(new_path));
 }
 
+static void test_a_save_finishes_an_earlier_cut_save_first(void) {
+    TEST_PRINTF("only a complete .new file holds the settings; the next save must not lose it");
+    write_file(new_path, GUIDE_MTLS_EXAMPLE);
+    storage.fail_suffix = SKIFF_CONFIG_DRAFT_SUFFIX;
+    storage.sync_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_STORAGE_IO,
+        skiff_config_save(&storage.base, path, GUIDE_TOKEN_EXAMPLE, strlen(GUIDE_TOKEN_EXAMPLE)));
+    storage.sync_error = SKIFF_OK;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
+    TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
+}
+
+static void test_a_cut_draft_is_never_used(void) {
+    TEST_PRINTF("first save cut mid-write: no config.ini, only a partial draft");
+    write_file(draft_path, "[server]\nurl = https://half");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
+    TEST_ASSERT_EQUAL_size_t(0, loaded_length);
+    TEST_ASSERT_FALSE(file_exists(draft_path));
+    TEST_ASSERT_FALSE(file_exists(path));
+}
+
+static void test_a_failed_remove_keeps_the_complete_new_file(void) {
+    write_file(path, GUIDE_TOKEN_EXAMPLE);
+    TEST_PRINTF("config.ini is gone although its remove reported an error");
+    storage.fail_suffix = SKIFF_CONFIG_FILE_NAME;
+    storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_STORAGE_IO,
+        skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
+    storage.remove_error = SKIFF_OK;
+    TEST_ASSERT_FALSE(file_exists(path));
+    TEST_ASSERT_TRUE(file_exists(new_path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
+    TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
+}
+
 static void test_a_leftover_new_file_beside_the_old_one_is_dropped(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
-    write_file(new_path, "[server]\nurl = https://half-writ");
+    write_file(new_path, "[server]\nurl = https://other");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_TOKEN_EXAMPLE, loaded);
     TEST_ASSERT_FALSE(file_exists(new_path));
-    TEST_PRINTF("and a stale .new file never blocks the next save");
+    TEST_PRINTF("and a stale .new or .tmp file never blocks the next save");
     write_file(new_path, "stale");
+    write_file(draft_path, "stale");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE,
                                                       strlen(GUIDE_MTLS_EXAMPLE)));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
@@ -690,7 +740,10 @@ int main(void) {
     RUN_TEST(test_no_file_loads_as_empty);
     RUN_TEST(test_save_then_load_round_trips);
     RUN_TEST(test_a_failed_write_or_sync_leaves_the_old_file);
-    RUN_TEST(test_a_save_cut_before_the_rename_is_finished_by_load);
+    RUN_TEST(test_a_save_cut_before_the_last_rename_is_finished_by_load);
+    RUN_TEST(test_a_save_finishes_an_earlier_cut_save_first);
+    RUN_TEST(test_a_cut_draft_is_never_used);
+    RUN_TEST(test_a_failed_remove_keeps_the_complete_new_file);
     RUN_TEST(test_a_leftover_new_file_beside_the_old_one_is_dropped);
     RUN_TEST(test_an_undeletable_new_file_does_not_block_loading);
     RUN_TEST(test_a_file_too_large_is_damage);

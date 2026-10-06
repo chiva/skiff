@@ -131,9 +131,11 @@ know and the player's order survive.
   fit is refused, never cut; a setting given twice is refused rather than one silently winning.
   Unknown keys are ignored, so an older Skiff reads a newer file, and the first one is kept for a
   log warning, since a typo such as `ca-file` would otherwise do nothing.
-- **Saving**: FAT cannot replace a file in one step, so Skiff writes and syncs `config.ini.new`,
-  removes `config.ini`, then renames. A power cut leaves either the old file or a complete `.new`
-  file; the next load finishes the rename, or drops a `.new` file found beside the old one.
+- **Saving**: FAT cannot replace a file in one step, so Skiff writes and syncs `config.ini.tmp`,
+  renames it `config.ini.new` (so a `.new` file is always complete), removes `config.ini`, then
+  renames `.new` into place. The next load (or save) finishes a save a power cut interrupted: a
+  `.tmp` file is dropped, a `.new` file without `config.ini` is put in place, and one beside
+  `config.ini` is dropped. An edit is parsed before it is saved, so a saved file always loads.
 - **Schema changes**: the `version` key exists from the first release; migrations arrive with the
   first change to the schema.
 

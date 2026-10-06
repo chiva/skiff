@@ -549,9 +549,22 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
 
 /* ---- Loading and saving ---- */
 
-static int new_file_path(const char *path, char *out, size_t out_size) {
-    const int written = snprintf(out, out_size, "%s" SKIFF_CONFIG_NEW_SUFFIX, path);
+/* The two files a save goes through, next to config.ini. */
+typedef struct save_paths {
+    /* Written and synced first; never trusted, since a power cut can leave it cut short. */
+    char draft[SKIFF_CONFIG_PATH_MAX];
+    /* The draft renamed once it is complete: if it exists, it is a whole config.ini. */
+    char pending[SKIFF_CONFIG_PATH_MAX];
+} save_paths;
+
+static int with_suffix(const char *path, const char *suffix, char *out, size_t out_size) {
+    const int written = snprintf(out, out_size, "%s%s", path, suffix);
     return written > 0 && (size_t)written < out_size;
+}
+
+static int make_save_paths(const char *path, save_paths *paths) {
+    return with_suffix(path, SKIFF_CONFIG_DRAFT_SUFFIX, paths->draft, sizeof paths->draft) &&
+           with_suffix(path, SKIFF_CONFIG_NEW_SUFFIX, paths->pending, sizeof paths->pending);
 }
 
 static skiff_err read_all(skiff_storage *storage, const char *path, char *text, size_t text_size,
@@ -587,6 +600,31 @@ static skiff_err read_all(skiff_storage *storage, const char *path, char *text, 
     return SKIFF_OK;
 }
 
+/*
+ * Finishes or undoes a save cut short, so config.ini is the newest complete settings. A draft is
+ * dropped (it may be cut short). A pending file is complete: without config.ini the save was cut
+ * between the remove and the rename, so the rename is finished; beside config.ini it was cut
+ * before the remove, so the old file stands. Removing a file nobody trusts is only tidying, so a
+ * failure there never stops config.ini from loading.
+ */
+static skiff_err recover(skiff_storage *storage, const char *path, const save_paths *paths) {
+    (void)skiff_storage_remove(storage, paths->draft);
+    uint64_t size = 0;
+    const skiff_err err = skiff_storage_size(storage, path, &size);
+    const skiff_err pending_err = skiff_storage_size(storage, paths->pending, &size);
+    if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
+        if (pending_err == SKIFF_ERR_STORAGE_NOT_FOUND) {
+            return SKIFF_OK;
+        }
+        return pending_err == SKIFF_OK ? skiff_storage_rename(storage, paths->pending, path)
+                                       : pending_err;
+    }
+    if (err == SKIFF_OK && pending_err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+        (void)skiff_storage_remove(storage, paths->pending);
+    }
+    return err;
+}
+
 skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text, size_t text_size,
                             size_t *length) {
     if (text != NULL && text_size > 0) {
@@ -595,34 +633,15 @@ skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text
     if (length != NULL) {
         *length = 0;
     }
-    char pending[SKIFF_CONFIG_PATH_MAX];
+    save_paths paths;
     if (storage == NULL || path == NULL || text == NULL || text_size == 0 || length == NULL ||
-        !new_file_path(path, pending, sizeof pending)) {
+        !make_save_paths(path, &paths)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    uint64_t size = 0;
-    skiff_err err = skiff_storage_size(storage, path, &size);
-    const skiff_err pending_err = skiff_storage_size(storage, pending, &size);
-    if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
-        if (pending_err == SKIFF_ERR_STORAGE_NOT_FOUND) {
-            return SKIFF_OK;
-        }
-        /* Cut between removing config.ini and the rename: the .new file is complete. */
-        err = pending_err == SKIFF_OK ? skiff_storage_rename(storage, pending, path) : pending_err;
-    } else if (err == SKIFF_OK && pending_err != SKIFF_ERR_STORAGE_NOT_FOUND) {
-        /* Cut before config.ini was removed: the .new file may be incomplete, the old one is not.
-         * Removing it is only tidying (the next save removes it first), so a .new file that cannot
-         * be removed never keeps the intact config.ini from loading. */
-        (void)skiff_storage_remove(storage, pending);
+    skiff_err err = recover(storage, path, &paths);
+    if (err == SKIFF_OK) {
+        err = read_all(storage, path, text, text_size, length);
     }
-    if (err != SKIFF_OK) {
-        return err;
-    }
-    return read_all(storage, path, text, text_size, length);
-}
-
-static skiff_err remove_if_present(skiff_storage *storage, const char *path) {
-    const skiff_err err = skiff_storage_remove(storage, path);
     return err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
 }
 
@@ -645,22 +664,29 @@ static skiff_err write_synced(skiff_storage *storage, const char *path, const ch
 
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,
                             size_t length) {
-    char pending[SKIFF_CONFIG_PATH_MAX];
+    save_paths paths;
     if (storage == NULL || path == NULL || (text == NULL && length > 0) ||
-        length > SKIFF_CONFIG_TEXT_MAX || !new_file_path(path, pending, sizeof pending)) {
+        length > SKIFF_CONFIG_TEXT_MAX || !make_save_paths(path, &paths)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    skiff_err err = remove_if_present(storage, pending);
-    if (err == SKIFF_OK) {
-        err = write_synced(storage, pending, text, length);
-    }
-    if (err == SKIFF_OK) {
-        err = remove_if_present(storage, path);
-    }
-    if (err != SKIFF_OK) {
-        /* config.ini is still in place; a .new file left behind is dropped by the next load. */
-        (void)skiff_storage_remove(storage, pending);
+    /* A pending file from an earlier cut save may be the only copy of the settings. */
+    skiff_err err = recover(storage, path, &paths);
+    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
         return err;
     }
-    return skiff_storage_rename(storage, pending, path);
+    err = write_synced(storage, paths.draft, text, length);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_rename(storage, paths.draft, paths.pending);
+    }
+    if (err != SKIFF_OK) {
+        (void)skiff_storage_remove(storage, paths.draft);
+        return err;
+    }
+    /* From here the pending file is complete. Whatever fails, it stays for the next load to
+     * judge: a failed remove may still have taken config.ini with it. */
+    err = skiff_storage_remove(storage, path);
+    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+        return err;
+    }
+    return skiff_storage_rename(storage, paths.pending, path);
 }

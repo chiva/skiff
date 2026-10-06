@@ -27,7 +27,9 @@
 #include "skiff/transport.h"
 
 #define SKIFF_CONFIG_FILE_NAME "config.ini"
-/* Saving writes "<path>.new" first; see skiff_config_save(). */
+/* Saving writes "<path>.tmp", renames it "<path>.new" once synced, then replaces config.ini; see
+ * skiff_config_save(). */
+#define SKIFF_CONFIG_DRAFT_SUFFIX ".tmp"
 #define SKIFF_CONFIG_NEW_SUFFIX ".new"
 #define SKIFF_CONFIG_VERSION 1
 /* A config.ini larger than this is not one Skiff or a player wrote: SKIFF_ERR_CONFIG_PARSE. */
@@ -109,22 +111,23 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
 
 /*
  * Reads config.ini into text (text_size should be SKIFF_CONFIG_TEXT_MAX + 1) and terminates it.
- * Finishes a save cut short by a power loss first: with only "<path>.new" on the device it becomes
- * config.ini (it was synced before config.ini was removed); with both, the .new file is deleted
- * when it can be, and config.ini is read either way.
- * No file at all is an empty config (length 0). SKIFF_ERR_CONFIG_PARSE when the file does not fit,
- * SKIFF_ERR_INVALID_ARG for a NULL argument or a path too long for SKIFF_CONFIG_PATH_MAX, otherwise
- * the storage's error.
+ * First finishes or undoes a save cut short by a power loss (see skiff_config_save()): a .tmp file
+ * is deleted; a .new file without config.ini becomes config.ini; a .new file beside config.ini is
+ * deleted when it can be, and config.ini is read either way. No file at all is an empty config
+ * (length 0). SKIFF_ERR_CONFIG_PARSE when the file does not fit, SKIFF_ERR_INVALID_ARG for a NULL
+ * argument or a path too long for SKIFF_CONFIG_PATH_MAX, otherwise the storage's error.
  */
 skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text, size_t text_size,
                             size_t *length);
 
 /*
  * Replaces config.ini with text. FAT cannot replace a file in one step, so: write and sync
- * "<path>.new", remove config.ini, rename. A power cut leaves either the old file or a complete
- * .new file, which skiff_config_load() finishes. Returns SKIFF_ERR_INVALID_ARG for a NULL argument,
- * a path too long or a text over SKIFF_CONFIG_TEXT_MAX (it could not be loaded back), otherwise the
- * storage's error; a failure before config.ini is removed leaves it as it was.
+ * "<path>.tmp", rename it "<path>.new" (so a .new file is always complete), remove config.ini,
+ * rename .new to config.ini. A power cut leaves the old file, or a complete .new file the next load
+ * puts in place; a cut .tmp file is never used. A save first finishes an earlier cut save the same
+ * way. Returns SKIFF_ERR_INVALID_ARG for a NULL argument, a path too long or a text over
+ * SKIFF_CONFIG_TEXT_MAX (it could not be loaded back), otherwise the storage's error; after a
+ * failure the next load still finds either the old settings or the new ones, whole.
  */
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,
                             size_t length);

@@ -100,12 +100,17 @@ static skiff_err fake_size(skiff_storage *base, const char *path, uint64_t *out)
 
 static skiff_err fake_rename(skiff_storage *base, const char *from, const char *to) {
     const fake_storage *fake = (const fake_storage *)base;
-    return fake->rename_error != SKIFF_OK ? fake->rename_error
-                                          : skiff_storage_rename(fake->inner, from, to);
+    return fake->rename_error != SKIFF_OK && matches(fake, from)
+               ? fake->rename_error
+               : skiff_storage_rename(fake->inner, from, to);
 }
 
 static skiff_err fake_remove(skiff_storage *base, const char *path) {
-    return skiff_storage_remove(((fake_storage *)base)->inner, path);
+    const fake_storage *fake = (const fake_storage *)base;
+    const skiff_err err = skiff_storage_remove(fake->inner, path);
+    return err == SKIFF_OK && fake->remove_error != SKIFF_OK && matches(fake, path)
+               ? fake->remove_error
+               : err;
 }
 
 static void fake_destroy(skiff_storage *base) { (void)base; }

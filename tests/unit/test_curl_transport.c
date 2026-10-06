@@ -6,6 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "skiff/curl_transport.h"
 
@@ -17,6 +18,14 @@ enum { URL_MAX = 96, BODY_MAX = 64 };
 /* Short timeouts keep the timeout tests quick; curl checks the stall rule once a second. */
 #define TEST_CONNECT_TIMEOUT_S 2L
 #define TEST_STALL_TIMEOUT_S 1L
+/* The stop-hook tests use a stall limit far above how soon the hook ends the transfer: the hook
+ * stops once STOP_AFTER_MS have passed, which it can only see if curl keeps asking while nothing
+ * arrives. */
+#define TEST_LONG_STALL_TIMEOUT_S 30L
+#define TEST_STOP_AFTER_MS 2000L
+#define TEST_STOP_DEADLINE_MS 10000L
+#define MS_PER_SECOND 1000L
+#define NS_PER_MS 1000000L
 
 #define STR_AND_SIZE(literal) literal, sizeof literal - 1
 
@@ -55,6 +64,44 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
     return SKIFF_OK;
 }
 
+static long milliseconds_now(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long)now.tv_sec * MS_PER_SECOND + now.tv_nsec / NS_PER_MS;
+}
+
+/* Counts the polls and stops with stop_with once stop_after_ms have passed since started_ms (a
+ * negative stop_after_ms never stops). */
+typedef struct stop_hook {
+    int polls;
+    long started_ms;
+    long stop_after_ms;
+    skiff_err stop_with;
+} stop_hook;
+
+static stop_hook hook;
+
+static skiff_err poll_stop_hook(void *ctx) {
+    stop_hook *state = ctx;
+    state->polls++;
+    const long waited_ms = milliseconds_now() - state->started_ms;
+    if (state->stop_after_ms >= 0 && waited_ms >= state->stop_after_ms) {
+        TEST_PRINTF("stop hook stops the transfer on poll %d, %ld ms in, with %s", state->polls,
+                    waited_ms, skiff_err_name(state->stop_with));
+        return state->stop_with;
+    }
+    return SKIFF_OK;
+}
+
+static void use_stop_hook(long stop_after_ms, skiff_err stop_with) {
+    hook.polls = 0;
+    hook.started_ms = milliseconds_now();
+    hook.stop_after_ms = stop_after_ms;
+    hook.stop_with = stop_with;
+    request.should_stop = poll_stop_hook;
+    request.stop_ctx = &hook;
+}
+
 static const skiff_curl_config TEST_CONFIG = {
     .connect_timeout_s = TEST_CONNECT_TIMEOUT_S,
     .stall_timeout_s = TEST_STALL_TIMEOUT_S,
@@ -64,6 +111,7 @@ void setUp(void) {
     server_running = 0;
     transport = NULL;
     memset(&sink, 0, sizeof sink);
+    memset(&hook, 0, sizeof hook);
     memset(&request, 0, sizeof request);
     request.url = url;
     request.on_body = collect_body;
@@ -241,6 +289,45 @@ static void test_body_callback_error_stops_the_transfer_and_the_transport_surviv
     TEST_ASSERT_EQUAL_STRING("again", sink.bytes);
 }
 
+static void test_stop_hook_ends_a_stalled_transfer_before_the_stall_timeout(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc"), LOCAL_HTTP_STALL, 0},
+    };
+    skiff_curl_config config = TEST_CONFIG;
+    config.stall_timeout_s = TEST_LONG_STALL_TIMEOUT_S;
+    serve(REPLIES, 1, "http");
+    create(&config);
+    use_stop_hook(TEST_STOP_AFTER_MS, SKIFF_ERR_NET_UNAVAILABLE);
+
+    const skiff_err err = perform();
+    const long elapsed_ms = milliseconds_now() - hook.started_ms;
+    TEST_PRINTF("stopped after %ld ms and %d polls (stall limit %ld s)", elapsed_ms, hook.polls,
+                TEST_LONG_STALL_TIMEOUT_S);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_NET_UNAVAILABLE, err, "the hook's error, unchanged");
+    TEST_ASSERT_TRUE_MESSAGE(elapsed_ms < TEST_STOP_DEADLINE_MS, "the hook is polled while idle");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("abc", sink.bytes, "what arrived was still delivered");
+}
+
+static void test_stop_hook_on_the_first_poll_and_the_transport_survives(void) {
+    /* Whether curl's first poll comes before or after the request reaches the server, the second
+     * request gets a "hello". */
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"), LOCAL_HTTP_CLOSE, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve(REPLIES, 2, "http");
+    create(&TEST_CONFIG);
+    use_stop_hook(0, SKIFF_ERR_NET_CONNECTION_LOST);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECTION_LOST, perform());
+    TEST_ASSERT_EQUAL_INT(1, hook.polls);
+    TEST_ASSERT_EQUAL_UINT64(0, response.body_bytes);
+
+    use_stop_hook(-1, SKIFF_OK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_STRING("hello", sink.bytes);
+    TEST_ASSERT_TRUE_MESSAGE(hook.polls > 0, "a hook that never stops is still asked");
+}
+
 static void test_body_is_discarded_without_a_callback(void) {
     static const local_http_reply REPLIES[] = {
         {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"), LOCAL_HTTP_CLOSE, 0},
@@ -326,6 +413,8 @@ int main(void) {
     RUN_TEST(test_stall_mid_body_times_out_after_delivering_what_came);
     RUN_TEST(test_cut_off_body_is_a_lost_connection);
     RUN_TEST(test_body_callback_error_stops_the_transfer_and_the_transport_survives);
+    RUN_TEST(test_stop_hook_ends_a_stalled_transfer_before_the_stall_timeout);
+    RUN_TEST(test_stop_hook_on_the_first_poll_and_the_transport_survives);
     RUN_TEST(test_body_is_discarded_without_a_callback);
     RUN_TEST(test_handshake_failure);
     RUN_TEST(test_unreadable_client_certificate);

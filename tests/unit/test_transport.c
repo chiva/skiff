@@ -9,13 +9,14 @@ typedef struct recording_transport {
     skiff_transport base;
     int performs;
     int destroys;
+    const skiff_http_request *last_request;
 } recording_transport;
 
 static skiff_err record_perform(skiff_transport *base, const skiff_http_request *request,
                                 skiff_http_response *response) {
-    (void)request;
     recording_transport *recording = (recording_transport *)base;
     recording->performs++;
+    recording->last_request = request;
     response->status = 204;
     return SKIFF_OK;
 }
@@ -51,6 +52,20 @@ static void test_valid_request_reaches_the_transport_with_a_reset_response(void)
     TEST_ASSERT_EQUAL_INT(1, transport.performs);
     TEST_ASSERT_EQUAL_INT64(204, response.status);
     TEST_ASSERT_EQUAL_UINT64(0, response.body_bytes);
+}
+
+static skiff_err never_stop(void *ctx) {
+    (void)ctx;
+    return SKIFF_OK;
+}
+
+static void test_stop_hook_reaches_the_transport(void) {
+    int stop_ctx = 0;
+    request.should_stop = never_stop;
+    request.stop_ctx = &stop_ctx;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
+    TEST_ASSERT_EQUAL_PTR(never_stop, transport.last_request->should_stop);
+    TEST_ASSERT_EQUAL_PTR(&stop_ctx, transport.last_request->stop_ctx);
 }
 
 static void test_null_and_missing_arguments(void) {
@@ -162,6 +177,7 @@ static void test_destroy(void) {
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_valid_request_reaches_the_transport_with_a_reset_response);
+    RUN_TEST(test_stop_hook_reaches_the_transport);
     RUN_TEST(test_null_and_missing_arguments);
     RUN_TEST(test_only_explicit_http_and_https_are_sent);
     RUN_TEST(test_transport_without_ops_is_refused);

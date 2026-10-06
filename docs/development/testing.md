@@ -24,8 +24,9 @@ the logic.
 
 - **Fake transport** (`fake_transport.h`): a `skiff_transport` that replays the RomM responses in
   `tests/fixtures/romm/` and injects failures: a timeout or lost connection after N body bytes, a
-  refusal before any response, a file that changed on the server. It answers `Range`/`If-Range`
-  from the recorded body as RomM does (206, 200 on a stale ETag, 416 past the end) and logs every
+  refusal before any response, a file that changed on the server, a server that ignores ranges. It
+  answers `Range`/`If-Range` from the recorded body as RomM does (206, 200 on a stale ETag, 416 past
+  the end), asks the request's stop hook before the response and each chunk, and logs every
   request. Layers above `net/` (`romm/`, `jobs/`) test against it, so an API change shows up as a
   failing test rather than a crash on a PSP.
 - **Local HTTP server** (`local_http_server.h`): a scripted server on `127.0.0.1` that sends exact

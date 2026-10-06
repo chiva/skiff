@@ -130,9 +130,9 @@ static size_t parse_headers(const fake_route *route, skiff_http_response *respon
 }
 
 /* Answers a Range request from a recorded 200 body as an HTTP server would; adjusts *body/size. */
-static void apply_range(const skiff_http_request *request, skiff_http_response *response,
-                        const char **body, size_t *size) {
-    if (!request->has_range || response->status != HTTP_STATUS_OK) {
+static void apply_range(const fake_route *route, const skiff_http_request *request,
+                        skiff_http_response *response, const char **body, size_t *size) {
+    if (!request->has_range || route->ignore_range || response->status != HTTP_STATUS_OK) {
         return;
     }
     /* The transport refuses a range without If-Range before the fake sees it. */
@@ -160,8 +160,13 @@ static void apply_range(const skiff_http_request *request, skiff_http_response *
     response->content_length = *size;
 }
 
-/* Passes the body to the callback in chunks; with a mid-body failure, stops after
- * fail_after_bytes (or the whole body, if shorter) and reports it. */
+/* The request's stop hook, as the curl transport polls it; SKIFF_OK without one. */
+static skiff_err stop_requested(const skiff_http_request *request) {
+    return request->should_stop != NULL ? request->should_stop(request->stop_ctx) : SKIFF_OK;
+}
+
+/* Passes the body to the callback in chunks, asking the stop hook before each; with a mid-body
+ * failure, stops after fail_after_bytes (or the whole body, if shorter) and reports it. */
 static skiff_err deliver_body(fake_transport *fake, const fake_route *route,
                               const skiff_http_request *request, skiff_http_response *response,
                               const char *body, size_t size) {
@@ -171,6 +176,11 @@ static skiff_err deliver_body(fake_transport *fake, const fake_route *route,
     for (size_t delivered = 0; delivered < limit;) {
         const size_t left = limit - delivered;
         const size_t chunk = left < FAKE_TRANSPORT_CHUNK_BYTES ? left : FAKE_TRANSPORT_CHUNK_BYTES;
+        const skiff_err stop = stop_requested(request);
+        if (stop != SKIFF_OK) {
+            fake->connected = 0;
+            return stop;
+        }
         if (request->on_body != NULL) {
             const skiff_err err =
                 request->on_body(request->body_ctx, (const unsigned char *)body + delivered, chunk);
@@ -200,9 +210,11 @@ static skiff_err fake_perform(skiff_transport *base, const skiff_http_request *r
         response->status = HTTP_STATUS_NOT_FOUND;
         return SKIFF_OK;
     }
-    if (route->fail_before_response != SKIFF_OK) {
+    const skiff_err before = route->fail_before_response != SKIFF_OK ? route->fail_before_response
+                                                                     : stop_requested(request);
+    if (before != SKIFF_OK) {
         fake->connected = 0;
-        return route->fail_before_response;
+        return before;
     }
     const size_t body_offset = parse_headers(route, response);
     if (route->current_etag != NULL) {
@@ -210,7 +222,7 @@ static skiff_err fake_perform(skiff_transport *base, const skiff_http_request *r
     }
     const char *body = route->raw + body_offset;
     size_t size = route->raw_size - body_offset;
-    apply_range(request, response, &body, &size);
+    apply_range(route, request, response, &body, &size);
     return deliver_body(fake, route, request, response, body, size);
 }
 

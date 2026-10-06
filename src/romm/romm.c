@@ -128,13 +128,18 @@ static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || 
 /*
  * Checks a body before cJSON builds a tree from it: at most SKIFF_ROMM_JSON_NODES_MAX values (each
  * value but the first follows a ',' or opens its '[' or '{', so counting those outside strings
- * bounds them without parsing), and no escaped NUL inside a string.
+ * bounds them without parsing), and no NUL, raw or escaped, or other control character in a string,
+ * where it would cut a name short at the C string's end.
  */
 static int json_shape_ok(const char *json, size_t length) {
     size_t openings = 0;
     int in_string = 0;
     for (size_t i = 0; i < length; i++) {
         const char c = json[i];
+        /* JSON has no raw control characters inside a string, and no NUL anywhere. */
+        if (c == '\0' || (in_string && (unsigned char)c < (unsigned char)' ')) {
+            return 0;
+        }
         if (in_string) {
             if (c == '\\') {
                 if (length - i > JSON_ESCAPED_NUL_LENGTH &&
@@ -234,9 +239,15 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
         return 0;
     }
     out->file_count = (size_t)count;
-    for (int i = 0; i < count && i < SKIFF_ROMM_FILES_MAX; i++) {
-        if (!parse_file(cJSON_GetArrayItem(files, i), out->summary.id, &out->files[i])) {
+    /* Every file is checked; the first SKIFF_ROMM_FILES_MAX are kept. */
+    for (int i = 0; i < count; i++) {
+        skiff_romm_file file;
+        if (!parse_file(cJSON_GetArrayItem(files, i), out->summary.id, &file)) {
             return 0;
+        }
+        if (i < SKIFF_ROMM_FILES_MAX) {
+            out->files[i] = file;
+            out->stored_count++;
         }
     }
     return 1;

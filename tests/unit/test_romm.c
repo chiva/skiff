@@ -338,6 +338,46 @@ static void test_a_page_beyond_its_total_is_refused(void) {
                           skiff_romm_parse_rom_page(past_the_end, sizeof past_the_end - 1, &page));
 }
 
+static void test_a_file_of_another_rom_past_the_kept_ones_is_refused_too(void) {
+    char json[RAW_MAX] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Folder\",\"fs_size_bytes\":20,"
+                         "\"files\":[";
+    for (size_t i = 0; i <= SKIFF_ROMM_FILES_MAX; i++) {
+        char file[96];
+        /* The file after the last one kept belongs to ROM 4. */
+        snprintf(file, sizeof file,
+                 "%s{\"rom_id\":%d,\"file_name\":\"part%zu.bin\",\"file_size_bytes\":1}",
+                 i == 0 ? "" : ",", i == SKIFF_ROMM_FILES_MAX ? 4 : 3, i);
+        const size_t used = strlen(json);
+        TEST_ASSERT_LESS_THAN_size_t(sizeof json - 4, used + strlen(file));
+        memcpy(json + used, file, strlen(file) + 1);
+    }
+    memcpy(json + strlen(json), "]}", 3);
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom(json, strlen(json), &rom));
+    TEST_ASSERT_EQUAL_size_t(0, rom.stored_count);
+}
+
+static void test_raw_control_bytes_in_a_string_are_refused(void) {
+    static const char with_nul[] =
+        "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\0x\","
+        "\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    static const char with_newline[] =
+        "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":"
+        "\"a.iso\nx\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    static const char nul_after[] = "{\"items\":[],\"total\":0,\"offset\":0}\0";
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(with_nul, sizeof with_nul - 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(with_newline, sizeof with_newline - 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom_page(nul_after, sizeof nul_after - 1, &page));
+    TEST_PRINTF("blanks between values are not inside a string");
+    static const char spaced[] = "{\n\t\"items\": [],\r\n\"total\": 0, \"offset\": 0}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(spaced, sizeof spaced - 1, &page));
+}
+
 static void test_a_file_of_another_rom_is_refused(void) {
     static const char json[] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"a.iso\","
                                "\"fs_size_bytes\":1,\"files\":[{\"rom_id\":4,\"file_name\":"
@@ -543,6 +583,7 @@ static void test_a_rom_with_many_files_counts_them_all(void) {
     skiff_romm_rom rom;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(json, strlen(json), &rom));
     TEST_ASSERT_EQUAL_size_t(files, rom.file_count);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_FILES_MAX, rom.stored_count);
     TEST_ASSERT_TRUE(rom.summary.multiple_files);
     TEST_ASSERT_EQUAL_STRING("part15.bin", rom.files[SKIFF_ROMM_FILES_MAX - 1].file_name);
     TEST_ASSERT_FALSE(rom.files[0].has_crc32);
@@ -702,6 +743,8 @@ int main(void) {
     RUN_TEST(test_a_rom_of_another_platform_is_refused);
     RUN_TEST(test_a_page_beyond_its_total_is_refused);
     RUN_TEST(test_a_file_of_another_rom_is_refused);
+    RUN_TEST(test_a_file_of_another_rom_past_the_kept_ones_is_refused_too);
+    RUN_TEST(test_raw_control_bytes_in_a_string_are_refused);
     RUN_TEST(test_the_largest_exact_id_is_accepted);
     RUN_TEST(test_valid_json_followed_by_junk_is_refused);
     RUN_TEST(test_a_body_of_too_many_tiny_values_is_refused_before_parsing);

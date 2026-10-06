@@ -131,6 +131,7 @@ static void test_a_reserved_file_name_downloads_through_its_url(void) {
     skiff_romm_rom rom;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, extra.rom_id, &rom));
     TEST_ASSERT_EQUAL_size_t(1, rom.file_count);
+    TEST_ASSERT_EQUAL_size_t(1, rom.stored_count);
     TEST_ASSERT_EQUAL_STRING(extra.file_name, rom.files[0].file_name);
     TEST_ASSERT_EQUAL_UINT64(extra.size, rom.files[0].size);
     TEST_ASSERT_TRUE(rom.files[0].has_crc32);

@@ -117,8 +117,10 @@ typedef struct skiff_romm_file {
 
 typedef struct skiff_romm_rom {
     skiff_romm_rom_summary summary;
-    /* Files RomM lists for the ROM; the first SKIFF_ROMM_FILES_MAX of them are in files. */
+    /* Files RomM lists for the ROM, all of them checked; the first stored_count of them (at most
+     * SKIFF_ROMM_FILES_MAX) are in files. */
     size_t file_count;
+    size_t stored_count;
     skiff_romm_file files[SKIFF_ROMM_FILES_MAX];
 } skiff_romm_rom;
 

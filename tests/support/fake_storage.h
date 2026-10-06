@@ -25,8 +25,11 @@ typedef struct fake_storage {
     skiff_err write_error;
     /* Every sync of a matching file fails with this; SKIFF_OK for none. */
     skiff_err sync_error;
-    /* Every rename fails with this; SKIFF_OK for none. */
+    /* Every rename of a matching file (by its old name) fails with this; SKIFF_OK for none. */
     skiff_err rename_error;
+    /* Every remove of a matching file deletes it and then fails with this, as a device that reports
+     * an error after the directory entry is gone; SKIFF_OK for none. */
+    skiff_err remove_error;
     /* After this many writes to matching files, every file open at that moment fails each later
      * call with SKIFF_ERR_STORAGE_IO, as a handle lost to a suspend; 0 for never. Files opened
      * afterwards work. */

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "skiff/config.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/version.h"
@@ -36,6 +37,11 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_STATE_OFFSET 4294967290ULL
 #define SKIFF_SELFTEST_STATE_CRC32 0xCBF43926U
 #define SKIFF_SELFTEST_STATE_ETAG "\"6ac37763-1000\""
+/* config.ini as Notepad saves it: a byte-order mark, CRLF line endings, mixed-case names. */
+#define SKIFF_SELFTEST_CONFIG_TEXT                                                                 \
+    "\xEF\xBB\xBF[Server]\r\nURL = https://romm.lan:8443\r\n[mtls]\r\ncert_file = psp.crt\r\n"     \
+    "key_file = psp.key\r\n[headers]\r\nCF-Access-Client-Id = "                                    \
+    "id.access\r\n[skiff]\r\nversion=1\r\n"
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -134,6 +140,29 @@ static const char *check_download_state(void) {
                : "a .resume file came back with other values";
 }
 
+/* config.ini is read with newlib's string functions and strtoul on the PSP, and edited in place:
+ * a Windows-saved file must parse, and an edit must parse back. */
+static const char *check_config_parsing(void) {
+    static const char text[] = SKIFF_SELFTEST_CONFIG_TEXT;
+    static skiff_config config;
+    static char edited[SKIFF_CONFIG_TEXT_MAX + 1];
+    size_t edited_length = 0;
+    if (skiff_config_parse(text, sizeof text - 1, &config, NULL) != SKIFF_OK ||
+        strcmp(config.server_url, "https://romm.lan:8443") != 0 ||
+        strcmp(config.key_file, "psp.key") != 0 || config.header_count != 1 ||
+        strcmp(config.headers[0].value, "id.access") != 0) {
+        return "a Windows-saved config.ini parsed wrongly";
+    }
+    if (skiff_config_set(text, sizeof text - 1, "auth", "token", "rmm_selftest", edited,
+                         sizeof edited, &edited_length, NULL) != SKIFF_OK ||
+        skiff_config_parse(edited, edited_length, &config, NULL) != SKIFF_OK ||
+        strcmp(config.token, "rmm_selftest") != 0 ||
+        strcmp(config.server_url, "https://romm.lan:8443") != 0) {
+        return "an edited config.ini did not parse back";
+    }
+    return NULL;
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -144,6 +173,7 @@ static const selftest_check CHECKS[] = {
     {"little-endian", check_little_endian},
     {"http-range", check_http_range_parsing},
     {"download-state", check_download_state},
+    {"config-parse", check_config_parsing},
 };
 // clang-format on
 

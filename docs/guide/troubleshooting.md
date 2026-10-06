@@ -61,6 +61,6 @@ resort; you will need to pair again.
 
 | Code | Meaning | What to try |
 |---|---|---|
-| 400 | The file is damaged | Open it on a computer; look for a line without `=` or a missing `]`, or delete it |
-| 401 | A required setting is missing | Add the setting Skiff names (see [Connect to RomM](04-connect-to-romm.md)) |
-| 402 | A setting has an invalid value | Fix the value Skiff names, e.g. an address must start with `http://` or `https://` |
+| 400 | The file is damaged | Open it on a computer and go to the line Skiff names; look for a line without `=` or a missing `]`, or delete the file |
+| 401 | A required setting is missing | Add the setting Skiff names, e.g. `key_file` next to `cert_file` (see [Connect to RomM](04-connect-to-romm.md)) |
+| 402 | A setting has an invalid value | Fix the value Skiff names: an address must start with `http://` or `https://`; a file name such as `ca_file` must be a file in the Skiff folder, without folders; each setting may appear only once |

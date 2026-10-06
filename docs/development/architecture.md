@@ -38,8 +38,8 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/`, `net/` (transport, TLS entropy source), `storage/` (the storage seam), `jobs/`
-(resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+Status: `core/`, `config/` (`config.ini`), `net/` (transport, TLS entropy source), `storage/` (the
+storage seam), `jobs/` (resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
 them.
 
 ## Threads, power and suspend
@@ -106,6 +106,38 @@ names and the English messages. Codes are grouped by layer (1xx network, 2xx Rom
 When the UI arrives, the English messages become the fallback catalogue in `i18n/`. Other
 languages (Spanish first) are catalogues keyed by the same stable names, chosen from the PSP's
 system language setting. Logs always use the stable name and number, never translated text.
+
+## Configuration
+
+`config/` reads and writes `PSP/GAME/Skiff/config.ini` (`include/skiff/config.h`). The player may
+edit it on a computer, and Skiff writes it too (pairing saves the token, Settings the address), so
+there is one file and Skiff changes only the line of the key it sets: comments, keys it does not
+know and the player's order survive.
+
+| Section | Key | Rule |
+|---|---|---|
+| `[skiff]` | `version` | Schema version; absent means 1, a newer one is refused (402) |
+| `[server]` | `url` | Explicit `http://` or `https://`, no blanks (the transport's own rule) |
+| `[server]` | `ca_file` | A file name in the Skiff folder; empty for the bundled public CAs |
+| `[auth]` | `token` | Printable ASCII without blanks |
+| `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
+| `[headers]` | any name | Sent on every request; not `Authorization`, `Host`, `Range` or `If-Range` |
+
+- **Parsing**: a UTF-8 byte-order mark and CRLF line endings are accepted (Notepad writes both);
+  names ignore case; `#` or `;` starts a comment only at the start of a line, because a token or a
+  proxy secret may contain `#`. An empty value means the setting is not set.
+- **Refusals name the setting**: every error carries the line, section and key, so the player is
+  told which one to fix (400 damaged line, 401 missing key, 402 bad value). A value that does not
+  fit is refused, never cut; a setting given twice is refused rather than one silently winning.
+  Unknown keys are ignored, so an older Skiff reads a newer file, and the first one is kept for a
+  log warning, since a typo such as `ca-file` would otherwise do nothing.
+- **Saving**: FAT cannot replace a file in one step, so Skiff writes and syncs `config.ini.tmp`,
+  renames it `config.ini.new` (so a `.new` file is always complete), syncs the device so that rename
+  is on it, removes `config.ini`, renames `.new` into place and syncs again. The next load (or save) finishes a save a power cut interrupted: a
+  `.tmp` file is dropped, a `.new` file without `config.ini` is put in place, and one beside
+  `config.ini` is dropped. An edit is parsed before it is saved, so a saved file always loads.
+- **Schema changes**: the `version` key exists from the first release; migrations arrive with the
+  first change to the schema.
 
 ## Logging
 

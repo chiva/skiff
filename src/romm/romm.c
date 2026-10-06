@@ -323,7 +323,8 @@ skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out) 
         return SKIFF_ERR_INVALID_ARG;
     }
     memset(out, 0, sizeof *out);
-    if (version == NULL || version[0] == '\0' || strlen(version) >= sizeof out->version) {
+    if (version == NULL || version[0] == '\0' || strlen(version) >= sizeof out->version ||
+        !is_printable_text(version)) {
         return SKIFF_ERR_ROMM_BAD_RESPONSE;
     }
     memcpy(out->version, version, strlen(version) + 1);

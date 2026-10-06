@@ -145,7 +145,8 @@ size_t skiff_romm_auth_header(const skiff_romm_client *client, skiff_http_header
  * Applies the version policy to a version string: below SKIFF_ROMM_MIN_* is
  * SKIFF_ERR_ROMM_UNSUPPORTED_VERSION (205); a newer release line than SKIFF_ROMM_TESTED_* sets
  * newer_than_tested; a version that does not start with major.minor is allowed as unknown. out is
- * filled in every case; SKIFF_ERR_ROMM_BAD_RESPONSE for an empty or over-long version.
+ * filled in every case; SKIFF_ERR_ROMM_BAD_RESPONSE for an empty or over-long version, or one
+ * with a control character (it is shown and logged).
  */
 skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out);
 

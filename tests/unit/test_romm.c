@@ -91,6 +91,8 @@ static void test_the_version_policy(void) {
         {"5", SKIFF_OK, 0, 1},
         {"99999999999.0", SKIFF_OK, 0, 1},
         {"", SKIFF_ERR_ROMM_BAD_RESPONSE, 0, 0},
+        {"5.3\x1b[2J", SKIFF_ERR_ROMM_BAD_RESPONSE, 0, 0},
+        {"5.3.1\x7f", SKIFF_ERR_ROMM_BAD_RESPONSE, 0, 0},
         {"5.3.1-a-version-string-longer-than-the-field", SKIFF_ERR_ROMM_BAD_RESPONSE, 0, 0},
     };
     for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
@@ -124,6 +126,13 @@ static void test_an_old_server_is_refused_and_still_named(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_UNSUPPORTED_VERSION,
                           skiff_romm_heartbeat(&client, &server));
     TEST_ASSERT_EQUAL_STRING("5.0.2", server.version);
+}
+
+static void test_a_heartbeat_with_an_escaped_control_is_a_bad_response(void) {
+    serve_raw("/api/heartbeat", JSON_OK "{\"SYSTEM\":{\"VERSION\":\"5.3\\u001b[2J\"}}");
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, skiff_romm_heartbeat(&client, &server));
+    TEST_ASSERT_EQUAL_STRING("", server.version);
 }
 
 static void test_a_heartbeat_without_a_version_is_a_bad_response(void) {
@@ -754,6 +763,7 @@ int main(void) {
     RUN_TEST(test_the_version_policy);
     RUN_TEST(test_heartbeat_reads_the_recorded_version_without_the_token);
     RUN_TEST(test_an_old_server_is_refused_and_still_named);
+    RUN_TEST(test_a_heartbeat_with_an_escaped_control_is_a_bad_response);
     RUN_TEST(test_a_heartbeat_without_a_version_is_a_bad_response);
     RUN_TEST(test_the_psp_platform_is_found_with_the_token);
     RUN_TEST(test_a_missing_platform_is_not_found);

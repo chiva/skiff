@@ -9,7 +9,7 @@ Repository, CMake presets, PSP and host builds, unit tests with sanitizers and c
 self-test (PPSSPPHeadless), CI, release automation with third-party licences, user and developer
 docs.
 
-## Phase 1: Hardware spike
+## Phase 1: Hardware spike ✅
 
 De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open decisions:
 
@@ -39,8 +39,13 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
     164 KB (148 KB once connected); TLS itself uses heap, not system memory;
   - TLS handshake time ✅: 0.59 s, 0.69 s with an ECDSA P-256 client certificate, 2.07 s with
     RSA-2048;
-  - Wi-Fi throughput and Memory Stick write speed by buffer size;
-  - hashing speed for the hashes RomM records per file (CRC32, MD5 and SHA-1).
+  - Wi-Fi throughput ✅: 462 KB/s over HTTPS with the CPU at 333 MHz (349 KB/s at 222 MHz, where
+    TLS is CPU-bound), close to the radio's 500 KB/s; buffer sizes make no difference;
+  - Memory Stick write speed ✅: 9–13 MB/s on its own, but Wi-Fi data stops arriving while it
+    writes, so downloads write in 1 MiB blocks: 410 KB/s for a 64 MiB download, against 296 KB/s
+    with 128 KB blocks;
+  - hashing speed ✅: zlib's CRC-32 runs at 33 MB/s (MD5 11 MB/s, SHA-1 8.2 MB/s), so the CRC-32
+    RomM records is checked while downloading.
 - **Resume** ✅: a download continues from its `.part` file after the Wi-Fi switch, a suspend, a
   restart or a quit, and is checked against RomM's CRC-32 (`include/skiff/download.h`,
   `tests/hardware/resume_probe.c`). On a PSP-1000 with a 64 MiB file: the switch was noticed 1.7 s
@@ -49,7 +54,8 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
   held off Auto Sleep. Files left open across a suspend stop working, so every attempt opens its
   own. See [Architecture](architecture.md#threads-power-and-suspend).
 
-Output: `docs/development/hardware-findings.md` with the numbers and the decisions they settle.
+The numbers and the decisions they settle are in [Hardware findings](hardware-findings.md), with
+the questions carried into Phase 2.
 
 ## Phase 2: First usable release (PSP games)
 

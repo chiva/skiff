@@ -18,9 +18,9 @@ PPSSPP can open games straight from your computer.
 
 ## Why is downloading slower than on my phone?
 
-The PSP's Wi-Fi is 802.11b (11 Mbit/s at best, often 2–4 Mbit/s in practice) and the Memory Stick
-is slow to write. A 1 GB game can take 30–60 minutes. Plug in the charger; Skiff resumes a download
-that was interrupted.
+The PSP's Wi-Fi is 802.11b (11 Mbit/s at best), and its processor has to decrypt everything it
+receives over HTTPS. On a PSP-1000 Skiff downloads at about 3.3 Mbit/s (410 KB/s), so a 1 GB game
+takes about 45 minutes. Plug in the charger; Skiff resumes a download that was interrupted.
 
 ## Will my saves work with PPSSPP or RomM's web player?
 

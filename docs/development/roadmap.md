@@ -41,7 +41,9 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
     RSA-2048;
   - Wi-Fi throughput ✅: 462 KB/s over HTTPS with the CPU at 333 MHz (349 KB/s at 222 MHz, where
     TLS is CPU-bound), close to the radio's 500 KB/s; buffer sizes make no difference;
-  - Memory Stick write speed ✅: 9–13 MB/s in 16–512 KB blocks, so downloads write synchronously;
+  - Memory Stick write speed ✅: 9–13 MB/s on its own, but Wi-Fi data stops arriving while it
+    writes, so downloads write in 1 MiB blocks: 410 KB/s for a 64 MiB download, against 296 KB/s
+    with 128 KB blocks;
   - hashing speed ✅: zlib's CRC-32 runs at 33 MB/s (MD5 11 MB/s, SHA-1 8.2 MB/s), so the CRC-32
     RomM records is checked while downloading.
 - **Resume** ✅: a download continues from its `.part` file after the Wi-Fi switch, a suspend, a

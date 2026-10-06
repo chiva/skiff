@@ -14,8 +14,8 @@ as orders of magnitude.
 | | |
 |---|---|
 | Console | PSP-1000 (32 MB RAM), firmware 6.61 with ARK-5, on AC power |
-| Memory Stick | 64 GB, 84% full during the resume runs |
-| Wi-Fi | open access point on channel 6, signal 95–100%, WLAN Power Save off unless stated |
+| Memory Stick | 64 GB, 84% full during the resume and speed runs |
+| Wi-Fi | open access point on channel 6, signal 95–100%, WLAN Power Save off unless stated (the W7 resume runs did not record it) |
 | Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy) on a Mac on the same LAN; TCP connect ≈10 ms |
 | Dates | 2026-10-04 to 2026-10-06 |
 
@@ -28,7 +28,7 @@ as orders of magnitude.
 | Cipher | ChaCha20 about 340 KB/s, AES-128-GCM 172–183 KB/s | ChaCha20 first, AES-GCM as fallback (Mbed TLS's default order) |
 | Client certificate type | handshake 0.69 s with ECDSA P-256, 2.07 s with RSA-2048 | the guide recommends ECDSA P-256 ([TLS](#tls)) |
 | curl buffer, socket receive buffer | no effect beyond noise; a 128 KB receive buffer broke the network stack | defaults; never raise `SO_RCVBUF` to 128 KB |
-| Writer thread for downloads | Memory Stick writes 9–13 MB/s; writing while downloading cost 3% | none: synchronous 128 KB writes ([Memory Stick](#memory-stick-and-hashing)) |
+| How downloads write | while the Memory Stick writes, Wi-Fi data stops arriving; 64 MiB took 221 s with 128 KB writes, 160 s with 1 MiB writes, 211 s with a writer thread | 1 MiB writes on the download's thread, no writer thread ([download speed](#download-speed)) |
 | Integrity check | zlib CRC-32 33 MB/s, MD5 11 MB/s, SHA-1 8.2 MB/s | CRC-32 computed inline, against RomM's |
 | Warm-up after joining, WLAN Power Save | Power Save adds 100–200 ms jitter to some requests, no throughput loss | no warm-up; both settings supported |
 | Network picker | a saved profile joins without it in 7.3 s | join the profile; the picker is the fallback ([Wi-Fi](#wi-fi-and-memory)) |
@@ -101,7 +101,7 @@ writes unless stated.
 | Plain HTTP | 438–472 KB/s | 420–492 KB/s |
 | Skiff's transport (curl defaults) | 349 KB/s | 462–467 KB/s |
 | HTTPS, AES-128-GCM, TLS 1.3 / 1.2 | 172 / 183 KB/s | — |
-| HTTPS with synchronous 128 KB Memory Stick writes | 340 KB/s (−3%) | — |
+| HTTPS with synchronous 128 KB Memory Stick writes | 340 KB/s (−3%) | see [Download speed](#download-speed) |
 
 At 222 MHz the CPU is the limit; at 333 MHz HTTPS and plain HTTP are equal, so the limit is the
 802.11b radio, at about 500 KB/s (4 Mbit/s). At 460 KB/s a 700 MB game takes about 26 minutes.
@@ -131,7 +131,8 @@ Benchmark, 2026-10-05, 222 MHz.
 | zlib CRC-32 / table CRC-32 / bitwise CRC-32 | 33 MB/s / 4.8 MB/s / 733 KB/s |
 | MD5 / SHA-1 | 11 / 8.2 MB/s |
 
-At 470 KB/s the CRC-32 costs about 1% of the CPU. The network probe's first download (193 KB/s)
+These are the Memory Stick on its own. During a download it is much slower, and it holds up the
+network: see [Download speed](#download-speed). At 470 KB/s the CRC-32 costs about 1% of the CPU. The network probe's first download (193 KB/s)
 was held back by the probe's own checksum (598 KB/s), not by the network.
 
 ## UI
@@ -161,7 +162,8 @@ The emulator tier runs every probe in CI, but these differences only showed on h
 ## Resume and power
 
 [Resume probe](testing.md#resume-probe), 2026-10-06: a 64 MiB file over TLS 1.3 with ChaCha20 at
-333 MHz, two runs. Design: [Threads, power and suspend](architecture.md#threads-power-and-suspend)
+333 MHz, two runs, written in 128 KB blocks (the speeds below are why that changed: see
+[Download speed](#download-speed)). Design: [Threads, power and suspend](architecture.md#threads-power-and-suspend)
 and [Downloads and storage](architecture.md#downloads-and-storage).
 
 | Scenario | What happened | Speed |
@@ -184,18 +186,39 @@ Storage time in the second run (238 s in total):
 | Sync | 35 | 0.24 s | 20 ms |
 | Open, close, rename, remove | 50 | 0.34 s | 22 ms |
 
+## Download speed
+
+The resume runs downloaded at 210–275 KB/s, against 462 KB/s for the benchmark's transport, which
+writes nothing. The resume probe's `speed` scenario (`scenarios=speed`) measured each part alone,
+in one session, over four runs on 2026-10-06: 64 MiB at 333 MHz.
+
+| Measurement | Result |
+|---|---|
+| Memory Stick alone, 128 KB writes from a 64-byte-aligned buffer / one 8 bytes off | 12.4–13.2 / 10.3–11.5 MB/s (9–12 ms per write); no slower as the file grows |
+| Memory Stick alone, one 128 KB write every 300 ms (a download's pace), Wi-Fi idle | 13–14 ms per write |
+| Network alone (CRC-32, nothing written), WLAN Power Save on / off | 398–448 / 457–489 KB/s |
+| Whole download, 128 KB writes, WLAN Power Save on / off | 282 / 296–307 KB/s; **49 ms per write** |
+| Whole download, 1 MiB writes | 386 KB/s, then **410 KB/s** (160 s) once the engine wrote 1 MiB itself |
+| Whole download, 128 KB writes handed to a writer thread | 310 KB/s; the download's thread waited 0.8 s in total, the writer 25.4 s |
+
+Buffer alignment, WLAN Power Save and an idle Memory Stick waking up are not the cause: a write
+takes 10–14 ms in all those cases, and 49 ms only while Wi-Fi data is arriving. The writer thread
+shows the cost is not the download's thread being blocked: while the Memory Stick writes, Wi-Fi
+data stops arriving whichever thread writes, so the two compete for the hardware (presumably a
+shared bus or driver; not verified). Every write is therefore also a pause in the transfer, which
+takes about 0.1 s to pick up again (512 such pauses cost about 50 s per 64 MiB). Fewer, larger
+writes keep the pauses down: with 1 MiB writes a download takes 160 s, about the network alone
+(136 s) plus the Memory Stick's writing time (23 s).
+
+The benchmark's 3% cost of writing (above) was measured at 222 MHz, where the CPU, not the radio,
+was the limit, so the radio was often idle while the Memory Stick wrote.
+
+Decision: downloads write 1 MiB at a time, on their own thread
+(`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`). A writer thread is not worth its complexity. At 410 KB/s a
+1 GB game takes about 43 minutes.
+
 ## Open questions
 
-- **Download speed.** The resume probe downloaded at 210–275 KB/s, against 462 KB/s for the
-  benchmark's transport, and both the network and the Memory Stick were slower. Writes averaged
-  about 2.5 MB/s (49 ms per 128 KB, 11% of the run), where the benchmark measured 9–13 MB/s on the
-  same Memory Stick; without the write time, the network delivered about 310 KB/s. The runs
-  differ in file size (64 MiB against 4 MiB), in day and radio conditions (the resume probe does
-  not log the signal), and in a pause of 5.4–6 s in every resume run, probably the wait for the
-  first byte (the probe now logs the two apart). Which of these matters is unknown. Settle it
-  before `jobs/` fixes its design: run the benchmark's transport with the 64 MiB file in the same
-  session as the resume probe, log the signal, and time writes by file offset. If writes stay
-  this slow, a writer thread would win back their 11%.
 - **Memory for threads.** Once joined, about 148 KB of system memory is free, in blocks of at most
   80 KB. Size the worker thread's stack, and `PSP_HEAP_SIZE_KB` if needed, when `jobs/` adds the
   thread.

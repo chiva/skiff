@@ -175,6 +175,27 @@ static void test_the_last_line_needs_no_newline(void) {
     TEST_ASSERT_EQUAL_STRING("rmm_last", config.token);
 }
 
+static void test_the_log_level_defaults_to_info_and_takes_any_case(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse(GUIDE_TOKEN_EXAMPLE));
+    TEST_ASSERT_EQUAL_INT(SKIFF_CONFIG_DEFAULT_LOG_LEVEL, config.log_level);
+    TEST_ASSERT_EQUAL_INT(SKIFF_LOG_INFO, config.log_level);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[log]\nlevel = DEBUG\n"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_LOG_DEBUG, config.log_level);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[Log]\nLevel=error\n"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_LOG_ERROR, config.log_level);
+    TEST_PRINTF("an empty level means the default");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[log]\nlevel =\n"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_LOG_INFO, config.log_level);
+}
+
+static void test_an_unknown_log_level_is_refused(void) {
+    assert_refused("[log]\nlevel = verbose\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "log", "level");
+    TEST_PRINTF("a refused file still reads as the default level");
+    TEST_ASSERT_EQUAL_INT(SKIFF_CONFIG_DEFAULT_LOG_LEVEL, config.log_level);
+    assert_refused("[log]\nlevel = info\nlevel = debug\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 3, "log",
+                   "level");
+}
+
 static void test_version_1_and_no_version_are_accepted(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 1\n"));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 01\n"));
@@ -751,6 +772,8 @@ int main(void) {
     RUN_TEST(test_an_empty_file_is_an_empty_config);
     RUN_TEST(test_a_notepad_file_with_bom_and_crlf_parses);
     RUN_TEST(test_the_last_line_needs_no_newline);
+    RUN_TEST(test_the_log_level_defaults_to_info_and_takes_any_case);
+    RUN_TEST(test_an_unknown_log_level_is_refused);
     RUN_TEST(test_version_1_and_no_version_are_accepted);
     RUN_TEST(test_unknown_keys_are_ignored_and_the_first_is_kept);
     RUN_TEST(test_a_key_before_any_section_is_unknown);

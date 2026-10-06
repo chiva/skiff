@@ -84,5 +84,5 @@ body:
     id: log
     attributes:
       label: Log file
-      description: Contents of ms0:/PSP/GAME/Skiff/skiff.log, if present. Check it for anything private first.
+      description: Contents of ms0:/PSP/GAME/Skiff/skiff.log, if present. For more detail, add `level = debug` under `[log]` in config.ini and repeat what went wrong. Check the log for anything private first.
       render: text

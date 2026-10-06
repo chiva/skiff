@@ -14,6 +14,7 @@
  *   [mtls]     cert_file   client certificate and key, file names in the Skiff folder
  *              key_file
  *   [headers]  <name>      sent on every request (e.g. CF-Access-Client-Id)
+ *   [log]      level       error, warn, info or debug; info when unset
  *
  * Lines are "key = value"; '#' or ';' at the start of a line begins a comment. There are no inline
  * comments, because a token or header value may contain '#'. Section and key names ignore case.
@@ -23,6 +24,7 @@
 #include <stddef.h>
 
 #include "skiff/error.h"
+#include "skiff/log.h"
 #include "skiff/storage.h"
 #include "skiff/transport.h"
 
@@ -32,6 +34,8 @@
 #define SKIFF_CONFIG_DRAFT_SUFFIX ".tmp"
 #define SKIFF_CONFIG_NEW_SUFFIX ".new"
 #define SKIFF_CONFIG_VERSION 1
+/* How much skiff.log records when [log] level is not set. */
+#define SKIFF_CONFIG_DEFAULT_LOG_LEVEL SKIFF_LOG_INFO
 /* A config.ini larger than this is not one Skiff or a player wrote: SKIFF_ERR_CONFIG_PARSE. */
 #define SKIFF_CONFIG_TEXT_MAX 8192
 /* Room for the path of config.ini or its .new file, with the terminator. */
@@ -66,6 +70,7 @@ typedef struct skiff_config {
     char key_file[SKIFF_CONFIG_FILE_NAME_MAX];
     skiff_config_header headers[SKIFF_CONFIG_HEADERS_MAX];
     size_t header_count;
+    skiff_log_level log_level;
     /* Keys Skiff does not know are ignored (a newer Skiff may have written them), but a typo such
      * as "ca-file" would silently do nothing, so the first is kept for a log warning. */
     int unknown_count;
@@ -73,17 +78,19 @@ typedef struct skiff_config {
 } skiff_config;
 
 /*
- * Parses config.ini's text into out (an empty text gives an empty config). On error out is empty
- * and issue, when not NULL, names the line and setting:
+ * Parses config.ini's text into out (an empty text gives an empty config, logging at
+ * SKIFF_CONFIG_DEFAULT_LOG_LEVEL). On error out is empty and issue, when not NULL, names the line
+ * and setting:
  *   - SKIFF_ERR_CONFIG_PARSE: text over SKIFF_CONFIG_TEXT_MAX or with a NUL byte, a line without
  *     '=', a section header without its ']' or name;
  *   - SKIFF_ERR_CONFIG_MISSING_KEY: cert_file without key_file or the reverse (the issue names the
  *     missing one);
  *   - SKIFF_ERR_CONFIG_INVALID_VALUE: a setting given twice, a value too long, a version other than
- *     SKIFF_CONFIG_VERSION, a URL without http:// or https:// or with blanks, a token with blanks
- * or control characters, a file name with a path in it, a header Skiff sets itself (Authorization,
- *     Host, Range, If-Range), a header name that is not an HTTP token, an empty header value, or
- *     more than SKIFF_CONFIG_HEADERS_MAX headers;
+ *     SKIFF_CONFIG_VERSION, a log level other than skiff_log_level_name()'s, a URL without http://
+ *     or https:// or with blanks, a token with blanks or control characters, a file name with a
+ *     path in it, a header Skiff sets itself (Authorization, Host, Range, If-Range), a header name
+ *     that is not an HTTP token, an empty header value, or more than SKIFF_CONFIG_HEADERS_MAX
+ *     headers;
  *   - SKIFF_ERR_INVALID_ARG: NULL text with a non-zero length, or a NULL out.
  */
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,

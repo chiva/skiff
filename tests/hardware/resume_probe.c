@@ -189,7 +189,7 @@ typedef struct outcome {
     int restarted;
     int complete;
     long long elapsed_us;
-    /* Bytes of the files downloaded, for the speed. */
+    /* Bytes received over every attempt, for the speed. */
     uint64_t bytes;
     const char *recovery;
     long long recovery_us;
@@ -296,6 +296,11 @@ static int writer_thread(SceSize args, void *argp) {
 static skiff_err writer_queue(skiff_file *target, const unsigned char *data, size_t size) {
     while (size > 0 && background.error == SKIFF_OK) {
         sceKernelWaitSema(background.free_slots, 1, NULL);
+        /* A write may have failed while this one waited: nothing after it reaches the file. */
+        if (background.error != SKIFF_OK) {
+            sceKernelSignalSema(background.free_slots, 1);
+            break;
+        }
         const int slot = background.next_fill;
         const size_t take = size < SPEED_BLOCK_BYTES ? size : SPEED_BLOCK_BYTES;
         memcpy(background.slots[slot], data, take);
@@ -847,6 +852,7 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         err = skiff_download_attempt(p->transport, p->storage, &spec, &result);
         log_attempt(p, w, o, err, &result);
         o->resumed_from = result.resumed_from;
+        o->bytes += result.bytes_received;
         o->last_status = result.response.status;
         o->restarted |= result.restarted;
         o->complete = result.complete;
@@ -875,7 +881,6 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         }
     }
     o->elapsed_us = now_us() - start;
-    o->bytes = p->config.size;
     return err;
 }
 
@@ -1137,6 +1142,8 @@ static int speed_network(probe *p, const char *name, int with_hooks) {
     speed_sink sink = {.w = with_hooks ? &w : NULL, .crc32 = crc32(0L, Z_NULL, 0)};
     skiff_http_request request = {.url = p->url, .on_body = speed_body, .body_ctx = &sink};
     if (with_hooks) {
+        /* Suspends from earlier scenarios are not this download's. */
+        w.power_at_attempt = skiff_psp_power_events_now();
         request.should_stop = should_stop;
         request.stop_ctx = &w;
     }

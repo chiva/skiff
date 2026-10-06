@@ -52,8 +52,8 @@ static size_t edited_length;
 
 static char dir[TEMP_DIR_PATH_MAX];
 static char path[TEMP_DIR_PATH_MAX];
-static char new_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_CONFIG_NEW_SUFFIX];
-static char draft_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_CONFIG_DRAFT_SUFFIX];
+static char new_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_PENDING_SUFFIX];
+static char draft_path[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_DRAFT_SUFFIX];
 static skiff_storage *posix;
 static fake_storage storage;
 static char loaded[TEXT_BUFFER];
@@ -66,8 +66,8 @@ void setUp(void) {
     edited_length = 0;
     TEST_ASSERT_EQUAL_INT(0, temp_dir_create(dir, sizeof dir));
     TEST_ASSERT_TRUE(temp_dir_path(dir, SKIFF_CONFIG_FILE_NAME, path, sizeof path));
-    snprintf(new_path, sizeof new_path, "%s" SKIFF_CONFIG_NEW_SUFFIX, path);
-    snprintf(draft_path, sizeof draft_path, "%s" SKIFF_CONFIG_DRAFT_SUFFIX, path);
+    snprintf(new_path, sizeof new_path, "%s" SKIFF_STORAGE_PENDING_SUFFIX, path);
+    snprintf(draft_path, sizeof draft_path, "%s" SKIFF_STORAGE_DRAFT_SUFFIX, path);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_posix_storage_create(&posix));
     fake_storage_init(&storage, posix);
     memset(loaded, 0, sizeof loaded);
@@ -596,7 +596,7 @@ static void test_save_then_load_round_trips(void) {
 
 static void test_a_failed_write_or_sync_leaves_the_old_file(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
-    storage.fail_suffix = SKIFF_CONFIG_DRAFT_SUFFIX;
+    storage.fail_suffix = SKIFF_STORAGE_DRAFT_SUFFIX;
     storage.write_budget = 4;
     storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
     TEST_ASSERT_EQUAL_INT(
@@ -626,7 +626,7 @@ static void test_a_failed_write_or_sync_leaves_the_old_file(void) {
 
 static void test_a_save_cut_before_the_last_rename_is_finished_by_load(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
-    storage.fail_suffix = SKIFF_CONFIG_NEW_SUFFIX;
+    storage.fail_suffix = SKIFF_STORAGE_PENDING_SUFFIX;
     storage.rename_error = SKIFF_ERR_STORAGE_IO;
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_IO,
@@ -645,7 +645,7 @@ static void test_a_save_cut_before_the_last_rename_is_finished_by_load(void) {
 
 static void test_config_ini_stays_until_the_new_name_is_flushed(void) {
     write_file(path, GUIDE_TOKEN_EXAMPLE);
-    storage.fail_suffix = SKIFF_CONFIG_NEW_SUFFIX;
+    storage.fail_suffix = SKIFF_STORAGE_PENDING_SUFFIX;
     storage.sync_error = SKIFF_ERR_STORAGE_IO;
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_IO,
@@ -659,7 +659,7 @@ static void test_config_ini_stays_until_the_new_name_is_flushed(void) {
 static void test_a_save_finishes_an_earlier_cut_save_first(void) {
     TEST_PRINTF("only a complete .new file holds the settings; the next save must not lose it");
     write_file(new_path, GUIDE_MTLS_EXAMPLE);
-    storage.fail_suffix = SKIFF_CONFIG_DRAFT_SUFFIX;
+    storage.fail_suffix = SKIFF_STORAGE_DRAFT_SUFFIX;
     storage.sync_error = SKIFF_ERR_STORAGE_IO;
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_STORAGE_IO,
@@ -742,7 +742,7 @@ static void test_a_buffer_too_small_for_the_file_reports_damage(void) {
 }
 
 static void test_load_and_save_refuse_bad_arguments(void) {
-    char long_path[SKIFF_CONFIG_PATH_MAX];
+    char long_path[SKIFF_STORAGE_PATH_MAX];
     memset(long_path, 'p', sizeof long_path - 1);
     long_path[sizeof long_path - 1] = '\0';
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_config_load(&storage.base, long_path, loaded,

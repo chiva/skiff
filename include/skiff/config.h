@@ -29,17 +29,11 @@
 #include "skiff/transport.h"
 
 #define SKIFF_CONFIG_FILE_NAME "config.ini"
-/* Saving writes "<path>.tmp", renames it "<path>.new" once synced, then replaces config.ini; see
- * skiff_config_save(). */
-#define SKIFF_CONFIG_DRAFT_SUFFIX ".tmp"
-#define SKIFF_CONFIG_NEW_SUFFIX ".new"
 #define SKIFF_CONFIG_VERSION 1
 /* How much skiff.log records when [log] level is not set. */
 #define SKIFF_CONFIG_DEFAULT_LOG_LEVEL SKIFF_LOG_INFO
 /* A config.ini larger than this is not one Skiff or a player wrote: SKIFF_ERR_CONFIG_PARSE. */
 #define SKIFF_CONFIG_TEXT_MAX 8192
-/* Room for the path of config.ini or its .new file, with the terminator. */
-#define SKIFF_CONFIG_PATH_MAX 256
 
 /* Buffer sizes, terminator included. A longer value is refused, never cut. */
 #define SKIFF_CONFIG_URL_MAX 256
@@ -124,7 +118,8 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
  * is deleted; a .new file without config.ini becomes config.ini; a .new file beside config.ini is
  * deleted when it can be, and config.ini is read either way. No file at all is an empty config
  * (length 0). SKIFF_ERR_CONFIG_PARSE when the file does not fit, SKIFF_ERR_INVALID_ARG for a NULL
- * argument or a path too long for SKIFF_CONFIG_PATH_MAX, otherwise the storage's error.
+ * argument or a path too long for SKIFF_STORAGE_PATH_MAX, otherwise the storage's error
+ * (skiff_storage_read_whole()).
  */
 skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text, size_t text_size,
                             size_t *length);
@@ -137,7 +132,7 @@ skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text
  * finishes an earlier cut save the same way. Returns SKIFF_ERR_INVALID_ARG for a NULL argument, a
  * path too long or a text over SKIFF_CONFIG_TEXT_MAX (it could not be loaded back), otherwise the
  * storage's error; after a failure the next load still finds either the old settings or the new
- * ones, whole.
+ * ones, whole (skiff_storage_replace_whole()).
  */
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,
                             size_t length);

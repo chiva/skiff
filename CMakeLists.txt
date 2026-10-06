@@ -54,7 +54,8 @@ add_library(
   src/net/transport.c
   src/romm/romm.c
   src/storage/paths.c
-  src/storage/storage.c)
+  src/storage/storage.c
+  src/storage/whole_file.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

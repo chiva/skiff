@@ -111,6 +111,38 @@ skiff_err skiff_storage_free_space(skiff_storage *storage, const char *path, uin
  */
 skiff_err skiff_storage_check_room(skiff_storage *storage, const char *path, uint64_t needed);
 
+/* ---- Small files replaced whole (config.ini, the download queue, installed.json) ---- */
+
+/* FAT cannot replace a file in one step, so a replacement writes "<path>.tmp", renames it
+ * "<path>.new" once synced (so a .new file is always complete), then replaces the file. */
+#define SKIFF_STORAGE_DRAFT_SUFFIX ".tmp"
+#define SKIFF_STORAGE_PENDING_SUFFIX ".new"
+
+/*
+ * Reads the file at path into text (text_size bytes, terminator included) and terminates it; the
+ * length goes to *length. First finishes or undoes a replacement cut short by a power loss (see
+ * skiff_storage_replace_whole()): a .tmp file is deleted; a .new file without the file becomes the
+ * file; a .new file beside the file is deleted when it can be, and the file is read either way. No
+ * file at all reads as empty (length 0). SKIFF_ERR_BUFFER_TOO_SMALL when the file does not fit
+ * (text is then empty), SKIFF_ERR_INVALID_ARG for a NULL argument or a path too long for
+ * SKIFF_STORAGE_PATH_MAX with a suffix, otherwise the storage's error.
+ */
+skiff_err skiff_storage_read_whole(skiff_storage *storage, const char *path, char *text,
+                                   size_t text_size, size_t *length);
+
+/*
+ * Replaces the file at path with length bytes of data: write and sync "<path>.tmp", rename it
+ * "<path>.new" and sync the device, remove the file, rename .new into place and sync again. A power
+ * cut leaves the old file, or a complete .new file the next read or replacement puts in place; a
+ * cut .tmp file is never used. A replacement first finishes an earlier cut one the same way. On the
+ * PSP a sync flushes the whole device (sceIoSync), directory entries included, which is what makes
+ * each rename durable before the next step. Returns SKIFF_ERR_INVALID_ARG for a NULL argument or a
+ * path too long, otherwise the storage's error; after a failure the next read still finds either
+ * the old content or the new, whole.
+ */
+skiff_err skiff_storage_replace_whole(skiff_storage *storage, const char *path, const void *data,
+                                      size_t length);
+
 /* Frees the storage. Does nothing for NULL. */
 void skiff_storage_destroy(skiff_storage *storage);
 

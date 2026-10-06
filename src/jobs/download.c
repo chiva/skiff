@@ -52,6 +52,33 @@ static int sibling_path(const char *target, const char *suffix, char *out) {
     return written > 0 && written < SKIFF_DOWNLOAD_PATH_MAX;
 }
 
+/* The folder of target ("ms0:/ISO" for "ms0:/ISO/Game.iso") into out; 0 without one. */
+static int folder_of(const char *target, char *out) {
+    const char *last_slash = strrchr(target, '/');
+    if (last_slash == NULL || last_slash == target) {
+        return 0;
+    }
+    const size_t length = (size_t)(last_slash - target);
+    memcpy(out, target, length);
+    out[length] = '\0';
+    return 1;
+}
+
+/*
+ * Whether what is still to come fits, with the storage layer's margin, before any request: a
+ * missing folder or Memory Stick fails here too. Only a device that cannot report its free space
+ * is let through, to the writes, which fail with SKIFF_ERR_STORAGE_NO_SPACE when it fills up.
+ */
+static skiff_err check_room(download *d) {
+    char folder[SKIFF_DOWNLOAD_PATH_MAX];
+    if (!folder_of(d->spec->target_path, folder)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const skiff_err err =
+        skiff_storage_check_room(d->storage, folder, d->spec->expected_size - d->state.offset);
+    return err == SKIFF_ERR_NOT_IMPLEMENTED ? SKIFF_OK : err;
+}
+
 static skiff_err storage_step(download *d, skiff_err err) {
     if (err != SKIFF_OK) {
         d->storage_failed = 1;
@@ -331,6 +358,10 @@ skiff_err skiff_download_attempt(skiff_transport *transport, skiff_storage *stor
     if (d.state.offset == spec->expected_size) {
         /* Everything arrived before, but the attempt ended before the rename. */
         return finish(&d);
+    }
+    err = check_room(&d);
+    if (err != SKIFF_OK) {
+        return err;
     }
     d.buffer = malloc(SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
     if (d.buffer == NULL) {

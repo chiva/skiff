@@ -24,6 +24,9 @@ target_link_libraries(skiff_test_support PUBLIC skiff_core Threads::Threads)
 target_include_directories(skiff_test_support PUBLIC support)
 target_compile_definitions(skiff_test_support
                            PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+# glibc declares nftw() only for X/Open; only temp_dir.c gets it, so the rest keeps glibc's
+# defaults (local_http_server.c's socket flags).
+set_source_files_properties(support/temp_dir.c PROPERTIES COMPILE_DEFINITIONS _XOPEN_SOURCE=700)
 skiff_set_warnings(skiff_test_support)
 
 function(skiff_add_unit_test name)
@@ -51,6 +54,7 @@ skiff_add_unit_test(test_fake_transport)
 skiff_add_unit_test(test_romm)
 skiff_add_unit_test(test_download_state)
 # Tests that write files: the POSIX storage over a temporary directory, through the fake storage.
+skiff_add_unit_test(test_storage_paths)
 skiff_add_unit_test(test_storage)
 target_link_libraries(test_storage PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_download)

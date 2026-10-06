@@ -28,16 +28,7 @@ typedef struct skiff_selftest_result {
 /* Runs every check, emitting one line per check and a final OK/FAIL marker line through log. */
 skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx);
 
-/*
- * Writes "<directory of program_path>/<file_name>" into out. program_path is argv[0] as the PSP
- * passes it, e.g. "ms0:/PSP/GAME/SkiffSelftest/EBOOT.PBP". Returns SKIFF_ERR_INVALID_ARG for a NULL
- * argument or a path without a directory, SKIFF_ERR_BUFFER_TOO_SMALL if the result does not fit; on
- * any error out is left empty (when out_size allows).
- */
-skiff_err skiff_selftest_sibling_path(const char *program_path, const char *file_name, char *out,
-                                      size_t out_size);
-
-/* skiff_selftest_sibling_path() for SKIFF_SELFTEST_RESULT_FILE. */
+/* skiff_storage_sibling_path() (skiff/storage_paths.h) for SKIFF_SELFTEST_RESULT_FILE. */
 skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t out_size);
 
 #endif

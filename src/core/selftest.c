@@ -11,6 +11,7 @@
 #include "skiff/http.h"
 #include "skiff/log.h"
 #include "skiff/romm.h"
+#include "skiff/storage_paths.h"
 #include "skiff/version.h"
 
 typedef const char *(*selftest_check_fn)(void);
@@ -55,6 +56,15 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
 #define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL
 #define SKIFF_SELFTEST_ROMM_CRC32 0x0a1b2c3dU
+/* A RomM name with accents and characters FAT refuses, and how it must come out. */
+#define SKIFF_SELFTEST_ROMM_NAME "Pok\xC3\xA9mon: Edici\xC3\xB3n/Plata?.iso"
+#define SKIFF_SELFTEST_SAFE_NAME "Pok\xC3\xA9mon_ Edici\xC3\xB3n_Plata_.iso"
+/* A four-byte character, repeated past the name limit so the cut has to back up to its start. */
+#define SKIFF_SELFTEST_WIDE_CHARACTER "\xF0\x9F\x8E\xAE"
+#define SKIFF_SELFTEST_WIDE_COUNT 40
+#define SKIFF_SELFTEST_WIDE_EXTENSION ".iso"
+/* 123 bytes of stem room hold 30 whole four-byte characters. */
+#define SKIFF_SELFTEST_WIDE_KEPT_BYTES 124U
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -204,6 +214,30 @@ static const char *check_romm_json(void) {
                : "a RomM page came back with other values";
 }
 
+/* Names from RomM are cleaned byte by byte, and the PSP's char is signed: UTF-8 must still be
+ * recognised, and a long name cut between characters, not inside one. */
+static const char *check_safe_names(void) {
+    char out[SKIFF_STORAGE_NAME_MAX];
+    if (skiff_storage_safe_name(SKIFF_SELFTEST_ROMM_NAME, out, sizeof out) != SKIFF_OK ||
+        strcmp(out, SKIFF_SELFTEST_SAFE_NAME) != 0) {
+        return "a RomM name with accents came out wrong";
+    }
+    char wide[SKIFF_STORAGE_NAME_INPUT_MAX];
+    size_t used = 0;
+    for (int i = 0; i < SKIFF_SELFTEST_WIDE_COUNT; i++) {
+        memcpy(wide + used, SKIFF_SELFTEST_WIDE_CHARACTER,
+               sizeof SKIFF_SELFTEST_WIDE_CHARACTER - 1);
+        used += sizeof SKIFF_SELFTEST_WIDE_CHARACTER - 1;
+    }
+    memcpy(wide + used, SKIFF_SELFTEST_WIDE_EXTENSION, sizeof SKIFF_SELFTEST_WIDE_EXTENSION);
+    return skiff_storage_safe_name(wide, out, sizeof out) == SKIFF_OK &&
+                   strlen(out) == SKIFF_SELFTEST_WIDE_KEPT_BYTES &&
+                   strcmp(out + strlen(out) - strlen(SKIFF_SELFTEST_WIDE_EXTENSION),
+                          SKIFF_SELFTEST_WIDE_EXTENSION) == 0
+               ? NULL
+               : "a long name was not cut between characters";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -217,6 +251,7 @@ static const selftest_check CHECKS[] = {
     {"config-parse", check_config_parsing},
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
+    {"safe-name", check_safe_names},
 };
 // clang-format on
 
@@ -252,29 +287,6 @@ skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx) {
     return result;
 }
 
-skiff_err skiff_selftest_sibling_path(const char *program_path, const char *file_name, char *out,
-                                      size_t out_size) {
-    if (out != NULL && out_size > 0) {
-        out[0] = '\0';
-    }
-    if (program_path == NULL || file_name == NULL || out == NULL) {
-        return SKIFF_ERR_INVALID_ARG;
-    }
-    const char *last_separator = strrchr(program_path, '/');
-    if (last_separator == NULL) {
-        return SKIFF_ERR_INVALID_ARG;
-    }
-    /* Keeps the trailing '/', so "ms0:/EBOOT.PBP" becomes "ms0:/result.txt". */
-    const size_t directory_length = (size_t)(last_separator - program_path) + 1;
-    const size_t name_length = strlen(file_name);
-    if (directory_length + name_length + 1 > out_size) {
-        return SKIFF_ERR_BUFFER_TOO_SMALL;
-    }
-    memcpy(out, program_path, directory_length);
-    memcpy(out + directory_length, file_name, name_length + 1);
-    return SKIFF_OK;
-}
-
 skiff_err skiff_selftest_result_path(const char *program_path, char *out, size_t out_size) {
-    return skiff_selftest_sibling_path(program_path, SKIFF_SELFTEST_RESULT_FILE, out, out_size);
+    return skiff_storage_sibling_path(program_path, SKIFF_SELFTEST_RESULT_FILE, out, out_size);
 }

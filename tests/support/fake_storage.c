@@ -118,11 +118,32 @@ static skiff_err fake_remove(skiff_storage *base, const char *path) {
                : err;
 }
 
+static skiff_err fake_mkdir(skiff_storage *base, const char *path) {
+    fake_storage *fake = (fake_storage *)base;
+    fake->mkdirs++;
+    return fake->mkdir_error != SKIFF_OK && matches(fake, path)
+               ? fake->mkdir_error
+               : skiff_storage_mkdir(fake->inner, path);
+}
+
+static skiff_err fake_free_space(skiff_storage *base, const char *path, uint64_t *out) {
+    fake_storage *fake = (fake_storage *)base;
+    fake->free_space_queries++;
+    if (fake->free_space_error != SKIFF_OK) {
+        return fake->free_space_error;
+    }
+    if (fake->has_free_bytes) {
+        *out = fake->free_bytes;
+        return SKIFF_OK;
+    }
+    return skiff_storage_free_space(fake->inner, path, out);
+}
+
 static void fake_destroy(skiff_storage *base) { (void)base; }
 
 static const skiff_storage_ops FAKE_STORAGE_OPS = {
-    fake_open, fake_read,   fake_write,  fake_sync,    fake_close,
-    fake_size, fake_rename, fake_remove, fake_destroy,
+    fake_open,   fake_read,   fake_write, fake_sync,       fake_close,   fake_size,
+    fake_rename, fake_remove, fake_mkdir, fake_free_space, fake_destroy,
 };
 
 void fake_storage_init(fake_storage *fake, skiff_storage *inner) {

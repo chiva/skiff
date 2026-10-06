@@ -46,12 +46,16 @@ static int put_line(FILE *file, const char *line) {
     return fprintf(file, "%s\n", line) >= 0 && fflush(file) == 0;
 }
 
-/* A failed write means the file handle died (a suspend does that): reopen and write once more. */
+/* A failed write means the file handle died (a suspend does that): reopen and write once more. A
+ * reopen that fails is tried again with the next line, so a slow wake loses as little as possible.
+ */
 static void write_line(skiff_psp_report *report, const char *line) {
-    if (report->file == NULL || put_line(report->file, line)) {
+    if (report->file != NULL && put_line(report->file, line)) {
         return;
     }
-    fclose(report->file);
+    if (report->file != NULL) {
+        fclose(report->file);
+    }
     report->file = report->path[0] != '\0' ? fopen(report->path, "a") : NULL;
     if (report->file != NULL) {
         put_line(report->file, line);

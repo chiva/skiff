@@ -162,6 +162,8 @@ typedef struct outcome {
     int restarted;
     int complete;
     long long elapsed_us;
+    /* Bytes of the files downloaded, for the speed. */
+    uint64_t bytes;
     const char *recovery;
     long long recovery_us;
     int cpu_mhz_after;
@@ -637,6 +639,7 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         }
     }
     o->elapsed_us = now_us() - start;
+    o->bytes = p->config.size;
     return err;
 }
 
@@ -675,7 +678,7 @@ static int report_scenario(probe *p, const char *name, int ok, const watch *w, c
              o->recovery_us / US_PER_MS, o->cpu_mhz_after, (unsigned long long)o->resumed_from,
              o->last_status, o->restarted, o->complete, w->first_byte_us / US_PER_MS,
              w->longest_gap_us / US_PER_MS, o->elapsed_us / US_PER_MS,
-             skiff_probe_kb_per_s(p->config.size, o->elapsed_us), note);
+             skiff_probe_kb_per_s(o->bytes, o->elapsed_us), note);
     report_check(p, ok, text);
     const int logged = append_log(p, text);
     /* Where the Memory Stick's time went in this scenario, then start counting afresh. */
@@ -759,6 +762,22 @@ static int run_home(probe *p) {
     return report_scenario(p, "home", o.complete, &w, &o, "(longest_gap shows any pause)");
 }
 
+/* Adds one download's figures to the scenario's: counts and times summed, the worst waits kept. */
+static void add_download(watch *total_w, outcome *total, const watch *w, const outcome *o) {
+    total->attempts += o->attempts;
+    total->interruptions += o->interruptions;
+    total->complete = o->complete;
+    total->last_status = o->last_status;
+    total->elapsed_us += o->elapsed_us;
+    total->bytes += o->bytes;
+    if (w->first_byte_us > total_w->first_byte_us) {
+        total_w->first_byte_us = w->first_byte_us;
+    }
+    if (w->longest_gap_us > total_w->longest_gap_us) {
+        total_w->longest_gap_us = w->longest_gap_us;
+    }
+}
+
 /* Downloads back to back for awake_s with no input: keep-awake must hold off Auto Sleep. */
 static int run_sleep(probe *p) {
     char text[SKIFF_SELFTEST_LINE_MAX];
@@ -768,24 +787,27 @@ static int run_sleep(probe *p) {
     report_line(p, text);
     const skiff_psp_power_events before = skiff_psp_power_events_now();
     const long long deadline = now_us() + p->config.awake_s * US_PER_S;
-    watch w;
-    outcome o;
+    watch total_w;
+    outcome total;
+    watch_init(&total_w, p, NULL);
+    memset(&total, 0, sizeof total);
     int downloads = 0;
     int all_complete = 1;
-    memset(&o, 0, sizeof o);
-    watch_init(&w, p, NULL);
     while (now_us() < deadline && all_complete && !skiff_psp_exit_requested()) {
         skiff_download_discard(p->storage, p->target);
+        watch w;
+        outcome o;
         watch_init(&w, p, NULL);
         memset(&o, 0, sizeof o);
         download(p, &w, &o);
+        add_download(&total_w, &total, &w, &o);
         all_complete &= o.complete;
         downloads++;
     }
     const int suspends = skiff_psp_power_events_now().suspends - before.suspends;
     snprintf(text, sizeof text, "(%d downloads, %d suspend(s) during the scenario)", downloads,
              suspends);
-    return report_scenario(p, "sleep", all_complete && suspends == 0, &w, &o, text);
+    return report_scenario(p, "sleep", all_complete && suspends == 0, &total_w, &total, text);
 }
 
 static int run_scenarios(probe *p) {

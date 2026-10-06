@@ -290,10 +290,14 @@ static skiff_err flush_locked(skiff_log *log) {
     skiff_file_mode mode = SKIFF_FILE_REPLACE;
     uint64_t offset = 0;
     const int planned = plan_batch(log, &mode, &offset) == SKIFF_OK;
+    /* Whether a write ran: only then can part of the batch be in the file, at offset (the plan
+     * every write used). */
+    int wrote = planned;
     skiff_err err = planned ? write_batch(log, mode, offset) : SKIFF_ERR_STORAGE_IO;
     if (err != SKIFF_OK && !planned) {
         err = plan_batch(log, &mode, &offset);
         if (err == SKIFF_OK) {
+            wrote = 1;
             err = write_batch(log, mode, offset);
         }
     } else if (err != SKIFF_OK) {
@@ -305,7 +309,7 @@ static skiff_err flush_locked(skiff_log *log) {
     } else {
         /* A lost report is not counted: the next one gives the new total. */
         log->dropped_lines += log->pending_lines - (log->reported_lines != 0 ? 1 : 0);
-        if (planned && !log->fragment_possible) {
+        if (wrote && !log->fragment_possible) {
             log->fragment_possible = 1;
             log->failed_offset = offset;
         }

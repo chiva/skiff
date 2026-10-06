@@ -95,7 +95,12 @@ static skiff_err fake_close(skiff_file *base) {
 }
 
 static skiff_err fake_size(skiff_storage *base, const char *path, uint64_t *out) {
-    return skiff_storage_size(((fake_storage *)base)->inner, path, out);
+    fake_storage *fake = (fake_storage *)base;
+    if (fake->size_failures > 0 && matches(fake, path)) {
+        fake->size_failures--;
+        return SKIFF_ERR_STORAGE_IO;
+    }
+    return skiff_storage_size(fake->inner, path, out);
 }
 
 static skiff_err fake_rename(skiff_storage *base, const char *from, const char *to) {

@@ -403,6 +403,23 @@ static void test_part_of_a_lost_batch_gets_a_line_of_its_own(void) {
                              read_file(path));
 }
 
+static void test_a_fragment_left_by_the_retry_after_a_failed_plan_is_cut_off_too(void) {
+    create();
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "kept");
+    skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "cut short");
+    TEST_PRINTF("the first look at the log's size fails, the retry writes 5 bytes and fills up");
+    fake.size_failures = 1;
+    fake.write_budget = fake.bytes_written + 5;
+    fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    skiff_log_flush(logger);
+    TEST_ASSERT_EQUAL_INT(0, fake.size_failures);
+    fake.write_error = SKIFF_OK;
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "next");
+    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI job\nW log: 1 earlier lines could not be written\n"
+                             "E jobs: next\n",
+                             read_file(path));
+}
+
 #define FRAGMENT_BYTES 5U
 /* "W log: 1 earlier lines could not be written\n" and "E jobs: x\n". */
 #define REPORT_AND_LINE_BYTES 54U
@@ -705,6 +722,7 @@ int main(void) {
     RUN_TEST(test_a_handle_lost_to_a_suspend_is_reopened_without_repeating_lines);
     RUN_TEST(test_a_refused_batch_is_dropped_and_counted_in_the_next_line);
     RUN_TEST(test_part_of_a_lost_batch_gets_a_line_of_its_own);
+    RUN_TEST(test_a_fragment_left_by_the_retry_after_a_failed_plan_is_cut_off_too);
     RUN_TEST(test_the_line_break_after_a_fragment_counts_against_the_cap);
     RUN_TEST(test_a_batch_lost_to_a_full_buffer_is_reported_before_the_next_line);
     RUN_TEST(test_logging_goes_on_while_the_memory_stick_refuses);

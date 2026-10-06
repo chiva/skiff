@@ -68,8 +68,8 @@ typedef struct skiff_net_failure {
     int reused_connection;
     int got_response;
     int client_cert_configured;
-    /* What the body callback returned when it stopped the transfer. */
-    skiff_err body_error;
+    /* What the body callback or the stop hook returned when it stopped the transfer. */
+    skiff_err callback_error;
 } skiff_net_failure;
 
 /* Maps a failed request to a Skiff error; see docs/development/architecture.md ("Transport"). */

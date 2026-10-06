@@ -13,7 +13,8 @@
  *
  * Range requests are answered the way RomM's server does, from the recorded 200 body: a matching
  * If-Range gives 206 with Content-Range, a stale one the whole body with 200, an offset
- * at or past the end 416.
+ * at or past the end 416. The request's stop hook is asked before the response and before each
+ * body chunk, as the curl transport asks it.
  */
 
 #include <stddef.h>
@@ -41,6 +42,9 @@ typedef struct fake_route {
     skiff_err fail_mid_body;
     /* Replaces the recorded ETag: the file changed on the server since it was recorded. */
     const char *current_etag;
+    /* Answers a Range request with the whole body (200) even when If-Range matches, as a server
+     * without range support does. */
+    int ignore_range;
 } fake_route;
 
 /* One request as the fake received it. */

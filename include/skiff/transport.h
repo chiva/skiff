@@ -27,6 +27,12 @@ typedef struct skiff_http_header {
  * error page must never land in a partial file. */
 typedef skiff_err (*skiff_http_body_fn)(void *ctx, const unsigned char *data, size_t size);
 
+/* Asked whether to stop the transfer: about once a second while it runs, also when nothing arrives
+ * (a Wi-Fi switch turned off delivers no bytes, so the body callback alone would only notice at the
+ * stall timeout), and between body chunks. Any result other than SKIFF_OK stops the transfer, and
+ * skiff_transport_perform() returns that result unchanged. */
+typedef skiff_err (*skiff_http_stop_fn)(void *ctx);
+
 typedef struct skiff_http_request {
     /* GET only for now; POST arrives with pairing. Must start with http:// or https://. */
     const char *url;
@@ -42,6 +48,9 @@ typedef struct skiff_http_request {
     /* NULL discards the body. */
     skiff_http_body_fn on_body;
     void *body_ctx;
+    /* NULL never stops the transfer. */
+    skiff_http_stop_fn should_stop;
+    void *stop_ctx;
 } skiff_http_request;
 
 typedef struct skiff_transport skiff_transport;
@@ -68,9 +77,9 @@ int skiff_http_headers_valid(const skiff_http_header *headers, size_t count);
 /*
  * Sends request and fills response. An HTTP response of any status is SKIFF_OK with
  * response->status set; map it with skiff_http_status_error(). Otherwise returns the network
- * failure (1xx codes), the body callback's error, or SKIFF_ERR_INVALID_ARG for a NULL argument, a
- * missing URL, invalid headers (skiff_http_headers_valid()), has_range without a non-blank if_range
- * (or if_range without has_range), or an if_range with a line break, and
+ * failure (1xx codes), the body callback's or the stop hook's error, or SKIFF_ERR_INVALID_ARG for
+ * a NULL argument, a missing URL, invalid headers (skiff_http_headers_valid()), has_range without a
+ * non-blank if_range (or if_range without has_range), or an if_range with a line break, and
  * SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an explicit http:// or https:// (curl would
  * guess plain HTTP). The response is reset first, so after a failure it holds whatever arrived
  * before it. The connection stays usable after any failure.

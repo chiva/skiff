@@ -36,7 +36,8 @@ skiff_err skiff_net_error_from_curl(const skiff_net_failure *failure) {
         return SKIFF_OK;
     case CURLE_WRITE_ERROR:
     case CURLE_ABORTED_BY_CALLBACK:
-        return failure->body_error != SKIFF_OK ? failure->body_error : SKIFF_ERR_INVALID_ARG;
+        return failure->callback_error != SKIFF_OK ? failure->callback_error
+                                                   : SKIFF_ERR_INVALID_ARG;
     case CURLE_COULDNT_RESOLVE_HOST:
     case CURLE_COULDNT_RESOLVE_PROXY:
         return SKIFF_ERR_NET_DNS;

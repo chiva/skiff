@@ -27,7 +27,7 @@ typedef struct transfer {
     CURL *curl;
     const skiff_http_request *request;
     skiff_http_response *response;
-    skiff_err body_error;
+    skiff_err callback_error;
 } transfer;
 
 skiff_err skiff_net_global_init(void) {
@@ -72,12 +72,31 @@ static size_t on_body(char *buffer, size_t size, size_t count, void *userdata) {
         const skiff_err err =
             current->request->on_body(current->request->body_ctx, (unsigned char *)buffer, length);
         if (err != SKIFF_OK) {
-            current->body_error = err;
+            current->callback_error = err;
             return 0; /* anything short of length makes curl stop with CURLE_WRITE_ERROR */
         }
     }
     current->response->body_bytes += length;
     return length;
+}
+
+/* curl calls this about once a second, and after every chunk, whether or not bytes arrive. */
+static int on_progress(void *userdata, curl_off_t download_total, curl_off_t downloaded,
+                       curl_off_t upload_total, curl_off_t uploaded) {
+    (void)download_total;
+    (void)downloaded;
+    (void)upload_total;
+    (void)uploaded;
+    transfer *current = userdata;
+    if (current->request->should_stop == NULL) {
+        return 0;
+    }
+    const skiff_err err = current->request->should_stop(current->request->stop_ctx);
+    if (err != SKIFF_OK) {
+        current->callback_error = err;
+        return 1; /* non-zero makes curl stop with CURLE_ABORTED_BY_CALLBACK */
+    }
+    return 0;
 }
 
 /* Appends "<name>: <value>" to *list; returns 0 when out of memory (the list stays valid). */
@@ -148,7 +167,7 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
         .reused_connection = current->response->new_connections == 0,
         .got_response = current->response->status != 0,
         .client_cert_configured = transport->client_cert_configured,
-        .body_error = current->body_error,
+        .callback_error = current->callback_error,
     };
     return skiff_net_error_from_curl(&failure);
 }
@@ -166,7 +185,8 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     if (curl_easy_setopt(transport->curl, CURLOPT_URL, request->url) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, &current) != CURLE_OK ||
-        curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, &current) != CURLE_OK) {
+        curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, &current) != CURLE_OK ||
+        curl_easy_setopt(transport->curl, CURLOPT_XFERINFODATA, &current) != CURLE_OK) {
         code = CURLE_OUT_OF_MEMORY;
     } else {
         code = curl_easy_perform(transport->curl);
@@ -179,6 +199,7 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, NULL);
+    curl_easy_setopt(transport->curl, CURLOPT_XFERINFODATA, NULL);
     curl_slist_free_all(headers);
     return err;
 }
@@ -215,6 +236,8 @@ static int configure(curl_transport *transport, const skiff_curl_config *config)
            curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, stall_timeout) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body) == CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, on_progress) == CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
            set_optional_string(curl, CURLOPT_CAINFO, config->ca_file) &&
            set_optional_string(curl, CURLOPT_SSLCERT, config->client_cert) &&
            set_optional_string(curl, CURLOPT_SSLKEY, config->client_key);

@@ -203,6 +203,56 @@ static void test_body_callback_error_is_returned(void) {
     TEST_ASSERT_EQUAL_UINT64(0, response.body_bytes);
 }
 
+/* Stops with SKIFF_ERR_NET_UNAVAILABLE once asked more than allowed_polls times. */
+typedef struct stop_hook {
+    int polls;
+    int allowed_polls;
+} stop_hook;
+
+static skiff_err stop_after_polls(void *ctx) {
+    stop_hook *hook = ctx;
+    hook->polls++;
+    return hook->polls > hook->allowed_polls ? SKIFF_ERR_NET_UNAVAILABLE : SKIFF_OK;
+}
+
+static void test_stop_hook_before_the_response(void) {
+    add(CONTENT_PATH, "romm/rom-content.http");
+    stop_hook hook = {0, 0};
+    request.should_stop = stop_after_polls;
+    request.stop_ctx = &hook;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_UNAVAILABLE, get("https://romm.test" CONTENT_PATH));
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(0, response.status, "stopped before any response");
+    TEST_ASSERT_EQUAL_INT(1, hook.polls);
+}
+
+static void test_stop_hook_mid_body_keeps_what_came(void) {
+    add(CONTENT_PATH, "romm/rom-content.http");
+    /* One poll before the response, then one per chunk: two chunks get through. */
+    stop_hook hook = {0, 3};
+    request.should_stop = stop_after_polls;
+    request.stop_ctx = &hook;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_UNAVAILABLE, get("https://romm.test" CONTENT_PATH));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_ASSERT_EQUAL_UINT64(2 * FAKE_TRANSPORT_CHUNK_BYTES, response.body_bytes);
+    TEST_ASSERT_EQUAL_size_t(2 * FAKE_TRANSPORT_CHUNK_BYTES, sink.size);
+    request.should_stop = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test" CONTENT_PATH));
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(1, response.new_connections, "a stop drops the connection");
+}
+
+static void test_server_ignoring_range_sends_the_whole_file(void) {
+    load_full_content();
+    fake.routes[0].ignore_range = 1;
+    request.has_range = 1;
+    request.range_start = RESUME_OFFSET;
+    request.if_range = CONTENT_ETAG;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test" CONTENT_PATH));
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(200, response.status, "the ETag matches, but no range support");
+    TEST_ASSERT_FALSE(response.has_content_range);
+    TEST_ASSERT_EQUAL_size_t(CONTENT_BYTES, sink.size);
+    TEST_ASSERT_EQUAL_MEMORY(full_content, sink.bytes, CONTENT_BYTES);
+}
+
 static void test_body_is_counted_without_a_callback(void) {
     add(CONTENT_PATH, "romm/rom-content.http");
     request.on_body = NULL;
@@ -294,6 +344,9 @@ int main(void) {
     RUN_TEST(test_failure_threshold_beyond_the_body_fails_after_all_of_it);
     RUN_TEST(test_failure_before_any_response);
     RUN_TEST(test_body_callback_error_is_returned);
+    RUN_TEST(test_stop_hook_before_the_response);
+    RUN_TEST(test_stop_hook_mid_body_keeps_what_came);
+    RUN_TEST(test_server_ignoring_range_sends_the_whole_file);
     RUN_TEST(test_body_is_counted_without_a_callback);
     RUN_TEST(test_recorded_refusal_maps_to_a_romm_error);
     RUN_TEST(test_unknown_path_is_404);

@@ -200,21 +200,22 @@ version that does not start with a number (a development build) is allowed with 
 
 The client (`include/skiff/romm.h`) reads each response into a buffer of at most 512 KiB and parses
 it with cJSON 1.7.16 (pspdev's package; the host image builds the same version). A larger response
-is refused (204), never cut, and so is anything that is not RomM's JSON: a proxy's login page, a
-cut body, valid JSON followed by anything but blanks, a missing field, a number that is not a whole,
-non-negative value below 2^53, a string longer than its field or holding an escaped NUL. Before
-cJSON builds its tree, a scan counts the values the body holds (at most 32768, about 44 bytes each
-on the PSP): RomM's responses run near one value per 20 bytes, while a body of tiny values would
-otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a page, ordered by name: an unidentified ROM is about
-2.6 KB of JSON and one with metadata several times that, so a page stays well under the cap (cJSON's
-tree and its strings stay within the budget above) and fills a screen in one request. They also turn off
-`with_char_index`, `with_filter_values` and `with_rom_id_index`: RomM includes those by default,
-and they grow with the whole library, not the page. A page that is not the one asked for (another
-offset, more ROMs than the limit or than the total leaves, a ROM of another platform) is refused, as
-is a ROM returned under another id or listing a file of another ROM. List items
-carry the ROM's name, file name, size and CRC-32; `files[]` comes with `GET /api/roms/{id}`. RomM
-records CRC32, MD5 and SHA-1 for every file, so the integrity check can use any of them; its
-`crc_hash` is hexadecimal, read with or without leading zeros.
+is refused (204), never cut, and so is anything that is not RomM's JSON: a proxy's login page, a cut
+body, valid JSON followed by anything but blanks, a missing field, a number that is not a whole,
+non-negative value below 2^53, a string longer than its field or holding a control character, raw or
+escaped. Before cJSON builds its tree, a scan counts the values the body holds (at most 32768, about
+44 bytes each on the PSP): RomM's responses run near one value per 20 bytes, while a body of tiny
+values would otherwise cost megabytes. A request peaks near 2 MB. ROM lists ask for 25 ROMs a page,
+ordered by name: an unidentified ROM is about 2.6 KB of JSON and one with metadata several times
+that, so a page stays well under the cap (cJSON's tree and its strings stay within the budget above)
+and fills a screen in one request. They also turn off `with_char_index`, `with_filter_values` and
+`with_rom_id_index`: RomM includes those by default, and they grow with the whole library, not the
+page. A page that is not the one asked for (another offset, more ROMs than the limit or than the
+total leaves, a ROM of another platform) is refused, as is a ROM returned under another id or
+listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
+`files[]` comes with `GET /api/roms/{id}`. RomM records CRC32, MD5 and SHA-1 for every file, so the
+integrity check can use any of them; its `crc_hash` is hexadecimal, read with or without leading
+zeros.
 
 Download URLs percent-encode every byte of the file name except letters, digits and `-._~`: a `#`
 would otherwise end the path, a `?` start a query, a `/` split it. The heartbeat is public and is

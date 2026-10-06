@@ -358,7 +358,7 @@ static void test_a_file_of_another_rom_past_the_kept_ones_is_refused_too(void) {
     TEST_ASSERT_EQUAL_size_t(0, rom.stored_count);
 }
 
-static void test_raw_control_bytes_in_a_string_are_refused(void) {
+static void test_control_characters_in_a_string_are_refused(void) {
     static const char with_nul[] =
         "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\0x\","
         "\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
@@ -373,6 +373,31 @@ static void test_raw_control_bytes_in_a_string_are_refused(void) {
                           skiff_romm_parse_rom_page(with_newline, sizeof with_newline - 1, &page));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
                           skiff_romm_parse_rom_page(nul_after, sizeof nul_after - 1, &page));
+    static const char *const ESCAPED[] = {"\\u000a", "\\u000D", "\\u001b", "\\u001f",
+                                          "\\u007f", "\\n",     "\\t"};
+    for (size_t i = 0; i < sizeof ESCAPED / sizeof ESCAPED[0]; i++) {
+        char item[RAW_MAX];
+        snprintf(item, sizeof item,
+                 "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":\"a%s.iso\","
+                 "\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}",
+                 ESCAPED[i]);
+        TEST_PRINTF("fs_name with %s", ESCAPED[i]);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                              skiff_romm_parse_rom_page(item, strlen(item), &page));
+    }
+    static const char file_escape[] = "{\"id\":3,\"platform_id\":1,\"fs_name\":\"a.iso\","
+                                      "\"fs_size_bytes\":1,\"files\":[{\"rom_id\":3,\"file_name\":"
+                                      "\"a\\u001b.iso\",\"file_size_bytes\":1}]}";
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_rom(file_escape, sizeof file_escape - 1, &rom));
+    TEST_PRINTF("an escaped non-ASCII character is text");
+    static const char accented[] =
+        "{\"items\":[{\"id\":7,\"platform_id\":1,\"fs_name\":"
+        "\"caf\\u00e9.iso\",\"fs_size_bytes\":1}],\"total\":1,\"offset\":0}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_rom_page(accented, sizeof accented - 1, &page));
+    TEST_ASSERT_EQUAL_STRING("caf\xC3\xA9.iso", page.items[0].fs_name);
     TEST_PRINTF("blanks between values are not inside a string");
     static const char spaced[] = "{\n\t\"items\": [],\r\n\"total\": 0, \"offset\": 0}";
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom_page(spaced, sizeof spaced - 1, &page));
@@ -744,7 +769,7 @@ int main(void) {
     RUN_TEST(test_a_page_beyond_its_total_is_refused);
     RUN_TEST(test_a_file_of_another_rom_is_refused);
     RUN_TEST(test_a_file_of_another_rom_past_the_kept_ones_is_refused_too);
-    RUN_TEST(test_raw_control_bytes_in_a_string_are_refused);
+    RUN_TEST(test_control_characters_in_a_string_are_refused);
     RUN_TEST(test_the_largest_exact_id_is_accepted);
     RUN_TEST(test_valid_json_followed_by_junk_is_refused);
     RUN_TEST(test_a_body_of_too_many_tiny_values_is_refused_before_parsing);

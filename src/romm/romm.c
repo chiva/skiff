@@ -52,14 +52,26 @@ static int read_count(const cJSON *object, const char *name, uint64_t *out) {
     return 1;
 }
 
-/* A JSON string copied whole into out; 0 when absent, not a string, or too long. */
+/* No control character, decoded from an escape such as "\u001b": a name is shown and logged. */
+static int is_printable_text(const char *text) {
+    for (const char *c = text; *c != '\0'; c++) {
+        const unsigned char byte = (unsigned char)*c;
+        if (byte < (unsigned char)' ' || byte == ASCII_DELETE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A JSON string copied whole into out; 0 when absent, not a string, too long, or holding a control
+ * character. */
 static int read_text(const cJSON *object, const char *name, char *out, size_t out_size) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
     if (!cJSON_IsString(item) || item->valuestring == NULL) {
         return 0;
     }
     const size_t length = strlen(item->valuestring);
-    if (length >= out_size) {
+    if (length >= out_size || !is_printable_text(item->valuestring)) {
         return 0;
     }
     memcpy(out, item->valuestring, length + 1);

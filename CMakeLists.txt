@@ -21,19 +21,27 @@ option(SKIFF_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 configure_file(src/core/version_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version_config.h"
                @ONLY)
 
+# zlib's CRC-32, for downloads (src/jobs/): pspdev packages zlib for the PSP, the host image ships
+# zlib1g-dev.
+find_package(ZLIB REQUIRED)
+
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
 add_library(
   skiff_core STATIC
   src/core/error.c
   src/core/selftest.c
   src/core/version.c
+  src/jobs/download.c
+  src/jobs/download_state.c
   src/net/entropy.c
   src/net/http.c
-  src/net/transport.c)
+  src/net/transport.c
+  src/storage/storage.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB)
 skiff_set_warnings(skiff_core)
 
 # Skiff's TLS stack, built with the same profile for both targets (docker/toolchain/build-tls.sh):

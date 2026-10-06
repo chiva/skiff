@@ -37,8 +37,8 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/`, `net/` (transport, TLS entropy source) and `platform/psp/` (lifecycle, network
-stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
+Status: `core/`, `net/` (transport, TLS entropy source), `storage/` (the storage seam), `jobs/`
+(resumable downloads) and `platform/psp/` (lifecycle, network stack, TLS hooks) exist. The other layers arrive with the [roadmap](roadmap.md) phases that need
 them.
 
 ## Threads, power and suspend
@@ -127,15 +127,40 @@ use any of them.
 
 ## Downloads and storage
 
+`include/skiff/download.h` runs one download attempt; the caller (`jobs/`) decides whether to try
+again (`skiff_download_retryable()`: Wi-Fi, name lookup, connect, timeout, lost connection) once the
+network is back.
+
 - **Atomic**: download to `<target>.part`, then rename into place. A pulled Memory Stick or a
   power-off never leaves a half-written file under the final name.
-- **Resume**: `Range` from the `.part` size plus `If-Range` with the ETag recorded at the start, so
-  a file that changed on the server restarts instead of being stitched from two versions.
-- **Integrity**: the hash RomM records for the file is computed while downloading, with the hash
-  state saved next to the `.part` so resuming does not re-read the whole file.
-- **Throughput**: writes go through a large buffer (128 KB or more); the Memory Stick is slow with
-  the small chunks the network delivers.
-- **Limits**: check free space before starting; refuse files over 4 GB (FAT32).
+- **Progress**: `<target>.resume` records how many bytes of the `.part` file are on the device, the
+  CRC-32 of exactly those bytes, the ETag and the file's expected size and CRC-32. Every 4 MiB
+  (`SKIFF_DOWNLOAD_CHECKPOINT_BYTES`, about 9 s at 470 KB/s) the buffered bytes are written and
+  synced first, then the `.resume` file is rewritten and synced, so it never vouches for bytes the
+  Memory Stick does not hold. An attempt that fails for any reason but the Memory Stick saves its
+  exact offset before returning. FAT has no atomic replace, so the file ends with a CRC-32 of its
+  own lines: one cut short by a power loss is refused and the download starts over. A `.resume` file
+  for another size or CRC-32, or a `.part` file shorter than its offset, also means starting over.
+- **Resume**: `Range` from the saved offset plus `If-Range` with the saved ETag, so a file that
+  changed on the server comes back whole (200) and restarts instead of being stitched from two
+  versions. Only a strong ETag is kept: a weak one (`W/`) cannot be used with `If-Range`, so such a
+  download always restarts. A server that ignores ranges also answers 200, with the same result.
+- **Checks before writing**: the status and headers are judged before the first byte touches the
+  Memory Stick. Only a 200 with the expected size, or a 206 starting at the saved offset of a file of
+  the expected size, is written; an error page (a proxy's login page, a 401) leaves the `.part` and
+  `.resume` files as they were. A 416 means the server no longer has what was being resumed: the
+  progress is dropped.
+- **Integrity**: the CRC-32 RomM records for the file is computed while downloading (zlib, 33 MB/s
+  on a PSP-1000), continued from the saved value on resume, so resuming never re-reads the `.part`
+  file. A finished file that does not match is deleted with its progress (206): the usual cause is a
+  file replaced on the server without a rescan, so RomM's checksum is stale.
+- **Throughput**: writes go to the Memory Stick in 128 KB blocks
+  (`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`); it is slow with the small chunks the network delivers.
+- **Storage seam**: the download writes through `include/skiff/storage.h`, not the C library. On the
+  PSP newlib's `off_t` is 32 bits, so stdio cannot place a file position past 2 GiB; the PSP
+  implementation uses `sceIo` with 64-bit offsets. A rename never replaces a file (FAT cannot do it
+  in one step): the target is removed first.
+- **Limits**: check free space before starting; refuse files over 4 GB (FAT32, 304).
 - **Names**: names from RomM are sanitised: no path separators, no `..`, FAT-safe characters only.
 - **Installed state**: a manifest (`PSP/GAME/Skiff/installed.json`: RomM ID → path, size, hash)
   records what Skiff installed. Scanning folders and matching names is only a fallback for games
@@ -182,7 +207,11 @@ A game and Skiff never run at the same time, so a save is never synced while it 
   transport that replays recorded RomM responses and injects failures: timeouts, truncated bodies,
   a changed ETag (`tests/support/fake_transport.h`). The real curl transport is tested against a
   scripted local server and, in CI, against the integration RomM; see [Testing](testing.md).
-- `storage/` roots point at a temporary directory on the host.
+- `storage/` exposes a `storage` interface (`include/skiff/storage.h`). Host tests use a POSIX
+  implementation over a temporary directory (`src/platform/host/storage_posix.h`), wrapped by a
+  fake that injects what a Memory Stick does to a long download: it fills up mid-write, a sync or
+  rename fails, open file handles stop working as after a suspend (`tests/support/fake_storage.h`).
+  `storage/` roots will point at a temporary directory on the host.
 - The self-test checks what differs between host, emulator and hardware (C library, heap, clock,
   byte order) and grows with each layer. See [Testing](testing.md).
 

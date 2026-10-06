@@ -18,7 +18,8 @@ set_target_properties(unity PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
 
 # Test doubles shared by the unit and integration tests (tests/support/).
 find_package(Threads REQUIRED)
-add_library(skiff_test_support STATIC support/fake_transport.c support/local_http_server.c)
+add_library(skiff_test_support STATIC support/fake_storage.c support/fake_transport.c
+                                      support/local_http_server.c support/temp_dir.c)
 target_link_libraries(skiff_test_support PUBLIC skiff_core Threads::Threads)
 target_include_directories(skiff_test_support PUBLIC support)
 target_compile_definitions(skiff_test_support
@@ -47,6 +48,12 @@ skiff_add_unit_test(test_entropy)
 skiff_add_unit_test(test_http)
 skiff_add_unit_test(test_transport)
 skiff_add_unit_test(test_fake_transport)
+skiff_add_unit_test(test_download_state)
+# Tests that write files: the POSIX storage over a temporary directory, through the fake storage.
+skiff_add_unit_test(test_storage)
+target_link_libraries(test_storage PRIVATE skiff_host_storage)
+skiff_add_unit_test(test_download)
+target_link_libraries(test_download PRIVATE skiff_host_storage)
 skiff_add_tls_unit_test(test_host_tls)
 skiff_add_tls_unit_test(test_net_errors)
 skiff_add_tls_unit_test(test_curl_transport)
@@ -56,8 +63,12 @@ skiff_add_unit_test(test_probe_support)
 target_sources(test_probe_support PRIVATE hardware/probe_support.c)
 target_include_directories(test_probe_support PRIVATE hardware)
 
-# Runs against the integration RomM, not under ctest: scripts/dev.sh romm-test
-# (tests/integration/transport-test.sh). Built with every host build so it always compiles.
+# Run against the integration RomM, not under ctest: scripts/dev.sh romm-test
+# (tests/integration/transport-test.sh). Built with every host build so they always compile.
 add_executable(test_transport_romm integration/test_transport_romm.c)
 target_link_libraries(test_transport_romm PRIVATE skiff_net skiff_host_tls unity)
 skiff_set_warnings(test_transport_romm)
+add_executable(test_download_romm integration/test_download_romm.c)
+target_link_libraries(test_download_romm PRIVATE skiff_net skiff_host_tls skiff_host_storage
+                                                 skiff_test_support unity)
+skiff_set_warnings(test_download_romm)

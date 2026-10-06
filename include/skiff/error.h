@@ -34,6 +34,8 @@
     X(SKIFF_ERR_ROMM_SERVER, 203, "RomM reported a server error")                                  \
     X(SKIFF_ERR_ROMM_BAD_RESPONSE, 204, "RomM sent a response Skiff does not understand")          \
     X(SKIFF_ERR_ROMM_UNSUPPORTED_VERSION, 205, "This RomM version is not supported")               \
+    X(SKIFF_ERR_ROMM_CHECKSUM, 206,                                                                \
+      "The file does not match RomM's checksum; rescan the platform in RomM")                      \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

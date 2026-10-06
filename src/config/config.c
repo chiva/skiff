@@ -12,12 +12,14 @@
 #define SECTION_AUTH "auth"
 #define SECTION_MTLS "mtls"
 #define SECTION_HEADERS "headers"
+#define SECTION_LOG "log"
 #define KEY_VERSION "version"
 #define KEY_URL "url"
 #define KEY_CA_FILE "ca_file"
 #define KEY_TOKEN "token"
 #define KEY_CERT_FILE "cert_file"
 #define KEY_KEY_FILE "key_file"
+#define KEY_LEVEL "level"
 /* Windows Notepad starts a UTF-8 file with it. */
 #define UTF8_BOM "\xEF\xBB\xBF"
 #define UTF8_BOM_LENGTH 3
@@ -32,7 +34,13 @@
  * Range and If-Range are refused by skiff_http_headers_valid(). */
 static const char *const RESERVED_HEADERS[] = {"authorization", "host"};
 
-typedef enum value_kind { VALUE_VERSION, VALUE_URL, VALUE_FILE_NAME, VALUE_TOKEN } value_kind;
+typedef enum value_kind {
+    VALUE_VERSION,
+    VALUE_URL,
+    VALUE_FILE_NAME,
+    VALUE_TOKEN,
+    VALUE_LOG_LEVEL,
+} value_kind;
 
 #define FIELD(name) offsetof(skiff_config, name), sizeof(((skiff_config *)NULL)->name)
 
@@ -40,7 +48,7 @@ typedef struct known_key {
     const char *section;
     const char *key;
     value_kind kind;
-    /* Where the value goes in skiff_config; unused for the version. */
+    /* Where the value goes in skiff_config; unused for the version and the log level. */
     size_t offset;
     size_t size;
 } known_key;
@@ -53,6 +61,7 @@ static const known_key KNOWN_KEYS[] = {
     {SECTION_AUTH, KEY_TOKEN, VALUE_TOKEN, FIELD(token)},
     {SECTION_MTLS, KEY_CERT_FILE, VALUE_FILE_NAME, FIELD(cert_file)},
     {SECTION_MTLS, KEY_KEY_FILE, VALUE_FILE_NAME, FIELD(key_file)},
+    {SECTION_LOG, KEY_LEVEL, VALUE_LOG_LEVEL, 0, 0},
 };
 // clang-format on
 
@@ -217,9 +226,22 @@ static int parse_version(span value) {
     return errno == 0 && version == SKIFF_CONFIG_VERSION;
 }
 
+/* One of skiff_log_level_name()'s names; empty keeps the default. */
+static int parse_log_level(span value, skiff_log_level *out) {
+    char name[SKIFF_CONFIG_NAME_MAX];
+    if (value.length == 0) {
+        *out = SKIFF_CONFIG_DEFAULT_LOG_LEVEL;
+        return 1;
+    }
+    return copy_whole(value, name, sizeof name) && skiff_log_level_from_name(name, out) == SKIFF_OK;
+}
+
 static int store_value(const known_key *known, span value, skiff_config *config) {
     if (known->kind == VALUE_VERSION) {
         return parse_version(value);
+    }
+    if (known->kind == VALUE_LOG_LEVEL) {
+        return parse_log_level(value, &config->log_level);
     }
     char *field = (char *)config + known->offset;
     if (!copy_whole(value, field, known->size)) {
@@ -236,6 +258,7 @@ static int store_value(const known_key *known, span value, skiff_config *config)
     case VALUE_FILE_NAME:
         return is_plain_file_name(value);
     case VALUE_VERSION:
+    case VALUE_LOG_LEVEL:
         break;
     }
     return 0;
@@ -348,6 +371,12 @@ static skiff_err check_mtls_pair(parser *p) {
     return fail(p, SKIFF_ERR_CONFIG_MISSING_KEY, span_of(has_cert ? KEY_KEY_FILE : KEY_CERT_FILE));
 }
 
+/* An empty config: every setting unset, the log at its default level. */
+static void reset(skiff_config *config) {
+    memset(config, 0, sizeof *config);
+    config->log_level = SKIFF_CONFIG_DEFAULT_LOG_LEVEL;
+}
+
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,
                              skiff_config_issue *issue) {
     if (issue != NULL) {
@@ -356,7 +385,7 @@ skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,
     if (out == NULL || (text == NULL && length > 0)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    memset(out, 0, sizeof *out);
+    reset(out);
     parser p = {out, issue, {"", 0}, 0, 0};
     if (length > SKIFF_CONFIG_TEXT_MAX || (length > 0 && memchr(text, '\0', length) != NULL)) {
         return fail(&p, SKIFF_ERR_CONFIG_PARSE, (span){"", 0});
@@ -375,7 +404,7 @@ skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,
         err = check_mtls_pair(&p);
     }
     if (err != SKIFF_OK) {
-        memset(out, 0, sizeof *out);
+        reset(out);
     }
     return err;
 }

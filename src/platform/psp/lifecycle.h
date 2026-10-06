@@ -11,7 +11,7 @@
  * Auto Sleep setting, and rare enough to cost nothing when called for every chunk. */
 #define SKIFF_PSP_KEEP_AWAKE_INTERVAL_US (5LL * 1000 * 1000)
 
-/* Registers the exit and power callbacks. */
+/* Registers the exit and power callbacks, and returns once they are (or after 100 ms). */
 void skiff_psp_install_callbacks(void);
 
 int skiff_psp_exit_requested(void);

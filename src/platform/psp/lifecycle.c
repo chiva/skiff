@@ -9,6 +9,10 @@ enum {
     /* scePowerRegisterCallback(): any free slot, else the first one, as pspsdk's samples use. */
     POWER_SLOT_ANY = -1,
     POWER_SLOT_FIRST = 0,
+    /* How long installing waits for the callback thread to register (it normally runs at once,
+     * its priority being higher than the main thread's). */
+    REGISTRATION_POLL_US = 1000,
+    REGISTRATION_POLLS = 100,
 };
 
 static volatile int exit_requested = 0;
@@ -16,6 +20,7 @@ static volatile int suspends = 0;
 static volatile int resumes = 0;
 static volatile int last_power_info = 0;
 static volatile int power_registration = -1;
+static volatile int callbacks_registered = 0;
 static long long last_tick_us = 0;
 
 static int on_exit_requested(int arg1, int arg2, void *common) {
@@ -51,6 +56,7 @@ static int callback_thread(SceSize args, void *argp) {
         slot = scePowerRegisterCallback(POWER_SLOT_FIRST, power_callback);
     }
     power_registration = slot;
+    callbacks_registered = 1;
     sceKernelSleepThreadCB();
     return 0;
 }
@@ -59,8 +65,12 @@ void skiff_psp_install_callbacks(void) {
     SceUID thread_id =
         sceKernelCreateThread("skiff_callbacks", callback_thread, CALLBACK_THREAD_PRIORITY,
                               CALLBACK_THREAD_STACK_BYTES, 0, NULL);
-    if (thread_id >= 0) {
-        sceKernelStartThread(thread_id, 0, NULL);
+    if (thread_id < 0 || sceKernelStartThread(thread_id, 0, NULL) < 0) {
+        return;
+    }
+    /* So skiff_psp_power_events_now() reports the registration, not its initial value. */
+    for (int poll = 0; poll < REGISTRATION_POLLS && !callbacks_registered; poll++) {
+        sceKernelDelayThread(REGISTRATION_POLL_US);
     }
 }
 

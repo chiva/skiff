@@ -567,7 +567,11 @@ static int run_leftover(probe *p) {
     watch_init(&w, p, NULL);
     memset(&o, 0, sizeof o);
     download(p, &w, &o);
-    return report_scenario(p, "relaunch", resumed_with_206(&o), &w, &o,
+    /* An earlier run that got every byte but quit before the rename is finished without a request.
+     */
+    const int finished_locally =
+        o.complete && o.resumed_from == p->config.size && o.last_status == 0;
+    return report_scenario(p, "relaunch", resumed_with_206(&o) || finished_locally, &w, &o,
                            "(resumed across launches)");
 }
 

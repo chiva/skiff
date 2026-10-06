@@ -16,8 +16,9 @@
  *     its shortest: keep-awake (scePowerTick) must stop the PSP from sleeping;
  *   - speed (only when named, about 15 minutes, no player needed): where a download's time goes.
  *     The Memory Stick alone (the file's size in 128 KB writes, from a 64-byte-aligned buffer and
- *     from one 8 bytes off, as malloc() returns), the network alone (no writes, without and with
- *     the stop and progress hooks), then whole downloads as the engine writes them and with every
+ *     from one 8 bytes off, as malloc() returns; then 16 MiB at a download's pace, one write every
+ *     300 ms, so the Memory Stick idles between writes), the network alone (no writes, without and
+ * with the stop and progress hooks), then whole downloads as the engine writes them and with every
  *     write copied to an aligned buffer first. Each line carries the signal and channel.
  *
  * A download left unfinished by an earlier run (HOME > Quit, a power-off) is resumed first, which
@@ -99,6 +100,8 @@ enum {
     MS_ALIGNMENT = 64,
     MALLOC_ALIGNMENT = 8,
     SPEED_PARTS = 4,
+    /* The paced Memory Stick test writes this much, one block per SPEED_PACE_US. */
+    SPEED_PACED_BYTES = 16 * 1024 * 1024,
 };
 
 #define US_PER_S (1000LL * 1000)
@@ -109,6 +112,8 @@ enum {
 #define STATUS_INTERVAL_US (500LL * 1000)
 #define WAIT_POLL_US (200LL * 1000)
 #define STORAGE_PATCH "resume"
+/* How often a download at about 430 KB/s fills a 128 KB write. */
+#define SPEED_PACE_US (300LL * 1000)
 
 /* Why the stop hook ended an attempt. */
 typedef enum stop_reason {
@@ -844,13 +849,16 @@ static int run_sleep(probe *p) {
 /* ---- speed: where a download's time goes ---- */
 
 /*
- * The Memory Stick alone: the seeded file's size written in the download's blocks from data,
- * synced at every checkpoint as the download does, with the write time of each quarter of the file.
+ * The Memory Stick alone: size bytes written in the download's blocks from data, synced at every
+ * checkpoint as the download does, with the write time of each quarter of the file. With pace_us,
+ * one block per pace_us, as a download delivers them, so the Memory Stick idles in between.
  */
-static int speed_memory_stick(probe *p, const char *name, const unsigned char *data) {
-    const uint64_t size = p->config.size;
+static int speed_memory_stick(probe *p, const char *name, const unsigned char *data, uint64_t size,
+                              long long pace_us) {
     long long part_us[SPEED_PARTS] = {0};
     long long sync_us = 0;
+    long long longest_write_us = 0;
+    int writes = 0;
     skiff_file *file = NULL;
     const long long start = now_us();
     skiff_err err = skiff_storage_open(p->psp_storage, p->target, SKIFF_FILE_REPLACE, 0, &file);
@@ -858,9 +866,15 @@ static int speed_memory_stick(probe *p, const char *name, const unsigned char *d
     while (err == SKIFF_OK && written < size) {
         const size_t take =
             size - written < SPEED_BLOCK_BYTES ? (size_t)(size - written) : SPEED_BLOCK_BYTES;
+        if (pace_us > 0 && written > 0) {
+            sceKernelDelayThread((SceUInt)pace_us);
+        }
         const long long write_start = now_us();
         err = skiff_file_write(file, data, take);
-        part_us[written * SPEED_PARTS / size] += now_us() - write_start;
+        const long long write_us = now_us() - write_start;
+        part_us[written * SPEED_PARTS / size] += write_us;
+        longest_write_us = write_us > longest_write_us ? write_us : longest_write_us;
+        writes++;
         written += take;
         if (err == SKIFF_OK && written % SKIFF_DOWNLOAD_CHECKPOINT_BYTES == 0) {
             const long long sync_start = now_us();
@@ -878,12 +892,16 @@ static int speed_memory_stick(probe *p, const char *name, const unsigned char *d
     skiff_probe_describe_environment(1, environment, sizeof environment);
     char text[LONG_LINE_MAX];
     snprintf(text, sizeof text,
-             "speed=%s ok=%d err=%s bytes=%llu total_ms=%lld kb_s=%llu sync_ms=%lld "
+             "speed=%s ok=%d err=%s bytes=%llu pace_ms=%lld writes=%d mean_write_ms=%lld "
+             "longest_write_ms=%lld total_ms=%lld kb_s=%llu sync_ms=%lld "
              "quarters_write_ms=%lld/%lld/%lld/%lld %s",
              name, err == SKIFF_OK, skiff_err_name(err), (unsigned long long)written,
-             elapsed_us / US_PER_MS, skiff_probe_kb_per_s(written, elapsed_us), sync_us / US_PER_MS,
-             part_us[0] / US_PER_MS, part_us[1] / US_PER_MS, part_us[2] / US_PER_MS,
-             part_us[3] / US_PER_MS, environment);
+             pace_us / US_PER_MS, writes,
+             writes > 0 ? (part_us[0] + part_us[1] + part_us[2] + part_us[3]) / writes / US_PER_MS
+                        : 0,
+             longest_write_us / US_PER_MS, elapsed_us / US_PER_MS,
+             skiff_probe_kb_per_s(written, elapsed_us), sync_us / US_PER_MS, part_us[0] / US_PER_MS,
+             part_us[1] / US_PER_MS, part_us[2] / US_PER_MS, part_us[3] / US_PER_MS, environment);
     report_check(p, err == SKIFF_OK, text);
     return append_log(p, text) && err == SKIFF_OK;
 }
@@ -974,8 +992,10 @@ static int run_speed(probe *p) {
              (unsigned)((uintptr_t)like_the_engine % MS_ALIGNMENT), MS_ALIGNMENT);
     report_line(p, text);
     free(like_the_engine);
-    int ok = speed_memory_stick(p, "ms-aligned", area);
-    ok &= speed_memory_stick(p, "ms-unaligned", area + MALLOC_ALIGNMENT);
+    int ok = speed_memory_stick(p, "ms-aligned", area, p->config.size, 0);
+    ok &= speed_memory_stick(p, "ms-unaligned", area + MALLOC_ALIGNMENT, p->config.size, 0);
+    ok &= speed_memory_stick(p, "ms-paced", area + MALLOC_ALIGNMENT, SPEED_PACED_BYTES,
+                             SPEED_PACE_US);
     ok &= speed_network(p, "network", 0);
     ok &= speed_network(p, "network-hooks", 1);
     ok &= speed_download(p, "download", NULL);

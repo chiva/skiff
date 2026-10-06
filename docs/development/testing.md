@@ -348,7 +348,8 @@ picks them (default `all`, every one but speed):
   download's time goes, each part measured alone in one session. First the Memory Stick alone: the
   file's size in the download's 128 KB writes, synced every 4 MiB, from a 64-byte-aligned buffer
   and from one 8 bytes off (where `malloc()` puts blocks; the probe logs where it put one), with
-  the write time of each quarter of the file. Then the network alone, computing the CRC-32 and
+  the write time of each quarter of the file, then 16 MiB at a download's pace (one write every
+  300 ms, the Memory Stick idle in between). Then the network alone, computing the CRC-32 and
   writing nothing, without and then with the download's stop and progress hooks. Last, two whole
   downloads: as the engine writes them, and with every write copied to an aligned buffer first.
   Each line ends with the clock, power, signal and channel.

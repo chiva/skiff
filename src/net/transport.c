@@ -21,9 +21,10 @@ static int starts_with_ignoring_case(const char *text, const char *prefix) {
     return 1;
 }
 
-/* Only an explicit http:// or https://: curl guesses a scheme for anything else, falling back to
- * plain HTTP, which would send the token and custom headers in the clear. */
-static int has_allowed_scheme(const char *url) {
+int skiff_http_url_scheme_valid(const char *url) {
+    if (url == NULL) {
+        return 0;
+    }
     for (size_t i = 0; i < sizeof ALLOWED_SCHEMES / sizeof ALLOWED_SCHEMES[0]; i++) {
         if (starts_with_ignoring_case(url, ALLOWED_SCHEMES[i])) {
             return 1;
@@ -81,7 +82,7 @@ skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_r
         !range_is_valid(request)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    if (!has_allowed_scheme(request->url)) {
+    if (!skiff_http_url_scheme_valid(request->url)) {
         return SKIFF_ERR_CONFIG_INVALID_VALUE;
     }
     return transport->ops->perform(transport, request, response);

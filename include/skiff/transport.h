@@ -75,6 +75,13 @@ struct skiff_transport {
 int skiff_http_headers_valid(const skiff_http_header *headers, size_t count);
 
 /*
+ * 1 if url starts with an explicit http:// or https:// (any case), 0 otherwise or for NULL. curl
+ * guesses a scheme for anything else, falling back to plain HTTP, which would send the token and
+ * custom headers in the clear; config.ini's server address is held to the same rule.
+ */
+int skiff_http_url_scheme_valid(const char *url);
+
+/*
  * Sends request and fills response. An HTTP response of any status is SKIFF_OK with
  * response->status set; map it with skiff_http_status_error(). Otherwise returns the network
  * failure (1xx codes), the body callback's or the stop hook's error, or SKIFF_ERR_INVALID_ARG for

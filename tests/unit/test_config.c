@@ -598,9 +598,12 @@ static void test_a_save_cut_before_the_last_rename_is_finished_by_load(void) {
     TEST_ASSERT_FALSE(file_exists(path));
     TEST_ASSERT_TRUE(file_exists(new_path));
     storage.rename_error = SKIFF_OK;
+    const int syncs = storage.syncs;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
     TEST_ASSERT_FALSE(file_exists(new_path));
+    TEST_PRINTF("the recovery rename is synced to the device too");
+    TEST_ASSERT_EQUAL_INT(syncs + 1, storage.syncs);
 }
 
 static void test_config_ini_stays_until_the_new_name_is_flushed(void) {

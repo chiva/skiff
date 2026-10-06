@@ -608,6 +608,20 @@ static skiff_err read_all(skiff_storage *storage, const char *path, char *text, 
     return SKIFF_OK;
 }
 
+/* Makes a rename or remove durable before the next step relies on it. The PSP flushes a whole
+ * device on any file's sync (sceIoSync), directory entries included, so syncing the file a rename
+ * produced commits the rename. */
+static skiff_err flush_device(skiff_storage *storage, const char *path) {
+    skiff_file *file = NULL;
+    skiff_err err = skiff_storage_open(storage, path, SKIFF_FILE_READ, 0, &file);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    err = skiff_file_sync(file);
+    const skiff_err close_err = skiff_file_close(file);
+    return err != SKIFF_OK ? err : close_err;
+}
+
 /*
  * Finishes or undoes a save cut short, so config.ini is the newest complete settings. A draft is
  * dropped (it may be cut short). A pending file is complete: without config.ini the save was cut
@@ -624,8 +638,11 @@ static skiff_err recover(skiff_storage *storage, const char *path, const save_pa
         if (pending_err == SKIFF_ERR_STORAGE_NOT_FOUND) {
             return SKIFF_OK;
         }
-        return pending_err == SKIFF_OK ? skiff_storage_rename(storage, paths->pending, path)
-                                       : pending_err;
+        if (pending_err != SKIFF_OK) {
+            return pending_err;
+        }
+        const skiff_err rename_err = skiff_storage_rename(storage, paths->pending, path);
+        return rename_err == SKIFF_OK ? flush_device(storage, path) : rename_err;
     }
     if (err == SKIFF_OK && pending_err != SKIFF_ERR_STORAGE_NOT_FOUND) {
         (void)skiff_storage_remove(storage, paths->pending);
@@ -666,20 +683,6 @@ static skiff_err write_synced(skiff_storage *storage, const char *path, const ch
     if (err == SKIFF_OK) {
         err = skiff_file_sync(file);
     }
-    const skiff_err close_err = skiff_file_close(file);
-    return err != SKIFF_OK ? err : close_err;
-}
-
-/* Makes a rename or remove durable before the next step relies on it. The PSP flushes a whole
- * device on any file's sync (sceIoSync), directory entries included, so syncing the file a rename
- * produced commits the rename. */
-static skiff_err flush_device(skiff_storage *storage, const char *path) {
-    skiff_file *file = NULL;
-    skiff_err err = skiff_storage_open(storage, path, SKIFF_FILE_READ, 0, &file);
-    if (err != SKIFF_OK) {
-        return err;
-    }
-    err = skiff_file_sync(file);
     const skiff_err close_err = skiff_file_close(file);
     return err != SKIFF_OK ? err : close_err;
 }

@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,13 +28,8 @@ static uint32_t crc32_of(const char *text, size_t length) {
     return (uint32_t)crc32(0L, (const Bytef *)text, (uInt)length);
 }
 
-/* Appends one formatted line at out + *used; 0 when it does not fit. */
-__attribute__((format(printf, 4, 5))) static int
-append_line(char *out, size_t out_size, size_t *used, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    const int written = vsnprintf(out + *used, out_size - *used, format, args);
-    va_end(args);
+/* Counts what snprintf() wrote at out + *used; 0 when it did not fit. */
+static int advance(size_t out_size, size_t *used, int written) {
     if (written < 0 || (size_t)written >= out_size - *used) {
         return 0;
     }
@@ -55,16 +49,27 @@ skiff_err skiff_download_state_format(const skiff_download_state *state, char *o
         snprintf(expected, sizeof expected, "%08lx", (unsigned long)state->expected_crc32);
     }
     size_t used = 0;
-    const int fits =
-        append_line(out, out_size, &used, "%s=%d\n", KEY_VERSION, SKIFF_DOWNLOAD_STATE_VERSION) &&
-        append_line(out, out_size, &used, "%s=%llu\n", KEY_SIZE, (unsigned long long)state->size) &&
-        append_line(out, out_size, &used, "%s=%s\n", KEY_EXPECTED_CRC32, expected) &&
-        append_line(out, out_size, &used, "%s=%s\n", KEY_ETAG, state->etag) &&
-        append_line(out, out_size, &used, "%s=%llu\n", KEY_OFFSET,
-                    (unsigned long long)state->offset) &&
-        append_line(out, out_size, &used, LINE_FORMAT_HEX, KEY_CRC32, (unsigned long)state->crc32);
-    if (!fits || !append_line(out, out_size, &used, LINE_FORMAT_HEX, KEY_CHECK,
-                              (unsigned long)crc32_of(out, used))) {
+    int fits =
+        advance(out_size, &used,
+                snprintf(out, out_size, "%s=%d\n", KEY_VERSION, SKIFF_DOWNLOAD_STATE_VERSION));
+    fits = fits && advance(out_size, &used,
+                           snprintf(out + used, out_size - used, "%s=%llu\n", KEY_SIZE,
+                                    (unsigned long long)state->size));
+    fits = fits &&
+           advance(out_size, &used,
+                   snprintf(out + used, out_size - used, "%s=%s\n", KEY_EXPECTED_CRC32, expected));
+    fits = fits && advance(out_size, &used,
+                           snprintf(out + used, out_size - used, "%s=%s\n", KEY_ETAG, state->etag));
+    fits = fits && advance(out_size, &used,
+                           snprintf(out + used, out_size - used, "%s=%llu\n", KEY_OFFSET,
+                                    (unsigned long long)state->offset));
+    fits = fits && advance(out_size, &used,
+                           snprintf(out + used, out_size - used, LINE_FORMAT_HEX, KEY_CRC32,
+                                    (unsigned long)state->crc32));
+    fits = fits && advance(out_size, &used,
+                           snprintf(out + used, out_size - used, LINE_FORMAT_HEX, KEY_CHECK,
+                                    (unsigned long)crc32_of(out, used)));
+    if (!fits) {
         return SKIFF_ERR_BUFFER_TOO_SMALL;
     }
     *length = used;
@@ -126,7 +131,8 @@ static int parse_lines(char *text, skiff_download_state *state) {
         !parse_decimal(values[LINE_SIZE], &state->size) ||
         !parse_decimal(values[LINE_OFFSET], &state->offset) ||
         !parse_hex32(values[LINE_CRC32], &state->crc32) ||
-        strlen(values[LINE_ETAG]) >= sizeof state->etag || state->offset > state->size) {
+        strlen(values[LINE_ETAG]) >= sizeof state->etag ||
+        strpbrk(values[LINE_ETAG], "\r") != NULL || state->offset > state->size) {
         return 0;
     }
     state->has_expected_crc32 = values[LINE_EXPECTED_CRC32][0] != '\0';

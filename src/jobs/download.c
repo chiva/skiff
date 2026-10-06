@@ -103,7 +103,8 @@ static skiff_err checkpoint(download *d) {
     return save_state(d);
 }
 
-/* A durable state whose .part file still holds at least its offset, for the same file. */
+/* A durable state for the same file, whose .part file holds at least its offset and no more than
+ * the whole file (bytes past the offset are rewritten; bytes past the end would survive). */
 static int state_usable(const download *d, const skiff_download_state *state) {
     uint64_t part_size = 0;
     return state->size == d->spec->expected_size &&
@@ -111,7 +112,7 @@ static int state_usable(const download *d, const skiff_download_state *state) {
            (!state->has_expected_crc32 || state->expected_crc32 == d->spec->expected_crc32) &&
            is_strong_etag(state->etag) &&
            skiff_storage_size(d->storage, d->part_path, &part_size) == SKIFF_OK &&
-           part_size >= state->offset;
+           part_size >= state->offset && part_size <= state->size;
 }
 
 /* The saved progress, or a fresh start (and no stale files) when there is none to trust. Only a
@@ -241,14 +242,26 @@ static skiff_err close_part(download *d, int save) {
     return err != SKIFF_OK ? err : closed;
 }
 
+/* Drops the progress and returns `reason`, or the Memory Stick's error if it could not. */
+static skiff_err discard_with(download *d, skiff_err reason) {
+    const skiff_err err = skiff_download_discard(d->storage, d->spec->target_path);
+    return err != SKIFF_OK ? err : reason;
+}
+
 /* Every byte is in: check it, and put it under the final name. */
 static skiff_err finish(download *d) {
-    if (d->spec->has_expected_crc32 && d->state.crc32 != d->spec->expected_crc32) {
-        const skiff_err err = remove_if_present(d->storage, d->part_path);
-        remove_if_present(d->storage, d->state_path);
-        return err != SKIFF_OK ? err : SKIFF_ERR_ROMM_CHECKSUM;
+    uint64_t part_size = 0;
+    skiff_err err = skiff_storage_size(d->storage, d->part_path, &part_size);
+    if (err != SKIFF_OK) {
+        return err;
     }
-    skiff_err err = remove_if_present(d->storage, d->spec->target_path);
+    if (part_size != d->spec->expected_size) {
+        return discard_with(d, SKIFF_ERR_STORAGE_IO);
+    }
+    if (d->spec->has_expected_crc32 && d->state.crc32 != d->spec->expected_crc32) {
+        return discard_with(d, SKIFF_ERR_ROMM_CHECKSUM);
+    }
+    err = remove_if_present(d->storage, d->spec->target_path);
     if (err == SKIFF_OK) {
         err = skiff_storage_rename(d->storage, d->part_path, d->spec->target_path);
     }
@@ -264,6 +277,10 @@ static skiff_err finish(download *d) {
 /* After the transfer: what the response and the bytes that came mean for the file. */
 static skiff_err conclude(download *d, skiff_err err) {
     const skiff_http_response *response = &d->result->response;
+    /* A range the server no longer has, with or without an error page: the progress is useless. */
+    if (d->part == NULL && response->status == HTTP_STATUS_RANGE_NOT_SATISFIABLE) {
+        return discard_with(d, SKIFF_ERR_ROMM_BAD_RESPONSE);
+    }
     if (d->part != NULL) {
         const int whole = err == SKIFF_OK && d->received == d->spec->expected_size;
         const skiff_err closed = close_part(d, 1);
@@ -275,11 +292,7 @@ static skiff_err conclude(download *d, skiff_err err) {
     if (err != SKIFF_OK || d->refused) {
         return err;
     }
-    /* No body at all: an empty error page, or a range the server no longer has. */
-    if (response->status == HTTP_STATUS_RANGE_NOT_SATISFIABLE) {
-        skiff_download_discard(d->storage, d->spec->target_path);
-        return SKIFF_ERR_ROMM_BAD_RESPONSE;
-    }
+    /* No body at all: an empty error page. */
     const skiff_err status_err = skiff_http_status_error(response->status);
     return status_err != SKIFF_OK ? status_err : SKIFF_ERR_ROMM_BAD_RESPONSE;
 }

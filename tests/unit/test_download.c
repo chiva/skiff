@@ -436,6 +436,31 @@ static void test_range_no_longer_satisfiable_discards_the_progress(void) {
     TEST_ASSERT_FALSE(exists(state_file));
 }
 
+static void test_range_no_longer_satisfiable_with_an_error_page_discards_too(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          resume_answered_with("HTTP/1.1 416 Range Not Satisfiable\r\n"
+                                               "Content-Length: 9\r\n\r\nNo range."));
+    TEST_ASSERT_FALSE_MESSAGE(exists(part), "the next attempt must not ask for that range again");
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
+static void test_part_longer_than_the_file_is_never_finished(void) {
+    fake_route *route = serve(ETAG);
+    route->fail_after_bytes = BODY_BYTES;
+    route->fail_mid_body = SKIFF_ERR_NET_CONNECTION_LOST;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECTION_LOST, attempt());
+    route->fail_mid_body = SKIFF_OK;
+    assert_durable_prefix(BODY_BYTES);
+    skiff_file *file = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_open(posix, part, SKIFF_FILE_WRITE_AT, BODY_BYTES, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_write(file, "stale", 5));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_FALSE_MESSAGE(last_request()->has_range, "an oversized .part starts over");
+    assert_complete();
+}
+
 static void test_complete_part_is_finished_without_a_request(void) {
     fake_route *route = serve(ETAG);
     route->fail_after_bytes = BODY_BYTES;
@@ -688,6 +713,8 @@ int main(void) {
     RUN_TEST(test_partial_response_with_another_total_is_refused);
     RUN_TEST(test_unasked_partial_response_is_refused);
     RUN_TEST(test_range_no_longer_satisfiable_discards_the_progress);
+    RUN_TEST(test_range_no_longer_satisfiable_with_an_error_page_discards_too);
+    RUN_TEST(test_part_longer_than_the_file_is_never_finished);
     RUN_TEST(test_complete_part_is_finished_without_a_request);
     RUN_TEST(test_failed_rename_is_finished_by_the_next_attempt);
     RUN_TEST(test_body_ending_early_without_an_error_is_a_lost_connection);

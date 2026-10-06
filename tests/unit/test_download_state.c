@@ -167,6 +167,9 @@ static void test_values_are_checked_even_with_a_valid_check(void) {
         "short expected CRC");
     expect_refused_with_valid_check(
         "version=1\nsize=10\ncrc32_expected=\netag=\noffset=5\ncrc32=0000000g\n", "CRC not hex");
+    expect_refused_with_valid_check(
+        "version=1\nsize=10\ncrc32_expected=\netag=\"e\"\r\noffset=5\ncrc32=00000001\n",
+        "CR in the ETag (the transport would refuse it as If-Range)");
 }
 
 static void test_format_refuses_what_it_cannot_write(void) {

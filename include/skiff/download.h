@@ -120,6 +120,8 @@ typedef struct skiff_download_result {
  *   - SKIFF_ERR_NET_CONNECTION_LOST: the body ended early without a transport error;
  *   - SKIFF_ERR_ROMM_CHECKSUM: the whole file arrived but its CRC-32 is not the expected one; the
  *     .part file and the progress are deleted, so the next attempt starts over;
+ *   - SKIFF_ERR_STORAGE_IO also when the finished .part file is not exactly the expected size; it
+ * is deleted with the progress, so the next attempt starts over;
  *   - a storage error (3xx) from the Memory Stick.
  */
 skiff_err skiff_download_attempt(skiff_transport *transport, skiff_storage *storage,

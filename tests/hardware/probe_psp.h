@@ -22,6 +22,8 @@ enum {
     SKIFF_PROBE_TLS_NAME_MAX = 64,
     /* Request and run-log lines carry labels, curl's message and TLS names: longer than a check. */
     SKIFF_PROBE_LONG_LINE_MAX = 512,
+    /* skiff_probe_describe_environment(): clock, power, and the access point once joined. */
+    SKIFF_PROBE_ENVIRONMENT_MAX = 160,
 };
 
 typedef struct skiff_probe_memory {
@@ -34,6 +36,12 @@ skiff_probe_memory skiff_probe_memory_now(void);
 
 void skiff_probe_report_memory(skiff_psp_report *report, const char *label,
                                const skiff_probe_memory *memory);
+
+/*
+ * What can change a speed between runs, as key=value pairs: CPU and bus clock, AC power, the WLAN
+ * Power Save setting, and, when joined, the signal, channel, security and power save in use.
+ */
+void skiff_probe_describe_environment(int joined, char *out, size_t out_size);
 
 /* "ok   <text>" or "FAIL <text>". */
 void skiff_probe_report_check(skiff_psp_report *report, int ok, const char *text);

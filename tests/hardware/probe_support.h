@@ -46,7 +46,8 @@ typedef enum skiff_probe_section {
 } skiff_probe_section;
 
 /* The interruptions the resume probe stages, chosen with "scenarios=" (comma-separated names, or
- * "all"). */
+ * "all" for every interruption). "speed" is chosen on its own: it needs no player but takes about
+ * 15 minutes. */
 typedef enum skiff_probe_scenario {
     /* The probe stops the download itself, then resumes it on a new connection. */
     SKIFF_PROBE_SCENARIO_RESTART = 1U << 0,
@@ -55,6 +56,9 @@ typedef enum skiff_probe_scenario {
     SKIFF_PROBE_SCENARIO_HOME = 1U << 3,
     SKIFF_PROBE_SCENARIO_SLEEP = 1U << 4,
     SKIFF_PROBE_SCENARIO_ALL = (1U << 5) - 1,
+    /* Where a download's time goes: the Memory Stick alone, the network alone, the whole download.
+     */
+    SKIFF_PROBE_SCENARIO_SPEED = 1U << 5,
 } skiff_probe_scenario;
 
 typedef struct skiff_probe_config {

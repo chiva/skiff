@@ -2,9 +2,12 @@
 
 #include <malloc.h>
 #include <mbedtls/ssl.h>
+#include <pspnet_apctl.h>
 #include <psppower.h>
 #include <pspsysmem.h>
+#include <psputility.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "skiff/selftest.h"
 
@@ -25,6 +28,34 @@ void skiff_probe_report_memory(skiff_psp_report *report, const char *label,
              (unsigned)(memory->system_free / BYTES_PER_KB),
              (unsigned)(memory->system_largest / BYTES_PER_KB));
     skiff_psp_report_line(report, line);
+}
+
+static int apctl_info(int code, SceNetApctlInfo *info) {
+    memset(info, 0, sizeof *info);
+    return sceNetApctlGetInfo(code, info) >= 0;
+}
+
+void skiff_probe_describe_environment(int joined, char *out, size_t out_size) {
+    int wlan_power_save = -1;
+    if (sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_WLAN_POWERSAVE, &wlan_power_save) < 0) {
+        wlan_power_save = -1;
+    }
+    int written = snprintf(out, out_size, "cpu=%d bus=%d ac=%d wlan_ps_setting=%d",
+                           scePowerGetCpuClockFrequency(), scePowerGetBusClockFrequency(),
+                           scePowerIsPowerOnline(), wlan_power_save);
+    if (!joined || written < 0 || (size_t)written >= out_size) {
+        return;
+    }
+    SceNetApctlInfo strength;
+    SceNetApctlInfo channel;
+    SceNetApctlInfo security;
+    SceNetApctlInfo power_save;
+    snprintf(
+        out + written, out_size - (size_t)written, " signal=%d channel=%d security=%d wlan_ps=%d",
+        apctl_info(PSP_NET_APCTL_INFO_STRENGTH, &strength) ? (int)strength.strength : -1,
+        apctl_info(PSP_NET_APCTL_INFO_CHANNEL, &channel) ? (int)channel.channel : -1,
+        apctl_info(PSP_NET_APCTL_INFO_SECURITY_TYPE, &security) ? (int)security.securityType : -1,
+        apctl_info(PSP_NET_APCTL_INFO_POWER_SAVE, &power_save) ? (int)power_save.powerSave : -1);
 }
 
 void skiff_probe_report_check(skiff_psp_report *report, int ok, const char *text) {

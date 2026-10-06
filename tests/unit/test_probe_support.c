@@ -110,6 +110,15 @@ static void test_reads_scenarios_and_their_timings(void) {
     TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_ALL, config.scenarios);
 }
 
+static void test_speed_is_chosen_by_name_not_by_all(void) {
+    read_text("scenarios=speed\n");
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_SPEED, config.scenarios);
+    read_text("scenarios=all,speed\n");
+    TEST_ASSERT_EQUAL_UINT(SKIFF_PROBE_SCENARIO_ALL | SKIFF_PROBE_SCENARIO_SPEED, config.scenarios);
+    read_text("scenarios=all\n");
+    TEST_ASSERT_EQUAL_UINT(0, config.scenarios & SKIFF_PROBE_SCENARIO_SPEED);
+}
+
 static void test_unusable_scenarios_and_timings_keep_the_defaults(void) {
     read_text("scenarios=wifi,usb\nscenarios=\nwait_s=5\nwait_s=601\nawake_s=29\n"
               "awake_s=1801\nawake_s=long\n");
@@ -270,6 +279,7 @@ int main(void) {
     RUN_TEST(test_all_selects_every_section);
     RUN_TEST(test_resume_probe_defaults_run_every_scenario);
     RUN_TEST(test_reads_scenarios_and_their_timings);
+    RUN_TEST(test_speed_is_chosen_by_name_not_by_all);
     RUN_TEST(test_unusable_scenarios_and_timings_keep_the_defaults);
     RUN_TEST(test_plain_http_takes_only_0_or_1);
     RUN_TEST(test_reads_the_clock_and_its_section);

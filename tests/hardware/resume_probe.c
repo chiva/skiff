@@ -13,7 +13,13 @@
  *   - home: the player opens the HOME menu for a while; the probe logs the longest pause between
  *     chunks;
  *   - sleep: back-to-back downloads with no input for awake_s seconds while Auto Sleep is set to
- *     its shortest: keep-awake (scePowerTick) must stop the PSP from sleeping.
+ *     its shortest: keep-awake (scePowerTick) must stop the PSP from sleeping;
+ *   - speed (only when named, about 20 minutes, no player needed): where a download's time goes.
+ *     The Memory Stick alone: the file's size in 128 KB writes from a 64-byte-aligned buffer and
+ *     from one 8 bytes off (as malloc() returns), then 16 MiB at a download's pace, one write every
+ *     300 ms. The network alone: no writes, without and with the stop and progress hooks. Then
+ *     whole downloads: as the engine writes them, gathered into 1 MiB writes, and through a writer
+ *     thread. Each line carries the signal and channel.
  *
  * A download left unfinished by an earlier run (HOME > Quit, a power-off) is resumed first, which
  * tests the .resume file across launches. Recovery is the same for every interruption: wait for the
@@ -29,11 +35,14 @@
  * libcurl refuses to start, and ends with SKIFF RESUME PROBE NO ARK OK.
  */
 #include <curl/curl.h>
+#include <malloc.h>
 #include <pspkernel.h>
 #include <psppower.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 
 #include "skiff/curl_transport.h"
 #include "skiff/download.h"
@@ -70,6 +79,7 @@ enum {
     /* https://<host>:8443/api/roms/<id>/content/<URL-encoded file name> */
     CONTENT_URL_MAX = 320,
     HTTPS_PORT = 8443,
+    HTTP_STATUS_OK = 200,
     HTTP_STATUS_PARTIAL = 206,
     US_PER_MS = 1000,
     BYTES_PER_KB = 1024,
@@ -84,6 +94,21 @@ enum {
     STORAGE_BLOCK_BYTES = 64 * 1024,
     STORAGE_BLOCKS = 3,
     STORAGE_PATCH_OFFSET = 100000,
+    /* speed: the download's write size, the alignment the Memory Stick's DMA works in, what
+     * newlib's malloc() guarantees, and how many parts of the file writes are timed in. */
+    SPEED_BLOCK_BYTES = SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES,
+    MS_ALIGNMENT = 64,
+    MALLOC_ALIGNMENT = 8,
+    SPEED_PARTS = 4,
+    /* The paced Memory Stick test writes this much, one block per SPEED_PACE_US. */
+    SPEED_PACED_BYTES = 16 * 1024 * 1024,
+    /* WRITE_COALESCED gathers this much per write. */
+    SPEED_COALESCE_BYTES = 1024 * 1024,
+    /* WRITE_THREADED: two buffers (one filling, one writing), and a writer thread that runs ahead
+     * of the download's thread (the main thread is 0x20; lower numbers run first). */
+    WRITER_SLOTS = 2,
+    WRITER_PRIORITY = 0x18,
+    WRITER_STACK_BYTES = 0x4000,
 };
 
 #define US_PER_S (1000LL * 1000)
@@ -94,6 +119,8 @@ enum {
 #define STATUS_INTERVAL_US (500LL * 1000)
 #define WAIT_POLL_US (200LL * 1000)
 #define STORAGE_PATCH "resume"
+/* How often a download at about 430 KB/s fills a 128 KB write. */
+#define SPEED_PACE_US (300LL * 1000)
 
 /* Why the stop hook ended an attempt. */
 typedef enum stop_reason {
@@ -162,7 +189,7 @@ typedef struct outcome {
     int restarted;
     int complete;
     long long elapsed_us;
-    /* Bytes of the files downloaded, for the speed. */
+    /* Bytes received over every attempt, for the speed. */
     uint64_t bytes;
     const char *recovery;
     long long recovery_us;
@@ -193,19 +220,157 @@ typedef struct op_timing {
     long long max_us;
 } op_timing;
 
+/* How the speed scenario's downloads reach the Memory Stick; every other scenario writes directly.
+ */
+typedef enum write_mode {
+    /* Each write as the engine makes it (128 KB blocks), on the download's thread. */
+    WRITE_DIRECT,
+    /* Gathered into SPEED_COALESCE_BYTES per file before writing: fewer, larger writes. */
+    WRITE_COALESCED,
+    /* Handed to a writer thread through WRITER_SLOTS buffers, so the download keeps receiving
+     * while the Memory Stick writes; sync and close wait for the queue to empty. */
+    WRITE_THREADED,
+} write_mode;
+
 typedef struct timed_storage {
     skiff_storage base;
     skiff_storage *inner;
     op_timing ops[STORAGE_OPS];
+    write_mode mode;
 } timed_storage;
 
 typedef struct timed_file {
     skiff_file base;
     skiff_file *inner;
+    /* WRITE_COALESCED: bytes waiting to be written. */
+    unsigned char *pending;
+    size_t pending_used;
 } timed_file;
 
 /* One per probe, so the wrapper reaches it directly. */
 static timed_storage timed;
+
+/* WRITE_THREADED: the writer thread and its buffers. Writes leave in the order they were queued. */
+typedef struct writer {
+    SceUID thread;
+    SceUID free_slots;
+    SceUID filled_slots;
+    unsigned char *slots[WRITER_SLOTS];
+    size_t sizes[WRITER_SLOTS];
+    skiff_file *targets[WRITER_SLOTS];
+    int next_fill;
+    int next_write;
+    volatile int stopping;
+    /* The first failed write; later writes and every sync and close report it. */
+    volatile skiff_err error;
+    /* Time the writer thread spent in writes. */
+    long long write_us;
+    int writes;
+} writer;
+
+static writer background;
+
+static int writer_thread(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
+    for (;;) {
+        sceKernelWaitSema(background.filled_slots, 1, NULL);
+        if (background.stopping) {
+            break;
+        }
+        const int slot = background.next_write;
+        const long long start = sceKernelGetSystemTimeWide();
+        const skiff_err err = skiff_file_write(background.targets[slot], background.slots[slot],
+                                               background.sizes[slot]);
+        background.write_us += sceKernelGetSystemTimeWide() - start;
+        background.writes++;
+        if (err != SKIFF_OK && background.error == SKIFF_OK) {
+            background.error = err;
+        }
+        background.next_write = (slot + 1) % WRITER_SLOTS;
+        sceKernelSignalSema(background.free_slots, 1);
+    }
+    return 0;
+}
+
+static skiff_err writer_queue(skiff_file *target, const unsigned char *data, size_t size) {
+    while (size > 0 && background.error == SKIFF_OK) {
+        sceKernelWaitSema(background.free_slots, 1, NULL);
+        /* A write may have failed while this one waited: nothing after it reaches the file. */
+        if (background.error != SKIFF_OK) {
+            sceKernelSignalSema(background.free_slots, 1);
+            break;
+        }
+        const int slot = background.next_fill;
+        const size_t take = size < SPEED_BLOCK_BYTES ? size : SPEED_BLOCK_BYTES;
+        memcpy(background.slots[slot], data, take);
+        background.sizes[slot] = take;
+        background.targets[slot] = target;
+        background.next_fill = (slot + 1) % WRITER_SLOTS;
+        sceKernelSignalSema(background.filled_slots, 1);
+        data += take;
+        size -= take;
+    }
+    return background.error;
+}
+
+/* Waits until every queued write has reached the Memory Stick. */
+static skiff_err writer_drain(void) {
+    sceKernelWaitSema(background.free_slots, WRITER_SLOTS, NULL);
+    sceKernelSignalSema(background.free_slots, WRITER_SLOTS);
+    return background.error;
+}
+
+static void writer_forget(void) {
+    memset(&background, 0, sizeof background);
+    background.thread = -1;
+    background.free_slots = -1;
+    background.filled_slots = -1;
+}
+
+static void writer_stop(void) {
+    if (background.thread >= 0) {
+        writer_drain();
+        background.stopping = 1;
+        sceKernelSignalSema(background.filled_slots, 1);
+        sceKernelWaitThreadEnd(background.thread, NULL);
+        sceKernelDeleteThread(background.thread);
+    }
+    if (background.free_slots >= 0) {
+        sceKernelDeleteSema(background.free_slots);
+    }
+    if (background.filled_slots >= 0) {
+        sceKernelDeleteSema(background.filled_slots);
+    }
+    for (int i = 0; i < WRITER_SLOTS; i++) {
+        free(background.slots[i]);
+    }
+    writer_forget();
+}
+
+static int writer_start(void) {
+    writer_forget();
+    int ok = 1;
+    for (int i = 0; i < WRITER_SLOTS; i++) {
+        background.slots[i] = memalign(MS_ALIGNMENT, SPEED_BLOCK_BYTES);
+        ok &= background.slots[i] != NULL;
+    }
+    background.free_slots =
+        sceKernelCreateSema("skiff_writer_free", 0, WRITER_SLOTS, WRITER_SLOTS, NULL);
+    background.filled_slots = sceKernelCreateSema("skiff_writer_filled", 0, 0, WRITER_SLOTS, NULL);
+    background.thread = sceKernelCreateThread("skiff_writer", writer_thread, WRITER_PRIORITY,
+                                              WRITER_STACK_BYTES, 0, NULL);
+    ok &= background.free_slots >= 0 && background.filled_slots >= 0 && background.thread >= 0;
+    if (ok && sceKernelStartThread(background.thread, 0, NULL) < 0) {
+        sceKernelDeleteThread(background.thread);
+        background.thread = -1;
+        ok = 0;
+    }
+    if (!ok) {
+        writer_stop();
+    }
+    return ok;
+}
 
 static skiff_err timed_call(storage_op op, long long start_us, skiff_err err) {
     const long long elapsed_us = sceKernelGetSystemTimeWide() - start_us;
@@ -224,10 +389,18 @@ static skiff_err timed_open(skiff_storage *base, const char *path, skiff_file_mo
     if (file == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
+    if (timed.mode == WRITE_COALESCED && mode != SKIFF_FILE_READ) {
+        file->pending = memalign(MS_ALIGNMENT, SPEED_COALESCE_BYTES);
+        if (file->pending == NULL) {
+            free(file);
+            return SKIFF_ERR_NO_MEMORY;
+        }
+    }
     const long long start = sceKernelGetSystemTimeWide();
     const skiff_err err = timed_call(
         OP_OPEN, start, skiff_storage_open(timed.inner, path, mode, offset, &file->inner));
     if (err != SKIFF_OK) {
+        free(file->pending);
         free(file);
         return err;
     }
@@ -242,22 +415,66 @@ static skiff_err timed_read(skiff_file *base, void *buffer, size_t size, size_t 
                       skiff_file_read(((timed_file *)base)->inner, buffer, size, got));
 }
 
+static skiff_err flush_pending(timed_file *file) {
+    if (file->pending_used == 0) {
+        return SKIFF_OK;
+    }
+    const skiff_err err = skiff_file_write(file->inner, file->pending, file->pending_used);
+    file->pending_used = 0;
+    return err;
+}
+
+/* Everything written so far on its way to the Memory Stick: before a sync or a close. */
+static skiff_err settle(timed_file *file) {
+    if (file->pending != NULL) {
+        return flush_pending(file);
+    }
+    return timed.mode == WRITE_THREADED ? writer_drain() : SKIFF_OK;
+}
+
 static skiff_err timed_write(skiff_file *base, const void *data, size_t size) {
+    timed_file *file = (timed_file *)base;
     const long long start = sceKernelGetSystemTimeWide();
-    return timed_call(OP_WRITE, start, skiff_file_write(((timed_file *)base)->inner, data, size));
+    if (file->pending != NULL) {
+        const unsigned char *next = data;
+        skiff_err err = SKIFF_OK;
+        while (err == SKIFF_OK && size > 0) {
+            const size_t room = SPEED_COALESCE_BYTES - file->pending_used;
+            const size_t take = size < room ? size : room;
+            memcpy(file->pending + file->pending_used, next, take);
+            file->pending_used += take;
+            next += take;
+            size -= take;
+            if (file->pending_used == SPEED_COALESCE_BYTES) {
+                err = flush_pending(file);
+            }
+        }
+        return timed_call(OP_WRITE, start, err);
+    }
+    if (timed.mode == WRITE_THREADED) {
+        return timed_call(OP_WRITE, start, writer_queue(file->inner, data, size));
+    }
+    return timed_call(OP_WRITE, start, skiff_file_write(file->inner, data, size));
 }
 
 static skiff_err timed_sync(skiff_file *base) {
+    timed_file *file = (timed_file *)base;
     const long long start = sceKernelGetSystemTimeWide();
-    return timed_call(OP_SYNC, start, skiff_file_sync(((timed_file *)base)->inner));
+    skiff_err err = settle(file);
+    if (err == SKIFF_OK) {
+        err = skiff_file_sync(file->inner);
+    }
+    return timed_call(OP_SYNC, start, err);
 }
 
 static skiff_err timed_close(skiff_file *base) {
     timed_file *file = (timed_file *)base;
     const long long start = sceKernelGetSystemTimeWide();
-    const skiff_err err = timed_call(OP_CLOSE, start, skiff_file_close(file->inner));
+    const skiff_err settled = settle(file);
+    const skiff_err closed = skiff_file_close(file->inner);
+    free(file->pending);
     free(file);
-    return err;
+    return timed_call(OP_CLOSE, start, settled != SKIFF_OK ? settled : closed);
 }
 
 static skiff_err timed_size(skiff_storage *base, const char *path, uint64_t *out) {
@@ -403,9 +620,33 @@ static int check_storage(probe *p) {
     return ok;
 }
 
+/* The storage checks through each way the speed scenario writes, so CI runs the writer thread. */
+static int check_storage_modes(probe *p) {
+    static const write_mode MODES[] = {WRITE_DIRECT, WRITE_COALESCED, WRITE_THREADED};
+    static const char *const NAMES[] = {"direct", "gathered into 1 MiB", "writer thread"};
+    int ok = 1;
+    for (size_t i = 0; i < sizeof MODES / sizeof MODES[0]; i++) {
+        char text[SKIFF_SELFTEST_LINE_MAX];
+        snprintf(text, sizeof text, "storage: writes %s", NAMES[i]);
+        report_line(p, text);
+        if (MODES[i] == WRITE_THREADED && !writer_start()) {
+            report_check(p, 0, "storage: the writer thread did not start");
+            ok = 0;
+            continue;
+        }
+        timed.mode = MODES[i];
+        ok &= check_storage(p);
+        timed.mode = WRITE_DIRECT;
+        if (MODES[i] == WRITE_THREADED) {
+            writer_stop();
+        }
+    }
+    return ok;
+}
+
 static int run_without_ark(probe *p) {
     report_line(p, "no ARK: TLS cannot start; checking the PSP storage, then that TLS refuses");
-    int ok = check_storage(p);
+    int ok = check_storage_modes(p);
     const CURLcode curl_status = curl_global_init(CURL_GLOBAL_DEFAULT);
     char text[SKIFF_SELFTEST_LINE_MAX];
     snprintf(text, sizeof text, "curl_global_init() refuses without entropy: %d", (int)curl_status);
@@ -611,6 +852,7 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         err = skiff_download_attempt(p->transport, p->storage, &spec, &result);
         log_attempt(p, w, o, err, &result);
         o->resumed_from = result.resumed_from;
+        o->bytes += result.bytes_received;
         o->last_status = result.response.status;
         o->restarted |= result.restarted;
         o->complete = result.complete;
@@ -639,7 +881,6 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
         }
     }
     o->elapsed_us = now_us() - start;
-    o->bytes = p->config.size;
     return err;
 }
 
@@ -810,6 +1051,177 @@ static int run_sleep(probe *p) {
     return report_scenario(p, "sleep", all_complete && suspends == 0, &total_w, &total, text);
 }
 
+/* ---- speed: where a download's time goes ---- */
+
+/*
+ * The Memory Stick alone: size bytes written in the download's blocks from data, synced at every
+ * checkpoint as the download does, with the write time of each quarter of the file. With pace_us,
+ * one block per pace_us, as a download delivers them, so the Memory Stick idles in between.
+ */
+static int speed_memory_stick(probe *p, const char *name, const unsigned char *data, uint64_t size,
+                              long long pace_us) {
+    long long part_us[SPEED_PARTS] = {0};
+    long long sync_us = 0;
+    long long longest_write_us = 0;
+    int writes = 0;
+    skiff_file *file = NULL;
+    const long long start = now_us();
+    skiff_err err = skiff_storage_open(p->psp_storage, p->target, SKIFF_FILE_REPLACE, 0, &file);
+    uint64_t written = 0;
+    while (err == SKIFF_OK && written < size) {
+        const size_t take =
+            size - written < SPEED_BLOCK_BYTES ? (size_t)(size - written) : SPEED_BLOCK_BYTES;
+        if (pace_us > 0 && written > 0) {
+            sceKernelDelayThread((SceUInt)pace_us);
+        }
+        const long long write_start = now_us();
+        err = skiff_file_write(file, data, take);
+        const long long write_us = now_us() - write_start;
+        part_us[written * SPEED_PARTS / size] += write_us;
+        longest_write_us = write_us > longest_write_us ? write_us : longest_write_us;
+        writes++;
+        written += take;
+        if (err == SKIFF_OK && written % SKIFF_DOWNLOAD_CHECKPOINT_BYTES == 0) {
+            const long long sync_start = now_us();
+            err = skiff_file_sync(file);
+            sync_us += now_us() - sync_start;
+        }
+    }
+    if (file != NULL) {
+        const skiff_err closed = skiff_file_close(file);
+        err = err != SKIFF_OK ? err : closed;
+    }
+    const long long elapsed_us = now_us() - start;
+    skiff_storage_remove(p->psp_storage, p->target);
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(1, environment, sizeof environment);
+    char text[LONG_LINE_MAX];
+    snprintf(text, sizeof text,
+             "speed=%s ok=%d err=%s bytes=%llu pace_ms=%lld writes=%d mean_write_ms=%lld "
+             "longest_write_ms=%lld total_ms=%lld kb_s=%llu sync_ms=%lld "
+             "quarters_write_ms=%lld/%lld/%lld/%lld %s",
+             name, err == SKIFF_OK, skiff_err_name(err), (unsigned long long)written,
+             pace_us / US_PER_MS, writes,
+             writes > 0 ? (part_us[0] + part_us[1] + part_us[2] + part_us[3]) / writes / US_PER_MS
+                        : 0,
+             longest_write_us / US_PER_MS, elapsed_us / US_PER_MS,
+             skiff_probe_kb_per_s(written, elapsed_us), sync_us / US_PER_MS, part_us[0] / US_PER_MS,
+             part_us[1] / US_PER_MS, part_us[2] / US_PER_MS, part_us[3] / US_PER_MS, environment);
+    report_check(p, err == SKIFF_OK, text);
+    return append_log(p, text) && err == SKIFF_OK;
+}
+
+/* The network alone: the body's CRC-32 is computed and nothing is written. */
+typedef struct speed_sink {
+    /* The download's hooks run on every chunk when set, as they do for a real download. */
+    watch *w;
+    long long start_us;
+    long long first_byte_us;
+    uint64_t bytes;
+    uLong crc32;
+} speed_sink;
+
+static skiff_err speed_body(void *ctx, const unsigned char *data, size_t size) {
+    speed_sink *sink = ctx;
+    if (sink->bytes == 0) {
+        sink->first_byte_us = now_us() - sink->start_us;
+    }
+    sink->crc32 = crc32(sink->crc32, data, (uInt)size);
+    sink->bytes += size;
+    if (sink->w != NULL) {
+        on_progress(sink->w, sink->bytes, sink->w->p->config.size);
+    }
+    return SKIFF_OK;
+}
+
+static int speed_network(probe *p, const char *name, int with_hooks) {
+    watch w;
+    outcome o;
+    watch_init(&w, p, NULL);
+    memset(&o, 0, sizeof o);
+    speed_sink sink = {.w = with_hooks ? &w : NULL, .crc32 = crc32(0L, Z_NULL, 0)};
+    skiff_http_request request = {.url = p->url, .on_body = speed_body, .body_ctx = &sink};
+    if (with_hooks) {
+        /* Suspends from earlier scenarios are not this download's. */
+        w.power_at_attempt = skiff_psp_power_events_now();
+        request.should_stop = should_stop;
+        request.stop_ctx = &w;
+    }
+    skiff_http_response response;
+    memset(&response, 0, sizeof response);
+    sink.start_us = now_us();
+    w.attempt_start_us = sink.start_us;
+    const skiff_err err = skiff_transport_perform(p->transport, &request, &response);
+    o.elapsed_us = now_us() - sink.start_us;
+    o.attempts = 1;
+    o.bytes = sink.bytes;
+    o.last_status = response.status;
+    o.complete = err == SKIFF_OK && response.status == HTTP_STATUS_OK &&
+                 sink.bytes == p->config.size && sink.crc32 == p->config.crc32;
+    w.first_byte_us = sink.first_byte_us;
+    char environment[SKIFF_PROBE_ENVIRONMENT_MAX];
+    skiff_probe_describe_environment(1, environment, sizeof environment);
+    return report_scenario(p, name, o.complete, &w, &o, environment);
+}
+
+/* A whole download through the engine, its writes reaching the Memory Stick as mode says. */
+static int speed_download(probe *p, const char *name, write_mode mode) {
+    if (mode == WRITE_THREADED && !writer_start()) {
+        report_check(p, 0, "speed: the writer thread did not start");
+        return 0;
+    }
+    skiff_download_discard(p->storage, p->target);
+    watch w;
+    outcome o;
+    watch_init(&w, p, NULL);
+    memset(&o, 0, sizeof o);
+    timed.mode = mode;
+    download(p, &w, &o);
+    timed.mode = WRITE_DIRECT;
+    skiff_storage_remove(p->storage, p->target);
+    char note[LONG_LINE_MAX];
+    int used = 0;
+    if (mode == WRITE_THREADED) {
+        used = snprintf(note, sizeof note, "writer_thread=%dx/%lldms ", background.writes,
+                        background.write_us / US_PER_MS);
+        writer_stop();
+    }
+    skiff_probe_describe_environment(1, note + used, sizeof note - (size_t)used);
+    return report_scenario(p, name, o.complete && o.attempts == 1, &w, &o, note);
+}
+
+static int run_speed(probe *p) {
+    report_line(p, "-- scenario speed: where a download's time goes (about 20 min, no action)");
+    unsigned char *area = memalign(MS_ALIGNMENT, SPEED_BLOCK_BYTES + MS_ALIGNMENT);
+    if (area == NULL) {
+        report_check(p, 0, "speed: no memory for the test block");
+        return 0;
+    }
+    for (size_t i = 0; i < SPEED_BLOCK_BYTES + MS_ALIGNMENT; i++) {
+        area[i] = (unsigned char)(i * 7U + 3U);
+    }
+    /* The engine's write buffer comes from malloc(): show where such a block lands. */
+    void *like_the_engine = malloc(SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES);
+    char text[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(text, sizeof text,
+             "speed: malloc(%d KB) returned a block %u bytes past a %d-byte boundary",
+             SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES / BYTES_PER_KB,
+             (unsigned)((uintptr_t)like_the_engine % MS_ALIGNMENT), MS_ALIGNMENT);
+    report_line(p, text);
+    free(like_the_engine);
+    int ok = speed_memory_stick(p, "ms-aligned", area, p->config.size, 0);
+    ok &= speed_memory_stick(p, "ms-unaligned", area + MALLOC_ALIGNMENT, p->config.size, 0);
+    ok &= speed_memory_stick(p, "ms-paced", area + MALLOC_ALIGNMENT, SPEED_PACED_BYTES,
+                             SPEED_PACE_US);
+    ok &= speed_network(p, "network", 0);
+    ok &= speed_network(p, "network-hooks", 1);
+    ok &= speed_download(p, "download", WRITE_DIRECT);
+    ok &= speed_download(p, "download-1m", WRITE_COALESCED);
+    ok &= speed_download(p, "download-thread", WRITE_THREADED);
+    free(area);
+    return ok;
+}
+
 static int run_scenarios(probe *p) {
     const unsigned chosen = p->config.scenarios;
     reset_storage_timing();
@@ -834,6 +1246,9 @@ static int run_scenarios(probe *p) {
     }
     if ((chosen & SKIFF_PROBE_SCENARIO_SLEEP) != 0) {
         ok &= run_sleep(p);
+    }
+    if ((chosen & SKIFF_PROBE_SCENARIO_SPEED) != 0) {
+        ok &= run_speed(p);
     }
     skiff_download_discard(p->storage, p->target);
     skiff_storage_remove(p->storage, p->target);

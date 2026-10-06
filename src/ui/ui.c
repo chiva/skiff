@@ -280,7 +280,8 @@ unsigned skiff_ui_progress_percent(const skiff_ui_progress *progress) {
 }
 
 int skiff_ui_progress_eta(const skiff_ui_progress *progress, uint64_t *seconds) {
-    if (progress == NULL || seconds == NULL || !progress->has_rate || progress->rate == 0) {
+    if (progress == NULL || seconds == NULL || !progress->has_rate || progress->rate == 0 ||
+        progress->total == 0) {
         return 0;
     }
     const uint64_t left = progress->total > progress->done ? progress->total - progress->done : 0;

@@ -334,6 +334,16 @@ static void test_a_restart_starts_the_rate_again(void) {
     TEST_ASSERT_FALSE(skiff_ui_progress_eta(NULL, &seconds));
 }
 
+static void test_an_unknown_size_has_no_time_left(void) {
+    skiff_ui_progress progress;
+    uint64_t seconds = 7;
+    skiff_ui_progress_start(&progress, 0, 0, 0);
+    skiff_ui_progress_update(&progress, MIB, 3000);
+    TEST_ASSERT_TRUE(progress.has_rate);
+    TEST_ASSERT_FALSE(skiff_ui_progress_eta(&progress, &seconds));
+    TEST_ASSERT_EQUAL_UINT64(7, seconds);
+}
+
 static void test_a_stalled_download_has_no_time_left(void) {
     skiff_ui_progress progress;
     uint64_t seconds = 7;
@@ -416,6 +426,7 @@ int main(void) {
     RUN_TEST(test_percent_rounds_down_and_reaches_100_only_at_the_end);
     RUN_TEST(test_rate_and_time_left_come_after_a_window);
     RUN_TEST(test_a_restart_starts_the_rate_again);
+    RUN_TEST(test_an_unknown_size_has_no_time_left);
     RUN_TEST(test_a_stalled_download_has_no_time_left);
     RUN_TEST(test_sizes_read_as_the_xmb_shows_them);
     RUN_TEST(test_durations_read_as_a_player_says_them);

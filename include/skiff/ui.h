@@ -135,7 +135,8 @@ void skiff_ui_progress_update(skiff_ui_progress *progress, uint64_t done, uint64
 /* 0-100, rounded down: 100 only once every byte is there; 0 for an unknown total. */
 unsigned skiff_ui_progress_percent(const skiff_ui_progress *progress);
 
-/* Seconds left at the current rate, into *seconds; 0 (and *seconds untouched) without a rate. */
+/* Seconds left at the current rate, into *seconds; 0 (and *seconds untouched) without a rate or
+ * a known total. */
 int skiff_ui_progress_eta(const skiff_ui_progress *progress, uint64_t *seconds);
 
 /* "999 B", "512 KB", "1.5 MB", "640 MB", "1.2 GB" (1 KB = 1024 bytes, as the PSP's XMB counts),

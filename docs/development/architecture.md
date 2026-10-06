@@ -123,6 +123,7 @@ know and the player's order survive.
 | `[auth]` | `token` | Printable ASCII without blanks |
 | `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
 | `[headers]` | any name | Sent on every request; not `Authorization`, `Host`, `Range` or `If-Range` |
+| `[log]` | `level` | `error`, `warn`, `info` or `debug` for `skiff.log`; `info` when unset |
 
 - **Parsing**: a UTF-8 byte-order mark and CRLF line endings are accepted (Notepad writes both);
   names ignore case; `#` or `;` starts a comment only at the start of a line, because a token or a

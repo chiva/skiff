@@ -506,6 +506,17 @@ static void test_an_edit_that_would_not_load_is_refused(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse(edited));
 }
 
+static void test_an_edit_into_its_own_buffer_is_refused(void) {
+    char text[64] = "[auth]\ntoken = old\n";
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_config_set(text, strlen(text), "auth", "token", "a-longer-value",
+                                           text, sizeof text, &length, NULL));
+    TEST_ASSERT_EQUAL_STRING("[auth]\ntoken = old\n", text);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_config_set(text + 8, 4, "auth", "token", "v",
+                                                                  text, 10, &length, NULL));
+}
+
 static void test_an_edit_that_does_not_fit_is_refused(void) {
     const char *text = "[auth]\ntoken = old\n";
     const char *expected = "[auth]\ntoken = new\n";
@@ -531,7 +542,8 @@ static void test_no_file_loads_as_empty(void) {
 static void test_save_then_load_round_trips(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE,
                                                       strlen(GUIDE_MTLS_EXAMPLE)));
-    TEST_ASSERT_EQUAL_INT(1, storage.syncs);
+    TEST_PRINTF("synced: the draft's bytes, then the device after each rename");
+    TEST_ASSERT_EQUAL_INT(3, storage.syncs);
     TEST_ASSERT_FALSE(file_exists(new_path));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
@@ -589,6 +601,19 @@ static void test_a_save_cut_before_the_last_rename_is_finished_by_load(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
     TEST_ASSERT_EQUAL_STRING(GUIDE_MTLS_EXAMPLE, loaded);
     TEST_ASSERT_FALSE(file_exists(new_path));
+}
+
+static void test_config_ini_stays_until_the_new_name_is_flushed(void) {
+    write_file(path, GUIDE_TOKEN_EXAMPLE);
+    storage.fail_suffix = SKIFF_CONFIG_NEW_SUFFIX;
+    storage.sync_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_STORAGE_IO,
+        skiff_config_save(&storage.base, path, GUIDE_MTLS_EXAMPLE, strlen(GUIDE_MTLS_EXAMPLE)));
+    storage.sync_error = SKIFF_OK;
+    TEST_ASSERT_TRUE(file_exists(path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, load());
+    TEST_ASSERT_EQUAL_STRING(GUIDE_TOKEN_EXAMPLE, loaded);
 }
 
 static void test_a_save_finishes_an_earlier_cut_save_first(void) {
@@ -736,11 +761,13 @@ int main(void) {
     RUN_TEST(test_only_the_first_instance_of_a_section_grows);
     RUN_TEST(test_names_and_values_that_would_not_parse_back_are_refused);
     RUN_TEST(test_an_edit_that_would_not_load_is_refused);
+    RUN_TEST(test_an_edit_into_its_own_buffer_is_refused);
     RUN_TEST(test_an_edit_that_does_not_fit_is_refused);
     RUN_TEST(test_no_file_loads_as_empty);
     RUN_TEST(test_save_then_load_round_trips);
     RUN_TEST(test_a_failed_write_or_sync_leaves_the_old_file);
     RUN_TEST(test_a_save_cut_before_the_last_rename_is_finished_by_load);
+    RUN_TEST(test_config_ini_stays_until_the_new_name_is_flushed);
     RUN_TEST(test_a_save_finishes_an_earlier_cut_save_first);
     RUN_TEST(test_a_cut_draft_is_never_used);
     RUN_TEST(test_a_failed_remove_keeps_the_complete_new_file);

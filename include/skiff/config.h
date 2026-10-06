@@ -98,12 +98,13 @@ size_t skiff_config_headers(const skiff_config *config, skiff_http_header *out, 
  * key's line is rewritten in place (its first occurrence, keeping the key as written); a missing
  * key is added after the last setting of its section, a missing section at the end. Line endings
  * follow the text's first line (CRLF for a file saved on Windows). Returns SKIFF_ERR_INVALID_ARG
- * for a NULL argument, a section or key that would not parse back (empty, blanks at either end,
- * '=', '[', ']', a line break, or a leading '#' or ';'), a value with a line break or blanks at
- * either end; SKIFF_ERR_BUFFER_TOO_SMALL if the result does not fit. The result is parsed before it
- * is returned, so it always loads back: when skiff_config_parse() refuses it (a bad value for this
- * key, or a damaged line elsewhere in text), that error is returned with its issue and out is left
- * empty. A client certificate and its key cannot be set one at a time; players set them by hand.
+ * for a NULL argument, text and out overlapping (out must be another buffer), a section or key
+ * that would not parse back (empty, blanks at either end, '=', '[', ']', a line break, or a leading
+ * '#' or ';'), a value with a line break or blanks at either end; SKIFF_ERR_BUFFER_TOO_SMALL if the
+ * result does not fit. The result is parsed before it is returned, so it always loads back: when
+ * skiff_config_parse() refuses it (a bad value for this key, or a damaged line elsewhere in text),
+ * that error is returned with its issue and out is left empty. A client certificate and its key
+ * cannot be set one at a time; players set them by hand.
  */
 skiff_err skiff_config_set(const char *text, size_t length, const char *section, const char *key,
                            const char *value, char *out, size_t out_size, size_t *out_length,
@@ -122,12 +123,13 @@ skiff_err skiff_config_load(skiff_storage *storage, const char *path, char *text
 
 /*
  * Replaces config.ini with text. FAT cannot replace a file in one step, so: write and sync
- * "<path>.tmp", rename it "<path>.new" (so a .new file is always complete), remove config.ini,
- * rename .new to config.ini. A power cut leaves the old file, or a complete .new file the next load
- * puts in place; a cut .tmp file is never used. A save first finishes an earlier cut save the same
- * way. Returns SKIFF_ERR_INVALID_ARG for a NULL argument, a path too long or a text over
- * SKIFF_CONFIG_TEXT_MAX (it could not be loaded back), otherwise the storage's error; after a
- * failure the next load still finds either the old settings or the new ones, whole.
+ * "<path>.tmp", rename it "<path>.new" (so a .new file is always complete) and sync the device,
+ * remove config.ini, rename .new to config.ini and sync again. A power cut leaves the old file, or
+ * a complete .new file the next load puts in place; a cut .tmp file is never used. A save first
+ * finishes an earlier cut save the same way. Returns SKIFF_ERR_INVALID_ARG for a NULL argument, a
+ * path too long or a text over SKIFF_CONFIG_TEXT_MAX (it could not be loaded back), otherwise the
+ * storage's error; after a failure the next load still finds either the old settings or the new
+ * ones, whole.
  */
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,
                             size_t length);

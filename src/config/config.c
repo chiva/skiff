@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -493,6 +494,13 @@ skiff_err skiff_config_set(const char *text, size_t length, const char *section,
         !is_settable_name(key) || !is_settable_value(value)) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    /* out is written while text is still being read. */
+    const uintptr_t text_start = (uintptr_t)text;
+    const uintptr_t out_start = (uintptr_t)out;
+    if (text != NULL && length > 0 && text_start < out_start + out_size &&
+        out_start < text_start + length) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
     const span source = {text != NULL ? text : "", length};
     edit_plan plan;
     plan_edit(source, section, key, &plan);
@@ -662,6 +670,20 @@ static skiff_err write_synced(skiff_storage *storage, const char *path, const ch
     return err != SKIFF_OK ? err : close_err;
 }
 
+/* Makes a rename or remove durable before the next step relies on it. The PSP flushes a whole
+ * device on any file's sync (sceIoSync), directory entries included, so syncing the file a rename
+ * produced commits the rename. */
+static skiff_err flush_device(skiff_storage *storage, const char *path) {
+    skiff_file *file = NULL;
+    skiff_err err = skiff_storage_open(storage, path, SKIFF_FILE_READ, 0, &file);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    err = skiff_file_sync(file);
+    const skiff_err close_err = skiff_file_close(file);
+    return err != SKIFF_OK ? err : close_err;
+}
+
 skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char *text,
                             size_t length) {
     save_paths paths;
@@ -683,10 +705,15 @@ skiff_err skiff_config_save(skiff_storage *storage, const char *path, const char
         return err;
     }
     /* From here the pending file is complete. Whatever fails, it stays for the next load to
-     * judge: a failed remove may still have taken config.ini with it. */
-    err = skiff_storage_remove(storage, path);
-    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
-        return err;
+     * judge: a failed remove may still have taken config.ini with it. config.ini is only removed
+     * once the pending file's name is on the device. */
+    err = flush_device(storage, paths.pending);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_remove(storage, path);
+        err = err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
     }
-    return skiff_storage_rename(storage, paths.pending, path);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_rename(storage, paths.pending, path);
+    }
+    return err == SKIFF_OK ? flush_device(storage, path) : err;
 }

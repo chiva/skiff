@@ -10,6 +10,7 @@
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/i18n.h"
+#include "skiff/jobs.h"
 #include "skiff/log.h"
 #include "skiff/romm.h"
 #include "skiff/storage_paths.h"
@@ -79,6 +80,10 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_UI_BYTES 1610612736ULL
 #define SKIFF_SELFTEST_UI_BYTES_TEXT "1,5 GB"
 #define SKIFF_SELFTEST_TEXT_MAX 96
+/* A queue file of one job, and a ROM id of 15 digits: past 32 bits, and the most the file keeps
+ * exactly. */
+#define SKIFF_SELFTEST_JOBS_TEXT_MAX 2048
+#define SKIFF_SELFTEST_JOBS_ROM_ID 999999999999999ULL
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -291,6 +296,41 @@ static const char *check_ui_text_fitting(void) {
                : "a title was not cut between characters";
 }
 
+/* The download queue's file is written with cJSON's number printing (newlib's snprintf on the
+ * PSP) and read back with strtod: a size just under 4 GiB and a 15-digit ROM id must survive. */
+static const char *check_jobs_queue(void) {
+    static skiff_job written;
+    static skiff_job read[SKIFF_JOBS_MAX];
+    static char text[SKIFF_SELFTEST_JOBS_TEXT_MAX];
+    memset(&written, 0, sizeof written);
+    written.id = 1;
+    written.rom_id = SKIFF_SELFTEST_JOBS_ROM_ID;
+    snprintf(written.title, sizeof written.title, "Caf\xC3\xA9");
+    snprintf(written.file_name, sizeof written.file_name, "%s", SKIFF_SELFTEST_ROMM_NAME);
+    snprintf(written.target, sizeof written.target, "ms0:/ISO/%s", SKIFF_SELFTEST_SAFE_NAME);
+    written.size = SKIFF_STORAGE_MAX_FILE_BYTES;
+    written.has_crc32 = 1;
+    written.crc32 = SKIFF_SELFTEST_STATE_CRC32;
+    written.state = SKIFF_JOB_ACTIVE;
+    size_t length = 0;
+    size_t count = 0;
+    uint32_t next_id = 0;
+    size_t dropped = 0;
+    if (skiff_jobs_format(&written, 1, 2, text, sizeof text, &length) != SKIFF_OK ||
+        skiff_jobs_parse(text, length, read, &count, &next_id, &dropped) != SKIFF_OK ||
+        count != 1) {
+        return "a queue file did not survive a round trip";
+    }
+    const skiff_job *got = &read[0];
+    return got->id == written.id && got->rom_id == written.rom_id && got->size == written.size &&
+                   got->has_crc32 && got->crc32 == written.crc32 && got->state == written.state &&
+                   strcmp(got->title, written.title) == 0 &&
+                   strcmp(got->file_name, written.file_name) == 0 &&
+                   strcmp(got->target, written.target) == 0 && next_id == 2
+               ? NULL
+               : "a queue file came back with other values";
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -307,6 +347,7 @@ static const selftest_check CHECKS[] = {
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},
+    {"jobs-queue", check_jobs_queue},
 };
 // clang-format on
 

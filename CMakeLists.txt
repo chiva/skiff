@@ -49,6 +49,8 @@ add_library(
   src/i18n/i18n.c
   src/jobs/download.c
   src/jobs/download_state.c
+  src/jobs/queue.c
+  src/jobs/runner.c
   src/log/log.c
   src/net/entropy.c
   src/net/http.c

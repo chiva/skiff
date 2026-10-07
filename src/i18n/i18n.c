@@ -22,6 +22,7 @@
     X(SKIFF_ERR_NO_MEMORY, "La PSP se ha quedado sin memoria")                                     \
     X(SKIFF_ERR_BUFFER_TOO_SMALL, "Error interno: búfer demasiado pequeño")                        \
     X(SKIFF_ERR_NOT_IMPLEMENTED, "Esta función aún no está disponible")                            \
+    X(SKIFF_ERR_CANCELLED, "Cancelada")                                                            \
     X(SKIFF_ERR_NET_UNAVAILABLE, "El wifi está desactivado o no hay ninguna conexión configurada") \
     X(SKIFF_ERR_NET_DNS, "No se encuentra el servidor de RomM; revisa la dirección")               \
     X(SKIFF_ERR_NET_CONNECT, "No se puede conectar con el servidor de RomM")                       \

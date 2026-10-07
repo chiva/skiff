@@ -15,6 +15,7 @@
     X(SKIFF_ERR_NO_MEMORY, 2, "The PSP ran out of memory")                                         \
     X(SKIFF_ERR_BUFFER_TOO_SMALL, 3, "Internal error: buffer too small")                           \
     X(SKIFF_ERR_NOT_IMPLEMENTED, 4, "This feature is not available yet")                           \
+    X(SKIFF_ERR_CANCELLED, 5, "Cancelled")                                                         \
     X(SKIFF_ERR_NET_UNAVAILABLE, 100, "Wi-Fi is off or no network profile is set up")              \
     X(SKIFF_ERR_NET_DNS, 101, "Could not find the RomM server; check the address")                 \
     X(SKIFF_ERR_NET_CONNECT, 102, "Could not reach the RomM server")                               \

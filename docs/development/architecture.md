@@ -41,15 +41,18 @@ what makes it unit-testable and lets sanitizers run over it.
 Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
 text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
 `storage/` (the storage seam, logical roots, free space, safe names), `jobs/` (resumable
-downloads), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
+downloads, the download queue and its retry policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
 network stack, TLS hooks, the GU renderer) exist. The other layers arrive with the
 [roadmap](roadmap.md) phases that need them.
 
 ## Threads, power and suspend
 
 - **UI thread**: input, drawing, system dialogs. Never blocks on the network or the Memory Stick.
-- **Worker thread**: runs one job at a time (download, save sync) from a persistent queue, and posts
-  progress and results to the UI through a message queue. Modules hold no global mutable state, so
+- **Worker thread**: runs one job at a time (download, save sync) from a persistent queue
+  (`include/skiff/jobs.h`, `skiff_jobs_run_one()`), and posts progress and results to the UI as
+  events: a small ring of state and recovery events, oldest dropped if the UI falls behind, and
+  only the latest progress per job (bytes, size, speed). Both threads share the queue through lock
+  hooks; the runner holds the lock only between attempts. Modules hold no global mutable state, so
   a job owns its transport and file handles.
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
   at a lower priority than the UI and yields between chunks.
@@ -63,6 +66,14 @@ network stack, TLS hooks, the GU renderer) exist. The other layers arrive with t
   (`skiff_psp_net_online()`: switch, access point) and whether a suspend happened, so an attempt
   ends soon after instead of at the 30 s stall timeout. Recovery waits for the switch, rejoins the
   profile (or reloads the network modules if that fails) and starts a new transport.
+- **Retry policy** (`src/jobs/runner.c`): an error a reconnect cannot fix (a RomM refusal, a full
+  Memory Stick, a checksum mismatch) fails the job at once. With the Wi-Fi switch off the runner
+  waits for it however long it takes, and that never counts against the job. Any other network
+  failure is retried: at once when the attempt received bytes, otherwise after 1, 2, 4, 8 and
+  16 s, rejoining first when the network is gone and always after a suspend. Six attempts in a row
+  that receive nothing (a failed rejoin counts as one) fail the job; its `.part` file stays, so the
+  player's retry resumes. A cancel or a quit stops the transfer within about a second: a cancelled
+  job's partial files are deleted, a job interrupted by quitting stays queued.
 - Measured on a PSP-1000 (`tests/hardware/resume_probe.c`, 64 MiB over TLS 1.3): the Wi-Fi switch
   was noticed 1.7 s after the last byte and the profile rejoined in 13 s; after a suspend the stop
   hook fired on its first poll, rejoining the profile was enough (8 s, no module reload) and the CPU
@@ -288,6 +299,8 @@ network is back.
   on a PSP-1000), continued from the saved value on resume, so resuming never re-reads the `.part`
   file. A finished file that does not match is deleted with its progress (206): the usual cause is a
   file replaced on the server without a rescan, so RomM's checksum is stale.
+- **The log rides on the writes**: the engine calls `after_write` right after each block reaches
+  the Memory Stick, and the runner flushes the log then, while Wi-Fi reception is paused anyway.
 - **Throughput**: writes go to the Memory Stick in 1 MiB blocks
   (`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`), on the download's own thread. While the Memory Stick
   writes, Wi-Fi data stops arriving, and each pause costs about 0.1 s before the transfer is back
@@ -315,6 +328,14 @@ network is back.
   blanks at the start and blanks and dots at the end go (FAT drops trailing dots); a DOS device name
   (`CON`, `NUL`, `COM1`…) gets a leading `_`; a name over 127 bytes is shortened between characters,
   keeping its extension. A name that cleans to nothing (`..`) is refused.
+- **The download queue** (`PSP/GAME/Skiff/queue.json`, `include/skiff/jobs.h`): each job is a
+  ROM id, its file's name in RomM, the target path the installer chose, the size and CRC-32, a
+  state (queued, active, done, failed, cancelled), the last error and the attempt count. It is
+  saved on every state change, replaced whole (below). The URL is built when the job runs, so a new
+  server address or token applies to jobs already queued. A job left active by a quit or a crash
+  is queued again on the next launch and resumes from its `.part` file; a damaged queue file is not
+  used (the queue starts empty, and the log says so), and an unusable job in it is dropped alone.
+  The same file of the same ROM is never queued twice. At most 64 jobs: finished ones make room.
 - **Small files replaced whole** (`config.ini`, the download queue, `installed.json`):
   `skiff_storage_replace_whole()`. FAT cannot replace a file in one step, so Skiff writes and syncs
   `<file>.tmp`, renames it `<file>.new` (so a `.new` file is always complete), syncs the device so

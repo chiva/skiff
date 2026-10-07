@@ -112,6 +112,9 @@ static skiff_err write_buffer(download *d) {
     }
     const skiff_err err = skiff_file_write(d->part, d->buffer, d->buffered);
     d->buffered = 0;
+    if (err == SKIFF_OK && d->spec->after_write != NULL) {
+        d->spec->after_write(d->spec->write_ctx);
+    }
     return storage_step(d, err);
 }
 

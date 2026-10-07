@@ -55,7 +55,15 @@ network stack, TLS hooks, the GU renderer) exist. The other layers arrive with t
   hooks; the runner holds the lock only between attempts. Modules hold no global mutable state, so
   a job owns its transport and file handles.
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
-  at a lower priority than the UI and yields between chunks.
+  at a lower priority than the UI (`SKIFF_PSP_WORKER_PRIORITY` 0x30 against the main thread's 0x20,
+  `src/platform/psp/jobs_psp.h`): the UI waits for every vertical blank and draws first, and the
+  worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 64 KB to
+  start) comes from the same memory as the network modules, about 148 KB once joined in blocks of
+  at most 80 KB, so its high-water mark (`sceKernelGetThreadStackFreeSize()`) is measured on
+  hardware (the [jobs probe](testing.md#jobs-probe)). The queue and the log each lock with their
+  own semaphore-backed mutex (the queue logs while it holds its lock); rejoining or reloading the
+  network can take a further lock other threads share. Quitting asks the runner to stop and waits
+  up to 5 s for the thread; a join still in progress is left to the process exit.
 - **Power**: during a job, `skiff_psp_keep_awake()` (`scePowerTick(PSP_POWER_TICK_SUSPEND)`, at
   most every 5 s) keeps the PSP from auto-sleeping, and the backlight can still dim to save
   battery. A power callback on the same thread as the HOME-menu callback counts suspends and

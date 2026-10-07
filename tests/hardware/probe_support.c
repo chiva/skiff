@@ -9,6 +9,8 @@
 enum {
     DECIMAL = 10,
     HEXADECIMAL = 16,
+    /* 'a' (or 'A') stands for this in hexadecimal. */
+    HEX_LETTER_BASE = 10,
     BITS_PER_BYTE = 8,
     CRC32_TABLE_SIZE = 256,
     BYTE_MASK = 0xFF,
@@ -190,6 +192,46 @@ int skiff_probe_config_complete(const skiff_probe_config *config) {
     return config->host[0] != '\0' && config->profile >= SKIFF_PROBE_DEFAULT_PROFILE &&
            config->token[0] != '\0' && config->rom_id[0] != '\0' && config->file_name[0] != '\0' &&
            config->size > 0 && config->has_crc32;
+}
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + HEX_LETTER_BASE;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + HEX_LETTER_BASE;
+    }
+    return -1;
+}
+
+int skiff_probe_url_decode(const char *text, char *out, size_t out_size) {
+    if (text == NULL || out == NULL || out_size == 0) {
+        return 0;
+    }
+    size_t used = 0;
+    for (const char *c = text; *c != '\0'; c++) {
+        unsigned char byte = (unsigned char)*c;
+        if (*c == '%') {
+            const int high = hex_digit(c[1]);
+            const int low = high < 0 ? -1 : hex_digit(c[2]);
+            if (low < 0 || (high == 0 && low == 0)) {
+                out[0] = '\0';
+                return 0;
+            }
+            byte = (unsigned char)(high * HEXADECIMAL + low);
+            c += 2;
+        }
+        if (used + 1 >= out_size) {
+            out[0] = '\0';
+            return 0;
+        }
+        out[used++] = (char)byte;
+    }
+    out[used] = '\0';
+    return 1;
 }
 
 static int compare_long_long(const void *a, const void *b) {

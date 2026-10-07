@@ -54,7 +54,8 @@ when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`
 (`KIRK PROBE NO ARK`, see [KIRK probe](#kirk-probe)), `skiff_net_probe` (`NET PROBE NO ARK`, see
 [Network probe](#network-probe)), `skiff_ui_proto` (`UI PROTO HEADLESS`, see
 [UI prototype](#ui-prototype)), `skiff_bench` (`BENCH NO ARK`, see [Benchmark](#benchmark)) and
-`skiff_resume_probe` (`RESUME PROBE NO ARK`, see [Resume probe](#resume-probe)). PPSSPPHeadless only shows a
+`skiff_resume_probe` (`RESUME PROBE NO ARK`, see [Resume probe](#resume-probe)) and `skiff_jobs_probe`
+(`JOBS PROBE NO ARK`, see [Jobs probe](#jobs-probe)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -391,6 +392,37 @@ Without ARK, as in PPSSPP, TLS cannot start: the probe checks the PSP storage on
 Stick (writes, sync, writing from an offset, read-back, rename never replacing a file, remove, the
 errors for missing files) and that libcurl refuses to start, and ends with
 `SKIFF RESUME PROBE NO ARK OK` (`scripts/dev.sh resume-probe`, run in CI).
+
+## Jobs probe
+
+`tests/hardware/jobs_probe.c` runs the download queue (`include/skiff/jobs.h`) on its real worker
+thread (`src/platform/psp/jobs_psp.h`) while the main thread draws a frame every vertical blank with
+the UI renderer, as the app will, against the [integration server](#integration-server). It queues
+the seeded file next to the EBOOT and asks the player, on screen, to interrupt it: at 20% turn the
+Wi-Fi switch off (then back on when asked), at 50% put the PSP to sleep and wake it. It measures
+what `jobs/` was sized by guesswork: the worker's lowest free stack, the system memory left once
+joined and while downloading, the speed with the UI drawing, and the longest gap between two
+frames (the UI waits for the queue's lock while the worker saves the queue file). The finished file
+is read back and checked against RomM's CRC-32. A job an earlier run left unfinished (HOME → Quit) is
+still in the queue file and resumes first, which tests the queue across launches.
+
+On a PSP (plugged in; about 5 minutes):
+
+1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 scripts/dev.sh romm-lan psp`.
+2. PSP in USB mode: `scripts/memstick.sh install <mount>`. It writes `jobs-probe.ini` (the network
+   probe's settings, plus `wait_s=` from `SKIFF_JOBS_WAIT_S`: how long a prompt waits for the
+   player, default 60) and copies the test CA. Eject.
+3. With the Wi-Fi switch on, run **Skiff jobs probe** and do what each `ACTION:` line asks.
+4. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK`. Each run appends one
+   line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how soon the runner noticed
+   the switch and how long until bytes came again, the same after the suspend, the recovery steps,
+   the lowest free stack, the lowest system memory (free and largest block) and the longest frame
+   gap. Skiff's own log is `skiff.log` next to it.
+
+Without ARK, as in PPSSPP, TLS cannot start: the probe queues a job that fails on the worker thread
+before any network I/O (`SKIFF_ERR_NET_NEEDS_ARK`), checks that the queue file on the emulated Memory
+Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PROBE NO ARK OK`
+(`scripts/dev.sh jobs-probe`, run in CI).
 
 ## UI prototype
 

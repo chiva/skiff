@@ -103,8 +103,10 @@ skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worke
 /*
  * Asks the runner to stop (skiff_jobs_request_stop(): the active job stays queued with its progress
  * saved) and waits for the thread up to timeout_us. SKIFF_OK once it has ended and been deleted;
- * SKIFF_ERR_NET_TIMEOUT when it is still busy (a join or a disconnect in progress), in which case
- * it is left to the process exit. Does nothing for a worker never started.
+ * SKIFF_ERR_NET_TIMEOUT when it is still busy (a join or a disconnect in progress). The thread may
+ * then still use the queue, the log, the RomM client, TLS and the network: the caller must not free
+ * or tear down any of them, and should exit (sceKernelExitGame() ends the thread with the process).
+ * Does nothing for a worker never started.
  */
 skiff_err skiff_psp_worker_stop(skiff_psp_worker *worker, long long timeout_us);
 

@@ -413,7 +413,10 @@ On a PSP (plugged in; about 5 minutes):
    probe's settings, plus `wait_s=` from `SKIFF_JOBS_WAIT_S`: how long a prompt waits for the
    player, default 60) and copies the test CA. Eject.
 3. With the Wi-Fi switch on, run **Skiff jobs probe** and do what each `ACTION:` line asks.
-4. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK`. Each run appends one
+4. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK`: the file matches
+   RomM's CRC-32, both interruptions recovered, the download kept at least 400 KB/s before the
+   Wi-Fi test and after the suspend, the UI never went more than 100 ms between frames (a suspend
+   aside), and the worker kept at least 8 KB of its stack free and stopped in time. Each run appends one
    line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how soon the runner noticed
    the switch and how long until bytes came again, the same after the suspend, the recovery steps,
    the lowest free stack, the lowest system memory (free and largest block) and the longest frame

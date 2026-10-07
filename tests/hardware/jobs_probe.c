@@ -93,6 +93,8 @@ enum {
     MIN_KB_PER_S = 400,
     /* The worker should keep this much of its stack unused. */
     MIN_STACK_FREE_BYTES = 8 * 1024,
+    /* The longest the UI may go between two frames (a suspend excepted): six frames. */
+    MAX_FRAME_GAP_MS = 100,
     /* Memory and the stack are sampled this often, in frames. */
     SAMPLE_EVERY_FRAMES = 60,
     /* CRC-32 read-back of the finished file. */
@@ -141,6 +143,9 @@ typedef struct probe {
     skiff_jobs *jobs;
     skiff_romm_client romm;
     skiff_psp_worker worker;
+    /* The worker did not stop in time and may still use the queue, the log, TLS and the network:
+     * nothing is torn down, the process exit releases it all. */
+    int worker_alive;
     skiff_psp_ui ui;
     intraFont *font;
     char queue_path[PATH_MAX_LEN];
@@ -341,10 +346,12 @@ static int start_worker(probe *p, skiff_err transport_status) {
 static int stop_worker(probe *p) {
     const long long start = now_us();
     const skiff_err err = skiff_psp_worker_stop(&p->worker, SKIFF_PSP_WORKER_STOP_TIMEOUT_US);
+    p->worker_alive = err != SKIFF_OK;
     const int stack_free = skiff_psp_worker_stack_free(&p->worker);
     char text[TEXT_LINE_MAX];
-    snprintf(text, sizeof text, "worker stopped: %s in %lld ms", skiff_err_name(err),
-             (now_us() - start) / US_PER_MS);
+    snprintf(text, sizeof text, "worker stopped: %s in %lld ms%s", skiff_err_name(err),
+             (now_us() - start) / US_PER_MS,
+             p->worker_alive ? "; still busy, so nothing is torn down before the exit" : "");
     report_check(p, err == SKIFF_OK, text);
     snprintf(text, sizeof text, "worker stack: lowest free %d of %d bytes (%d used)", stack_free,
              SKIFF_PSP_WORKER_STACK_BYTES, SKIFF_PSP_WORKER_STACK_BYTES - stack_free);
@@ -680,6 +687,9 @@ static int run_without_ark(probe *p) {
         stop_ui(p);
         ok = 0;
     }
+    if (p->worker_alive) {
+        return 0;
+    }
     ok = log_has_lines(p) && ok;
     close_queue_and_log(p);
     /* The next run starts with an empty queue. */
@@ -810,6 +820,9 @@ static int run_download(probe *p) {
     if (quit) {
         report_check(p, 0, "HOME > Quit before the end: run the probe again to resume the job");
     }
+    if (p->worker_alive) {
+        return 0;
+    }
     const int done = ended && w.state == SKIFF_JOB_DONE;
     const int crc_ok = done && file_matches(p);
     snprintf(text, sizeof text,
@@ -817,13 +830,19 @@ static int run_download(probe *p) {
              "KB/s at the end (at least %d)",
              (unsigned long long)(w.rate_before_wifi / BYTES_PER_KB),
              (unsigned long long)(w.rate_last / BYTES_PER_KB), MIN_KB_PER_S);
-    const uint64_t best_rate = w.rate_before_wifi > w.rate_last ? w.rate_before_wifi : w.rate_last;
-    const int fast_enough = best_rate / BYTES_PER_KB >= MIN_KB_PER_S;
+    /* Both: the first attempt's speed, and the last one's after the interruptions. */
+    const int fast_enough = w.rate_before_wifi / BYTES_PER_KB >= MIN_KB_PER_S &&
+                            w.rate_last / BYTES_PER_KB >= MIN_KB_PER_S;
     report_check(p, fast_enough, text);
+    snprintf(text, sizeof text,
+             "UI: longest gap between frames %lld ms over %ld frames (at most %d)",
+             w.frame_gap_max_us / US_PER_MS, w.frames, MAX_FRAME_GAP_MS);
+    const int smooth = w.frame_gap_max_us / US_PER_MS <= MAX_FRAME_GAP_MS;
+    report_check(p, smooth, text);
     snprintf(text, sizeof text, "interruptions: Wi-Fi switch %s, suspend %s",
              w.wifi_done ? "recovered" : "not done", w.suspend_done ? "recovered" : "not done");
     report_check(p, w.wifi_done && w.suspend_done, text);
-    ok = ok && done && crc_ok && fast_enough && w.wifi_done && w.suspend_done;
+    ok = ok && done && crc_ok && fast_enough && smooth && w.wifi_done && w.suspend_done;
     ok = report_run(p, &w, ok, crc_ok);
     if (done) {
         skiff_storage_remove(p->storage, p->target);
@@ -860,6 +879,9 @@ static int run_with_ark(probe *p) {
     if (ok) {
         ok = run_download(p);
     }
+    if (p->worker_alive) {
+        return 0;
+    }
     close_queue_and_log(p);
     skiff_romm_client_clear(&p->romm);
     if (init == SKIFF_OK) {
@@ -887,7 +909,9 @@ int main(int argc, char *argv[]) {
     if (passed) {
         passed = p.has_ark ? run_with_ark(&p) : run_without_ark(&p);
     }
-    skiff_storage_destroy(p.storage);
+    if (!p.worker_alive) {
+        skiff_storage_destroy(p.storage);
+    }
     const char *marker = p.has_ark ? (passed ? PROBE_OK_MARKER : PROBE_FAIL_MARKER)
                                    : (passed ? PROBE_NO_ARK_OK_MARKER : PROBE_NO_ARK_FAIL_MARKER);
     skiff_psp_report_line(&p.report, marker);

@@ -18,18 +18,26 @@ You never type a password or a long token on the PSP:
 
 1. In Skiff, open **Settings → Server** and enter the RomM address, e.g. `http://192.168.1.20:8080`.
    The on-screen keyboard is used once for this.
-2. Choose **Pair with RomM**. Skiff shows a short code.
-3. On your phone or computer, open RomM, go to the device approval page Skiff names, and enter the
-   code.
-4. Skiff picks up the approval within a few seconds and shows your library.
+2. Choose **Pair with RomM**. Skiff shows an 8-character code of letters and digits, such as
+   `7EGGP3VE`, and the page to open: your RomM address followed by `/pair/device`, e.g.
+   `http://192.168.1.20:8080/pair/device`.
+3. On your phone or computer, sign in to RomM, open that page and enter the code. RomM lists what
+   Skiff asks for: reading your platforms and ROMs, to browse and download, and nothing else.
+   Approve it with both ticked: Skiff cannot work without them (error 209). When save sync arrives,
+   Skiff will ask you to pair again for the extra permissions it needs.
+4. Skiff checks every few seconds, picks up the approval and shows your library.
 
-Skiff stores the resulting token in `PSP/GAME/Skiff/config.ini`. To revoke this PSP's access
-later, delete its token in RomM; nothing else is affected.
+The code is valid for 10 minutes and only once. If it runs out, Skiff shows error 208; if the
+pairing is refused in RomM, error 207. Either way, choose **Pair with RomM** again for a new code.
+
+Skiff stores the resulting token, and the device id RomM gave this PSP, in
+`PSP/GAME/Skiff/config.ini`. To revoke this PSP's access later, delete its token in RomM; nothing
+else is affected.
 
 ## Alternative: paste a token by hand
 
-If pairing is not possible (for example an older RomM), create a **client API token** in RomM,
-then edit `PSP/GAME/Skiff/config.ini` on your computer:
+If you would rather not pair (for example to manage tokens yourself), create a **client API
+token** in RomM, then edit `PSP/GAME/Skiff/config.ini` on your computer:
 
 ```ini
 [server]

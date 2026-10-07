@@ -14,6 +14,8 @@
 /* "Range: bytes=" plus a 64-bit offset, "-" and the terminator. */
 #define RANGE_HEADER_MAX 48
 #define HEADER_SEPARATOR ": "
+/* An empty header removes curl's own: no "Expect: 100-continue" before a POST body. */
+#define NO_EXPECT_HEADER "Expect:"
 
 typedef struct curl_transport {
     skiff_transport base; /* first, so a skiff_transport * is a curl_transport * */
@@ -147,6 +149,12 @@ static skiff_err build_headers(const curl_transport *transport, const skiff_http
     if (ok && request->if_range != NULL) {
         ok = append_header(&list, "If-Range", request->if_range);
     }
+    if (ok && request->content_type != NULL) {
+        ok = append_header(&list, "Content-Type", request->content_type);
+    }
+    if (ok && request->method == SKIFF_HTTP_POST) {
+        ok = append_line(&list, NO_EXPECT_HEADER);
+    }
     if (!ok) {
         curl_slist_free_all(list);
         return SKIFF_ERR_NO_MEMORY;
@@ -172,6 +180,19 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
     return skiff_net_error_from_curl(&failure);
 }
 
+/* The handle is reused, so every request sets its method: a GET after a POST must not resend the
+ * body. curl reads the body from request->body during the transfer and copies nothing. */
+static int set_method(CURL *curl, const skiff_http_request *request) {
+    if (request->method == SKIFF_HTTP_GET) {
+        return curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) == CURLE_OK;
+    }
+    return curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)request->body_size) ==
+               CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body != NULL ? request->body : "") ==
+               CURLE_OK;
+}
+
 static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *request,
                               skiff_http_response *response) {
     curl_transport *transport = (curl_transport *)base;
@@ -182,7 +203,8 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
         return err;
     }
     CURLcode code = CURLE_OK;
-    if (curl_easy_setopt(transport->curl, CURLOPT_URL, request->url) != CURLE_OK ||
+    if (!set_method(transport->curl, request) ||
+        curl_easy_setopt(transport->curl, CURLOPT_URL, request->url) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, &current) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, &current) != CURLE_OK ||
@@ -200,6 +222,7 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_XFERINFODATA, NULL);
+    curl_easy_setopt(transport->curl, CURLOPT_POSTFIELDS, NULL);
     curl_slist_free_all(headers);
     return err;
 }

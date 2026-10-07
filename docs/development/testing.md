@@ -114,8 +114,8 @@ that another checkout (a parallel worktree) started.
 ### Integration tests
 
 `romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c`,
-`tests/integration/test_download_romm.c` and `tests/integration/test_client_romm.c` on the host and
-runs them on the compose network. The first checks the error codes a player would see, over the TLS stack the PSP uses:
+`tests/integration/test_download_romm.c`, `tests/integration/test_client_romm.c` and
+`tests/integration/test_pairing_romm.c` on the host and runs them on the compose network. The first checks the error codes a player would see, over the TLS stack the PSP uses:
 
 - HTTPS through the test CA works, and without the CA the server is untrusted (105);
 - with the clock set to 2000 (a PSP whose battery ran flat) the failure is the clock (108); with
@@ -137,6 +137,15 @@ platform holds both seeded ROMs, pages of one ROM return each once and then an e
 page lists them in name order, the second file's details match the seed, and its download URL,
 built from the name with reserved characters, brings back exactly its bytes; a wrong token is a
 RomM refusal (200).
+
+The fourth pairs with RomM (`include/skiff/romm_pairing.h`): a pairing starts, a poll before the
+admin approves is not approved, the admin approves through RomM's own endpoint (as its web UI does),
+the next poll brings a token that lists the `psp` platform and downloads the seeded file with only
+the scopes Skiff asked for, and asking again with the spent code is an expired pairing (208); a
+pairing the admin refuses ends with 207. A pairing that runs out of time is left to the unit tests:
+RomM gives every pairing 10 minutes. `romm-record` also records the flow's answers for the fake
+transport (`tests/integration/record-pairing-fixtures.sh`), with every code, token and id replaced
+by a synthetic value of the same length.
 
 Everything generated lives in `build/integration/` (git-ignored):
 

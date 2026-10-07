@@ -165,6 +165,7 @@ know and the player's order survive.
 | `[server]` | `url` | Explicit `http://` or `https://`, no blanks (the transport's own rule) |
 | `[server]` | `ca_file` | A file name in the Skiff folder; empty for the bundled public CAs |
 | `[auth]` | `token` | Printable ASCII without blanks |
+| `[auth]` | `device_identifier`, `device_id` | Printable ASCII without blanks; written by pairing (below) |
 | `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
 | `[headers]` | any name | Sent on every request; not `Authorization`, `Host`, `Range` or `If-Range` |
 | `[log]` | `level` | `error`, `warn`, `info` or `debug` for `skiff.log`; `info` when unset |
@@ -269,6 +270,41 @@ Download URLs percent-encode every byte of the file name except letters, digits 
 would otherwise end the path, a `?` start a query, a `/` split it. The URL builder takes the file
 RomM listed and refuses one whose name was not usable. The heartbeat is public and is
 sent without the token.
+
+### Pairing
+
+`include/skiff/romm_pairing.h` runs RomM's device-code flow, which follows RFC 8628 (the OAuth
+device grant):
+
+1. `POST /api/auth/device/init` (open, rate-limited) with this PSP's `client_device_identifier`,
+   `name` "Skiff on PSP", `client` "skiff", `platform` "psp", `client_version` and the scopes Skiff
+   asks for: `platforms.read` and `roms.read`, all that browsing and downloading need (checked
+   against RomM 5.3.1), so the token on the Memory Stick can only read. Save sync (Phase 5) needs
+   `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair again. RomM answers
+   201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
+   `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
+   (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path; a
+   path that is not on the server (a full URL, `//host`) is refused, so a response cannot send the
+   player to another site.
+2. The player approves on that page in RomM's web UI, where they may grant fewer scopes.
+3. Skiff polls `POST /api/auth/device/token` with the `device_code` every `interval`. RomM answers
+   400 with `{"detail": ...}` until then: `authorization_pending`; `slow_down` when polled too soon,
+   which adds 5 s to the interval for good (a 429 counts the same); `access_denied` when refused
+   (207); `expired_token` when the code ran out or was already used (208). Once approved it
+   answers 200 with `access_token`, the `device_id` RomM gave this PSP and the `scopes` granted. A
+   token without `platforms.read` and `roms.read` could neither browse nor download, so it is not
+   kept (209). A token granted a scope Skiff
+   did not ask for is not kept either (204): it would sit on a removable Memory Stick able to do
+   more than Skiff needs.
+4. Skiff writes `token`, `device_id` and `device_identifier` into `config.ini`'s `[auth]` section
+   with the same line-preserving edit as Settings, then saves it crash-safely.
+
+The `device_identifier` is 16 random bytes in hexadecimal, made once (on the PSP from KIRK, the TLS
+randomness source) and kept, so RomM sees the same device each time this PSP pairs. The
+`device_code` is a credential until it expires and the token is one for good: neither is logged,
+and every copy of them (the raw response, cJSON's tree, also when it is refused for junk after the
+JSON, the request body) is wiped before its memory is freed. The one copy out of reach is what
+cJSON frees itself when a body is not JSON at all. Neither request sends a token: both endpoints are open.
 
 ## Downloads and storage
 
@@ -419,8 +455,8 @@ release would have had a meaningful life. The image is built from source in ever
 than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
 excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
-The `transport` interface (`include/skiff/transport.h`) takes a URL, headers, `Range`/`If-Range`
-and a body callback, and fills a small response record: status, ETag, Content-Length and
+The `transport` interface (`include/skiff/transport.h`) takes a method (GET, or POST with a small
+body sent whole, for pairing), a URL, headers, `Range`/`If-Range` (GET only) and a body callback, and fills a small response record: status, ETag, Content-Length and
 Content-Range, read by one header parser shared with the fake transport, plus the TLS version and
 cipher suite of the connection, for logs. Custom headers from
 `config.ini` are sent on every request and may not contain line breaks. Only URLs with an

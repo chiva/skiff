@@ -54,3 +54,5 @@ record rom "/api/roms/$ROM_ID" "${auth[@]}"
 record rom-extra "/api/roms/$EXTRA_ROM_ID" "${auth[@]}"
 record rom-content "/api/roms/$ROM_ID/content/$FILE_NAME" "${auth[@]}"
 record roms-unauthorized /api/roms
+# The pairing flow's answers, each secret replaced with a synthetic one.
+"$(dirname "$0")/record-pairing-fixtures.sh" "$DIR" "$OUT"

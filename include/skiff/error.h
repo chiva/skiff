@@ -37,6 +37,10 @@
     X(SKIFF_ERR_ROMM_UNSUPPORTED_VERSION, 205, "This RomM version is not supported")               \
     X(SKIFF_ERR_ROMM_CHECKSUM, 206,                                                                \
       "The file does not match RomM's checksum; rescan the platform in RomM")                      \
+    X(SKIFF_ERR_ROMM_PAIRING_DENIED, 207, "Pairing was refused in RomM")                           \
+    X(SKIFF_ERR_ROMM_PAIRING_EXPIRED, 208, "The pairing code expired; start pairing again")        \
+    X(SKIFF_ERR_ROMM_PAIRING_SCOPES, 209,                                                          \
+      "Pairing was approved without the permissions Skiff needs; pair again and allow them")       \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

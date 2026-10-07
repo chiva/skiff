@@ -33,15 +33,30 @@ typedef skiff_err (*skiff_http_body_fn)(void *ctx, const unsigned char *data, si
  * skiff_transport_perform() returns that result unchanged. */
 typedef skiff_err (*skiff_http_stop_fn)(void *ctx);
 
+typedef enum skiff_http_method {
+    /* The zero value, so a request cleared with memset is a GET. */
+    SKIFF_HTTP_GET,
+    /* For RomM's pairing calls: a small body sent whole, with Content-Length. */
+    SKIFF_HTTP_POST,
+} skiff_http_method;
+
 typedef struct skiff_http_request {
-    /* GET only for now; POST arrives with pairing. Must start with http:// or https://. */
+    skiff_http_method method;
+    /* Must start with http:// or https://. */
     const char *url;
     /* Sent on this request after the transport's own default headers. */
     const skiff_http_header *headers;
     size_t header_count;
-    /* Resume: "Range: bytes=<range_start>-" plus "If-Range: <if_range>" (the ETag recorded when the
-     * download started), so a file that changed on the server comes back whole (200) instead of as
-     * a range (206) spliced onto the old start. A range always needs its ETag. */
+    /* POST only: body_size bytes sent as the request body (NULL for none), labelled with
+     * "Content-Type: <content_type>" when content_type is set. Sent whole with Content-Length,
+     * never with "Expect: 100-continue", which would cost a PSP a round trip per request. */
+    const char *body;
+    size_t body_size;
+    const char *content_type;
+    /* GET only. Resume: "Range: bytes=<range_start>-" plus "If-Range: <if_range>" (the ETag
+     * recorded when the download started), so a file that changed on the server comes back whole
+     * (200) instead of as a range (206) spliced onto the old start. A range always needs its
+     * ETag. */
     int has_range;
     uint64_t range_start;
     const char *if_range;
@@ -85,8 +100,10 @@ int skiff_http_url_scheme_valid(const char *url);
  * Sends request and fills response. An HTTP response of any status is SKIFF_OK with
  * response->status set; map it with skiff_http_status_error(). Otherwise returns the network
  * failure (1xx codes), the body callback's or the stop hook's error, or SKIFF_ERR_INVALID_ARG for
- * a NULL argument, a missing URL, invalid headers (skiff_http_headers_valid()), has_range without a
- * non-blank if_range (or if_range without has_range), or an if_range with a line break, and
+ * a NULL argument, a missing URL, an unknown method, invalid headers (skiff_http_headers_valid()),
+ * has_range without a non-blank if_range (or if_range without has_range), an if_range with a line
+ * break, a body or content type on a GET, a range on a POST, a NULL body with a non-zero
+ * body_size, or a content type that is empty or has a line break, and
  * SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an explicit http:// or https:// (curl would
  * guess plain HTTP). The response is reset first, so after a failure it holds whatever arrived
  * before it. The connection stays usable after any failure.

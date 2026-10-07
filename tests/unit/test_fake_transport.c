@@ -321,6 +321,38 @@ static void test_raw_response_without_a_blank_line_has_no_body(void) {
     TEST_ASSERT_EQUAL_UINT64(0, response.body_bytes);
 }
 
+static void test_routes_answer_by_method_and_in_turn(void) {
+    static const char BODY[] = "{\"device_code\":\"skiff\"}";
+    fake_route *pending = add("/api/auth/device/token", "romm/device-pending.http");
+    pending->match_method = 1;
+    pending->method = SKIFF_HTTP_POST;
+    pending->max_uses = 2;
+    fake_route *token = add("/api/auth/device/token", "romm/device-token.http");
+    token->match_method = 1;
+    token->method = SKIFF_HTTP_POST;
+    request.method = SKIFF_HTTP_POST;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    request.content_type = "application/json";
+    TEST_PRINTF("two pending answers, then the token, for as long as the client polls");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/auth/device/token"));
+    TEST_ASSERT_EQUAL_INT64(400, response.status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/auth/device/token"));
+    TEST_ASSERT_EQUAL_INT64(400, response.status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/auth/device/token"));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/auth/device/token"));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_POST, fake.log[0].method);
+    TEST_ASSERT_EQUAL_STRING(BODY, fake.log[0].body);
+    TEST_ASSERT_EQUAL_size_t(sizeof BODY - 1, fake.log[0].body_size);
+    TEST_ASSERT_EQUAL_STRING("application/json", fake.log[0].content_type);
+    TEST_PRINTF("a GET does not match a POST-only route");
+    memset(&request, 0, sizeof request);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get("https://romm.test/api/auth/device/token"));
+    TEST_ASSERT_EQUAL_INT64(404, response.status);
+}
+
 static void test_route_errors(void) {
     TEST_ASSERT_NULL(fake_transport_add_fixture(&fake, "/x", "romm/missing.http"));
     for (int i = 0; i < FAKE_TRANSPORT_MAX_ROUTES; i++) {
@@ -353,6 +385,7 @@ int main(void) {
     RUN_TEST(test_logs_requests_and_keeps_the_connection);
     RUN_TEST(test_log_keeps_counting_when_full);
     RUN_TEST(test_raw_response_without_a_blank_line_has_no_body);
+    RUN_TEST(test_routes_answer_by_method_and_in_turn);
     RUN_TEST(test_route_errors);
     return UNITY_END();
 }

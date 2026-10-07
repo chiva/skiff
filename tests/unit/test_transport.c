@@ -166,6 +166,50 @@ static void test_if_range_needs_a_range_and_no_line_break(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
 }
 
+static void test_a_post_carries_its_body_and_content_type(void) {
+    static const char BODY[] = "{\"device_code\":\"x\"}";
+    request.method = SKIFF_HTTP_POST;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    request.content_type = "application/json";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_POST, transport.last_request->method);
+    TEST_ASSERT_EQUAL_PTR(BODY, transport.last_request->body);
+    TEST_ASSERT_EQUAL_size_t(sizeof BODY - 1, transport.last_request->body_size);
+    TEST_PRINTF("an empty POST, without a body or a content type, is allowed too");
+    request.body = NULL;
+    request.body_size = 0;
+    request.content_type = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
+}
+
+static void test_bodies_belong_to_posts_and_ranges_to_gets(void) {
+    request.body = "{}";
+    request.body_size = 2;
+    expect_refused("a GET with a body");
+    request.body = NULL;
+    request.body_size = 0;
+    request.content_type = "application/json";
+    expect_refused("a GET with a content type");
+    request.method = SKIFF_HTTP_POST;
+    request.content_type = "application/json\r\nX-Evil: 1";
+    expect_refused("CRLF in the content type");
+    request.content_type = "";
+    expect_refused("an empty content type");
+    request.content_type = "application/json";
+    request.body_size = 4;
+    expect_refused("a body size without a body");
+    request.body_size = 0;
+    request.has_range = 1;
+    request.if_range = "\"etag\"";
+    expect_refused("a POST with a range");
+    request.has_range = 0;
+    request.if_range = NULL;
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    request.method = (skiff_http_method)7;
+    expect_refused("an unknown method");
+}
+
 static void test_destroy(void) {
     skiff_transport_destroy(&transport.base);
     TEST_ASSERT_EQUAL_INT(1, transport.destroys);
@@ -184,6 +228,8 @@ int main(void) {
     RUN_TEST(test_header_injection_is_refused);
     RUN_TEST(test_valid_headers_pass);
     RUN_TEST(test_if_range_needs_a_range_and_no_line_break);
+    RUN_TEST(test_a_post_carries_its_body_and_content_type);
+    RUN_TEST(test_bodies_belong_to_posts_and_ranges_to_gets);
     RUN_TEST(test_destroy);
     return UNITY_END();
 }

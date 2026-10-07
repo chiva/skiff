@@ -222,6 +222,9 @@ typedef struct skiff_install_plan {
      * job's replace_target (skiff/jobs.h). Otherwise the download never removes a file it finds at
      * path when it finishes, even one copied there after this plan was made. */
     int replaces_own;
+    /* The size Skiff recorded for that copy: the download replaces only a file of exactly this
+     * size (pass it on as the job's replace_size). */
+    uint64_t own_size;
     /* The RomM id was added to the name because the plain name is taken. */
     int renamed;
 } skiff_install_plan;

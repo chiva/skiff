@@ -379,6 +379,7 @@ static void test_server_ignoring_ranges_restarts(void) {
 static void test_weak_or_missing_etag_never_resumes(void) {
     /* The same file twice: the second download replaces the first, Skiff's own. */
     spec.replace_target = 1;
+    spec.replace_size = BODY_BYTES;
     fake_route *route = serve(WEAK_ETAG);
     cut_after(route, 5 * MIB);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("", saved_state().etag, "a weak ETag is not kept");
@@ -637,6 +638,7 @@ static void test_untrustworthy_progress_starts_fresh(void) {
     static const char GARBAGE[] = "version=1\nsize=12";
     /* Each round downloads the same file again over the last one, Skiff's own. */
     spec.replace_target = 1;
+    spec.replace_size = BODY_BYTES;
     fake_route *route = serve(ETAG);
 
     cut_after(route, 5 * MIB);
@@ -668,8 +670,20 @@ static void test_skiffs_own_copy_is_replaced(void) {
     serve(ETAG);
     write_all(target, "old", 3);
     spec.replace_target = 1;
+    spec.replace_size = 3;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
     assert_complete();
+}
+
+static void test_skiffs_copy_changed_meanwhile_is_not_replaced(void) {
+    serve(ETAG);
+    TEST_PRINTF("planned over Skiff's 3-byte copy, but a 4-byte file is there when it finishes");
+    write_all(target, "mine", 4);
+    spec.replace_target = 1;
+    spec.replace_size = 3;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, attempt());
+    TEST_ASSERT_EQUAL_UINT64(4, size_of(target));
+    assert_durable_prefix(BODY_BYTES);
 }
 
 static void test_a_file_found_at_the_target_is_never_removed(void) {
@@ -836,6 +850,7 @@ int main(void) {
     RUN_TEST(test_untrustworthy_progress_starts_fresh);
     RUN_TEST(test_skiffs_own_copy_is_replaced);
     RUN_TEST(test_a_file_found_at_the_target_is_never_removed);
+    RUN_TEST(test_skiffs_copy_changed_meanwhile_is_not_replaced);
     RUN_TEST(test_stop_hook_ends_the_attempt_and_keeps_the_progress);
     RUN_TEST(test_retryable_failures);
     RUN_TEST(test_arguments_and_limits);

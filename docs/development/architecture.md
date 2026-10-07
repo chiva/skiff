@@ -437,11 +437,15 @@ earlier copy of the same ROM file:
 A plan is also refused when the manifest could not record the result (full, or a RomM id it
 cannot store), so no download ends as a file Skiff no longer knows it owns.
 
+A name whose `.part` or `.resume` file already exists counts as taken too: the download engine
+would trust or delete those, and nobody queued them.
+
 The plan is checked again when the download finishes: a job may replace the file at its target
-only when the plan found Skiff's own copy there (`replaces_own`, kept in the queue as the job's
-`replace_target`). Otherwise a file that appeared at the target after planning (copied over USB
-between two launches, say) stops the download with 305 instead of being removed, and the finished
-`.part` file is kept, so a retry only renames it once the player moves the other file.
+only when the plan found Skiff's own copy there (`replaces_own` and its recorded size, kept in the
+queue as the job's `replace_target` and `replace_size`), and only while the file there is still
+that size. Otherwise a file that appeared at the target after planning (copied over USB between two
+launches, say) stops the download with 305 instead of being removed, and the finished `.part` file
+is kept, so a retry only renames it once the player moves the other file.
 
 ## Saves
 

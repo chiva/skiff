@@ -848,6 +848,7 @@ static skiff_err download(probe *p, watch *w, outcome *o) {
     spec.target_path = p->target;
     /* The probe's own file, downloaded again by every scenario. */
     spec.replace_target = 1;
+    spec.replace_size = p->config.size;
     spec.expected_size = p->config.size;
     spec.has_expected_crc32 = 1;
     spec.expected_crc32 = p->config.crc32;

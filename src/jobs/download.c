@@ -291,17 +291,16 @@ static skiff_err finish(download *d) {
     if (d->spec->has_expected_crc32 && d->state.crc32 != d->spec->expected_crc32) {
         return discard_with(d, SKIFF_ERR_ROMM_CHECKSUM);
     }
-    if (!d->spec->replace_target) {
-        /* Checked now, not when the download was planned: a file copied there meanwhile (over USB,
-         * between two launches) is never Skiff's to remove. */
-        uint64_t existing = 0;
-        err = skiff_storage_size(d->storage, d->spec->target_path, &existing);
-        if (err == SKIFF_OK) {
-            return SKIFF_ERR_STORAGE_NAME_TAKEN;
-        }
-        if (err != SKIFF_ERR_STORAGE_NOT_FOUND) {
-            return err;
-        }
+    /* Checked now, not when the download was planned: a file copied there meanwhile (over USB,
+     * between two launches) is never Skiff's to remove, and Skiff's own copy only while it is still
+     * the size Skiff recorded. */
+    uint64_t existing = 0;
+    err = skiff_storage_size(d->storage, d->spec->target_path, &existing);
+    if (err == SKIFF_OK && (!d->spec->replace_target || existing != d->spec->replace_size)) {
+        return SKIFF_ERR_STORAGE_NAME_TAKEN;
+    }
+    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+        return err;
     }
     err = remove_if_present(d->storage, d->spec->target_path);
     if (err == SKIFF_OK) {

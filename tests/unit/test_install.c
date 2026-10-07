@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "skiff/download.h"
 #include "skiff/install.h"
 
 #include "fake_storage.h"
@@ -223,6 +224,18 @@ static void test_skiffs_own_copy_is_replaced_in_place(void) {
     add_record(ROM_ID, "Game.iso", "games:/Game.iso");
     put_file("games:/Game.iso");
     assert_planned("games:/Game.iso", 0, 1);
+    TEST_PRINTF("the recorded size goes with the plan, for the check when the download finishes");
+    TEST_ASSERT_EQUAL_UINT64(GAME_SIZE, plan.own_size);
+}
+
+static void test_partial_files_left_beside_a_name_make_it_taken(void) {
+    TEST_PRINTF("a Game.iso.part or .resume nobody queued: the download would trust or delete it");
+    put_file_of("games:/Game.iso" SKIFF_DOWNLOAD_PART_SUFFIX, 3);
+    assert_planned("games:/Game [12].iso", 1, 0);
+    TEST_ASSERT_EQUAL_UINT64(0, plan.own_size);
+    put_file_of("games:/Game [12].iso" SKIFF_DOWNLOAD_STATE_SUFFIX, 3);
+    TEST_ASSERT_EQUAL_STRING(skiff_err_name(SKIFF_ERR_STORAGE_NAME_TAKEN),
+                             skiff_err_name(plan_download()));
 }
 
 static void test_a_recorded_copy_replaced_outside_skiff_is_no_longer_its_own(void) {
@@ -662,6 +675,7 @@ int main(void) {
     RUN_TEST(test_names_that_clean_to_the_same_name_do_not_collide);
     RUN_TEST(test_a_record_of_another_rom_holds_its_name_even_without_the_file);
     RUN_TEST(test_skiffs_own_copy_is_replaced_in_place);
+    RUN_TEST(test_partial_files_left_beside_a_name_make_it_taken);
     RUN_TEST(test_a_recorded_copy_replaced_outside_skiff_is_no_longer_its_own);
     RUN_TEST(test_a_full_manifest_refuses_a_download_it_could_not_record);
     RUN_TEST(test_a_rom_id_the_manifest_cannot_store_is_refused);

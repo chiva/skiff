@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "skiff/download.h"
+
 #define PATH_SEPARATOR "/"
 #define EXTENSION_MARK '.'
 /* " [<rom id>]": a blank, brackets, and up to 20 digits for a 64-bit id. */
@@ -113,6 +115,30 @@ typedef struct planner {
     void *taken_ctx;
 } planner;
 
+/* A download's .part or .resume file at path: the download engine trusts or deletes those, so a
+ * name whose ones exist is not free, whoever left them. */
+static skiff_err partial_files_present(const planner *p, const char *path, int *present) {
+    static const char *const SUFFIXES[] = {SKIFF_DOWNLOAD_PART_SUFFIX, SKIFF_DOWNLOAD_STATE_SUFFIX};
+    *present = 0;
+    for (size_t i = 0; i < sizeof SUFFIXES / sizeof SUFFIXES[0]; i++) {
+        char partial[SKIFF_DOWNLOAD_PATH_MAX];
+        const int written = snprintf(partial, sizeof partial, "%s%s", path, SUFFIXES[i]);
+        if (written < 0 || (size_t)written >= sizeof partial) {
+            return SKIFF_ERR_INVALID_ARG;
+        }
+        uint64_t size = 0;
+        const skiff_err err = skiff_storage_size(p->storage, partial, &size);
+        if (err == SKIFF_OK) {
+            *present = 1;
+            return SKIFF_OK;
+        }
+        if (err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+            return err;
+        }
+    }
+    return SKIFF_OK;
+}
+
 static int is_this_file(const planner *p, const skiff_install_record *record) {
     return record->rom_id == p->rom->id && strcmp(record->file_name, p->file->file_name) == 0;
 }
@@ -127,6 +153,15 @@ static skiff_err judge(const planner *p, const char *logical, char *path, size_t
     const skiff_install_record *record = skiff_install_manifest_find_path(p->manifest, logical);
     const int ours = record != NULL && is_this_file(p, record);
     if ((record != NULL && !ours) || (p->taken != NULL && p->taken(p->taken_ctx, logical))) {
+        *use = CANDIDATE_TAKEN;
+        return SKIFF_OK;
+    }
+    int partial = 0;
+    const skiff_err partial_err = partial_files_present(p, path, &partial);
+    if (partial_err != SKIFF_OK) {
+        return partial_err;
+    }
+    if (partial) {
         *use = CANDIDATE_TAKEN;
         return SKIFF_OK;
     }
@@ -191,6 +226,11 @@ static skiff_err try_candidate(const planner *p, const char *logical, int rename
         snprintf(out->logical_path, sizeof out->logical_path, "%s", logical);
         snprintf(out->path, sizeof out->path, "%s", path);
         out->replaces_own = use == CANDIDATE_OWN;
+        if (out->replaces_own) {
+            const skiff_install_record *record =
+                skiff_install_manifest_find_path(p->manifest, logical);
+            out->own_size = record != NULL ? record->size : 0;
+        }
         out->renamed = renamed;
     }
     return err;

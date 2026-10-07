@@ -540,8 +540,10 @@ static void test_the_queue_file_round_trips(void) {
     written[0].error = SKIFF_ERR_ROMM_CHECKSUM;
     written[0].attempts = 6;
     written[0].replace_target = 1;
+    written[0].replace_size = 123456789;
     written[1] = written[0];
     written[1].replace_target = 0;
+    written[1].replace_size = 0;
     written[1].id = 4;
     written[1].has_crc32 = 0;
     written[1].crc32 = 0;
@@ -591,6 +593,14 @@ static void test_a_queue_file_without_the_replace_flag_never_replaces(void) {
                                                      &next_id, &dropped));
     TEST_ASSERT_EQUAL_size_t(0, count);
     TEST_ASSERT_EQUAL_size_t(1, dropped);
+    TEST_PRINTF("replacing needs the size of the copy it may replace");
+    static const char NO_SIZE[] =
+        "{\"version\":1,\"next_id\":2,\"jobs\":[{\"id\":1,\"rom_id\":7,\"title\":\"\","
+        "\"file_name\":\"Game.iso\",\"target\":\"ms0:/ISO/Game.iso\",\"size\":10,"
+        "\"crc32\":null,\"state\":\"queued\",\"error\":0,\"attempts\":0,\"replace\":true}]}";
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_jobs_parse(NO_SIZE, sizeof NO_SIZE - 1, read, &count, &next_id, &dropped));
+    TEST_ASSERT_EQUAL_size_t(0, count);
 }
 
 static void test_retry_and_clear_finished(void) {
@@ -807,9 +817,11 @@ static void test_a_file_found_at_the_target_fails_the_job_and_keeps_it(void) {
 
 static void test_skiffs_own_copy_is_replaced_when_the_job_says_so(void) {
     serve();
-    place_at_target("an older copy Skiff installed");
+    static const char OLDER_COPY[] = "an older copy Skiff installed";
+    place_at_target(OLDER_COPY);
     skiff_job_request request = request_for(FILE_NAME, target);
     request.replace_target = 1;
+    request.replace_size = sizeof OLDER_COPY - 1;
     uint32_t id = 0;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &id));
     TEST_ASSERT_EQUAL_INT(1, job_with(id).replace_target);

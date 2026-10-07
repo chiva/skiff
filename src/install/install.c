@@ -211,8 +211,10 @@ static int with_rom_id(const char *name, uint64_t rom_id, char *out, size_t out_
     if (stem_length == 0) {
         return 0;
     }
-    snprintf(out, out_size, "%.*s%s%s", (int)stem_length, name, suffix, extension);
-    return 1;
+    /* stem_room makes it fit; the check is what the compiler can see. */
+    const int written =
+        snprintf(out, out_size, "%.*s%s%s", (int)stem_length, name, suffix, extension);
+    return written > 0 && (size_t)written < out_size;
 }
 
 /* Fills out from logical if it is free or Skiff's own copy; *placed says whether it was. */

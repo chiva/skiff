@@ -2,13 +2,19 @@
 # Boots a check EBOOT in PPSSPPHeadless and passes only if it reports "SKIFF <NAME> OK". Used for
 # the self-test (NAME=SELFTEST, markers in include/skiff/selftest.h) and the TLS toolchain probe
 # (NAME="TLS PROBE", markers in tests/security/tls_probe.c).
-# Usage: tests/emulator/run_eboot.sh <path/to/EBOOT.PBP> <NAME>
+# Usage: tests/emulator/run_eboot.sh <path/to/EBOOT.PBP> <NAME> [timeout seconds]
+#
+# The timeout is real time, while an EBOOT paces itself in emulated time, and the software renderer
+# draws every frame on the host's CPU: an EBOOT that draws for a fixed emulated time takes longer on
+# a slow host. The UI prototype draws a full screen for 10 emulated seconds, which took 8 to 116 s
+# on one Mac and ran past 30 s on CI runners, so it passes a longer timeout.
 set -euo pipefail
 
-readonly USAGE="usage: run_eboot.sh <path/to/EBOOT.PBP> <NAME>"
+readonly USAGE="usage: run_eboot.sh <path/to/EBOOT.PBP> <NAME> [timeout seconds]"
 readonly EBOOT="${1:?$USAGE}"
 readonly NAME="${2:?$USAGE}"
-readonly TIMEOUT_SECONDS=30
+readonly DEFAULT_TIMEOUT_SECONDS=30
+readonly TIMEOUT_SECONDS="${3:-$DEFAULT_TIMEOUT_SECONDS}"
 readonly OK_MARKER="SKIFF $NAME OK"
 readonly FAIL_MARKER="SKIFF $NAME FAIL"
 # PPSSPPHeadless only surfaces the program's stdout inside its full log (-l), one line per write,
@@ -19,6 +25,10 @@ readonly STDOUT_PREFIX_PATTERN='^[A-Z] stdout: '
 readonly KERNEL_READY_LINE='Kernel initialized.'
 readonly MAX_ATTEMPTS=2
 
+if [[ ! "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: timeout must be a positive number of seconds, got '$TIMEOUT_SECONDS'" >&2
+  exit 1
+fi
 if [[ ! -f "$EBOOT" ]]; then
   echo "error: $EBOOT not found; build it first with scripts/dev.sh psp" >&2
   exit 1
@@ -29,7 +39,9 @@ fi
 # our code cannot hide behind this, even if a PPSSPP update renames or drops the kernel line.
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
   status=0
+  started=$SECONDS
   log="$(PPSSPPHeadless -l --graphics=software --timeout="$TIMEOUT_SECONDS" "$EBOOT" 2>&1)" || status=$?
+  elapsed=$((SECONDS - started))
   if grep -qF "$KERNEL_READY_LINE" <<<"$log" || grep -qE "$STDOUT_PREFIX_PATTERN" <<<"$log"; then
     break
   fi
@@ -44,9 +56,9 @@ if grep -q "^$FAIL_MARKER" <<<"$output"; then
   exit 1
 fi
 if ! grep -q "^$OK_MARKER" <<<"$output"; then
-  echo "emulator $NAME: no result marker (PPSSPPHeadless exit $status); the EBOOT crashed or" \
-    "timed out. Last log lines:" >&2
+  echo "emulator $NAME: no result marker (PPSSPPHeadless exit $status) after ${elapsed} s of a" \
+    "${TIMEOUT_SECONDS} s timeout; the EBOOT crashed or timed out. Last log lines:" >&2
   tail -n 40 <<<"$log" >&2
   exit 1
 fi
-echo "emulator $NAME: OK"
+echo "emulator $NAME: OK in ${elapsed} s"

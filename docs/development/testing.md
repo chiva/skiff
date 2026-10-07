@@ -395,16 +395,19 @@ errors for missing files) and that libcurl refuses to start, and ends with
 ## UI prototype
 
 `tests/prototype/ui_proto.c` checks the UI stack chosen in
-[Architecture](architecture.md#ui-gu--intrafont) before the UI layer exists: GU draws a 20-item list
-with intraFont, using the firmware's Latin font with its Japanese font as fallback, and the
-on-screen keyboard and the network picker open from the render loop. It links the app's module info,
-so its memory figures are the app's.
+[Architecture](architecture.md#ui-gu--intrafont). Skiff's renderer (`src/platform/psp/ui_psp.h`)
+draws a scrolling 20-item list (14 rows on screen, one title cut to fit), a progress bar, and the
+header and footer with button symbols. It uses intraFont with the firmware's Latin font and its
+Japanese font as fallback. The on-screen keyboard and the network picker open from the render loop.
+It links the app's module info, so its memory figures are the app's.
 
 On a PSP:
 
 1. Run **Skiff UI prototype** and press a button within 10 seconds (otherwise it exits on its
    own, as described below). Check that the title, the Japanese line and the first row (accented
-   Latin: `café, señor`) render, and that Up/Down move the highlight.
+   Latin: `café, señor`) render, that the second row ends in `...`, that Up/Down move the
+   highlight and L/R page through the list (the scroll bar on the right follows), and that the
+   footer shows a green triangle, a pink square and the L, R and START hints.
 2. Triangle opens the keyboard: type at least one character and confirm (cancelling fails the
    run). The text appears top right.
 3. Square loads the network modules and opens the network picker: pick a connection that works
@@ -417,8 +420,8 @@ Each step is written to `result.txt` as it happens (dialog opened, shown, closed
 `sceUtility*` call with its code; connection, disconnection and unloading), so a failed run says
 where it stopped. The summary at the end has: font load times; heap used by the Latin font alone
 and by both; the first
-frame read back (drawn pixels in a Latin and a Japanese-only line, both must be above zero); list
-frame time (mean, max, frames over the 16.7 ms budget); each dialog's outcome; and system memory
+frame read back (drawn pixels in a Latin and a Japanese-only line, both must be above zero); frame
+time for the whole screen (mean, max, frames over the 16.7 ms budget); each dialog's outcome; and system memory
 before the network modules load, after they load and after they unload, with how much the
 unloading gave back (reported, not judged).
 

@@ -164,8 +164,16 @@ target_link_libraries(skiff_resume_probe PRIVATE skiff_net skiff_probe_support s
                                                  skiff_psp_net skiff_psp_storage skiff_psp_ark
                                                  skiff_psp_tls skiff_psp_entropy)
 
-# UI stack prototype (Phase 1 hardware spike): GU + intraFont with the firmware fonts, the on-screen
-# keyboard and the network picker (see tests/prototype/ui_proto.c). intraFont comes from pspdev's
-# packages; it draws through GU, so it goes before pspgu.
+# The UI renderer (src/platform/psp/ui_psp.h): GU and intraFont with the firmware's fonts, drawing
+# skiff/ui.h's models. intraFont comes from pspdev's packages; it draws through GU, so it goes before
+# pspgu. Its licence joins scripts/psp-packages.txt once the app links it.
+add_library(skiff_psp_ui OBJECT src/platform/psp/ui_psp.c)
+target_compile_options(skiff_psp_ui PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_ui PUBLIC skiff_core intrafont pspgu)
+target_include_directories(skiff_psp_ui PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_ui)
+
+# UI stack prototype (Phase 1 hardware spike, now drawn by skiff_psp_ui): the renderer with the
+# firmware fonts, the on-screen keyboard and the network picker (see tests/prototype/ui_proto.c).
 skiff_add_psp_app(skiff_ui_proto "${SKIFF_PBP_TITLE} UI prototype" tests/prototype/ui_proto.c)
-target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net intrafont pspgu)
+target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ui)

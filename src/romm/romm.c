@@ -7,11 +7,14 @@
 
 #include "skiff/http.h"
 
+#include "romm_internal.h"
+
 #define PATH_HEARTBEAT "/api/heartbeat"
 #define PATH_PLATFORMS "/api/platforms"
 #define PATH_ROMS "/api/roms"
 #define BEARER_PREFIX "Bearer "
 #define HEADER_AUTHORIZATION "Authorization"
+#define CONTENT_TYPE_JSON "application/json"
 /* What a ROM list asks for besides the page: a stable order, and none of the per-library extras
  * RomM adds by default (a character index, filter values, the id of every ROM), which grow with the
  * whole library rather than the page. */
@@ -268,23 +271,71 @@ static int json_shape_ok(const char *json, size_t length) {
 }
 
 /* The whole body as one JSON value, followed by nothing but blanks. */
-static cJSON *parse_json(const char *json, size_t length) {
+/* Wipes size bytes so the compiler cannot drop the stores. Does nothing for NULL. */
+static void wipe(char *bytes, size_t size) {
+    if (bytes == NULL) {
+        return;
+    }
+    volatile char *target = bytes;
+    for (size_t i = 0; i < size; i++) {
+        target[i] = '\0';
+    }
+}
+
+void skiff_romm_json_wipe_strings(cJSON *item) {
+    /* Depth first without recursion: where to carry on at each level above the current one.
+     * cJSON refuses trees nested deeper than CJSON_NESTING_LIMIT, so this always has room. */
+    cJSON *resume[CJSON_NESTING_LIMIT + 1];
+    size_t depth = 0;
+    cJSON *current = item;
+    while (current != NULL || depth > 0) {
+        if (current == NULL) {
+            current = resume[--depth];
+            continue;
+        }
+        if (cJSON_IsString(current) && current->valuestring != NULL) {
+            wipe(current->valuestring, strlen(current->valuestring));
+        }
+        if (current->child != NULL && depth < sizeof resume / sizeof resume[0]) {
+            resume[depth++] = current->next;
+            current = current->child;
+        } else {
+            current = current->next;
+        }
+    }
+}
+
+/* Frees a tree, first wiping its strings when it may hold a credential. */
+static void delete_tree(cJSON *root, int secret) {
+    if (secret) {
+        skiff_romm_json_wipe_strings(root);
+    }
+    cJSON_Delete(root);
+}
+
+/* The whole body as one JSON value, followed by nothing but blanks; a refused tree holding a
+ * credential is wiped before it is freed. */
+static cJSON *parse_json_tree(const char *json, size_t length, int secret) {
     if (json == NULL || length == 0 || !json_shape_ok(json, length)) {
         return NULL;
     }
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, 0);
     if (root == NULL || end == NULL || end < json || (size_t)(end - json) > length) {
-        cJSON_Delete(root);
+        delete_tree(root, secret);
         return NULL;
     }
     for (const char *rest = end; rest < json + length; rest++) {
         if (!is_json_blank(*rest)) {
-            cJSON_Delete(root);
+            delete_tree(root, secret);
             return NULL;
         }
     }
     return root;
+}
+
+static cJSON *parse_json(const char *json, size_t length) {
+    return parse_json_tree(json, length, 0);
 }
 
 static int fill_rom_page(const cJSON *root, skiff_romm_rom_page *out) {
@@ -449,6 +500,11 @@ skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out) 
 /* Collects a JSON response in a buffer that grows up to SKIFF_ROMM_BODY_MAX. */
 typedef struct body_sink {
     const skiff_http_response *response;
+    /* Keep the body of an error status too: pairing reads its state from a 400's JSON. */
+    int keep_errors;
+    /* The body may hold a credential (pairing's device code or token): every copy of it is wiped
+     * before its memory is given back. */
+    int secret;
     char *data;
     size_t used;
     size_t capacity;
@@ -459,10 +515,24 @@ static int is_success(long status) {
     return status >= FIRST_SUCCESS && status < FIRST_REDIRECT;
 }
 
+/* The sink's buffer at capacity bytes; realloc() would leave a secret behind in the old block. */
+static char *grow(const body_sink *sink, size_t capacity) {
+    if (!sink->secret) {
+        return realloc(sink->data, capacity);
+    }
+    char *grown = malloc(capacity);
+    if (grown != NULL && sink->data != NULL) {
+        memcpy(grown, sink->data, sink->used);
+        wipe(sink->data, sink->capacity);
+        free(sink->data);
+    }
+    return grown;
+}
+
 static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size) {
     body_sink *sink = ctx;
-    /* An error page is judged by its status alone. */
-    if (!is_success(sink->response->status)) {
+    /* An error page is judged by its status alone, unless the caller reads it. */
+    if (!sink->keep_errors && !is_success(sink->response->status)) {
         return SKIFF_OK;
     }
     if ((sink->response->has_content_length &&
@@ -475,7 +545,7 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
         while (capacity < sink->used + size) {
             capacity = capacity > SKIFF_ROMM_BODY_MAX / 2 ? SKIFF_ROMM_BODY_MAX : capacity * 2;
         }
-        char *grown = realloc(sink->data, capacity);
+        char *grown = grow(sink, capacity);
         if (grown == NULL) {
             return SKIFF_ERR_NO_MEMORY;
         }
@@ -487,10 +557,17 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
     return SKIFF_OK;
 }
 
-/* GETs base + path and parses the body as JSON into *out (free it with cJSON_Delete()). */
-static skiff_err get_json(skiff_romm_client *client, const char *path, int with_token,
-                          cJSON **out) {
+/* Sends one request to base + path, with json_body (NULL for none) as a POST's body, and parses the
+ * response body as JSON into *out (NULL when it is not JSON; free it with cJSON_Delete()). Bodies
+ * of error statuses are read only with keep_errors. Returns the transport's error; the HTTP status
+ * is left to the caller in *status. */
+static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, const char *path,
+                           const char *json_body, int with_token, int keep_errors, long *status,
+                           cJSON **out) {
+    /* Only pairing reads error bodies, and only pairing's bodies hold credentials. */
+    const int secret = keep_errors;
     *out = NULL;
+    *status = 0;
     char url[SKIFF_ROMM_URL_MAX];
     const int written = snprintf(url, sizeof url, "%s%s", client->base_url, path);
     if (written < 0 || (size_t)written >= sizeof url) {
@@ -499,24 +576,63 @@ static skiff_err get_json(skiff_romm_client *client, const char *path, int with_
     skiff_http_header authorization = {HEADER_AUTHORIZATION, client->authorization};
     const int send_token = with_token && client->authorization[0] != '\0';
     skiff_http_response response;
-    body_sink sink = {&response, NULL, 0, 0};
+    body_sink sink = {&response, keep_errors, secret, NULL, 0, 0};
     skiff_http_request request;
     memset(&request, 0, sizeof request);
+    request.method = method;
     request.url = url;
     request.headers = send_token ? &authorization : NULL;
     request.header_count = send_token ? 1 : 0;
+    if (json_body != NULL) {
+        request.body = json_body;
+        request.body_size = strlen(json_body);
+        request.content_type = CONTENT_TYPE_JSON;
+    }
     request.on_body = collect_body;
     request.body_ctx = &sink;
-    skiff_err err = skiff_transport_perform(client->transport, &request, &response);
-    if (err == SKIFF_OK) {
-        err = skiff_http_status_error(response.status);
+    const skiff_err err = skiff_transport_perform(client->transport, &request, &response);
+    *status = response.status;
+    if (err == SKIFF_OK && (keep_errors || is_success(response.status))) {
+        *out = parse_json_tree(sink.data, sink.used, secret);
     }
-    if (err == SKIFF_OK) {
-        *out = parse_json(sink.data, sink.used);
-        err = *out != NULL ? SKIFF_OK : SKIFF_ERR_ROMM_BAD_RESPONSE;
+    if (secret) {
+        wipe(sink.data, sink.capacity);
     }
     free(sink.data);
     return err;
+}
+
+/* GETs base + path and parses the body as JSON into *out (free it with cJSON_Delete()). */
+static skiff_err get_json(skiff_romm_client *client, const char *path, int with_token,
+                          cJSON **out) {
+    long status = 0;
+    skiff_err err = send_json(client, SKIFF_HTTP_GET, path, NULL, with_token, 0, &status, out);
+    if (err == SKIFF_OK) {
+        err = skiff_http_status_error(status);
+    }
+    if (err == SKIFF_OK && *out == NULL) {
+        err = SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    if (err != SKIFF_OK) {
+        cJSON_Delete(*out);
+        *out = NULL;
+    }
+    return err;
+}
+
+skiff_err skiff_romm_post_json(skiff_romm_client *client, const char *path, const char *json_body,
+                               long *status, cJSON **out) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (status != NULL) {
+        *status = 0;
+    }
+    if (client == NULL || client->transport == NULL || client->base_url[0] == '\0' ||
+        path == NULL || json_body == NULL || status == NULL || out == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    return send_json(client, SKIFF_HTTP_POST, path, json_body, 0, 1, status, out);
 }
 
 /* ---- The client ---- */

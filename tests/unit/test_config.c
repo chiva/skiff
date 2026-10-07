@@ -304,6 +304,24 @@ static void test_tokens_with_blanks_or_controls_are_refused(void) {
     assert_refused("[auth]\ntoken = rmm\x01\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth", "token");
 }
 
+static void test_the_pairing_keys_parse_and_refuse_blanks(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          parse("[auth]\ntoken = rmm_x\ndevice_identifier = 00112233aabbccdd\n"
+                                "device_id = 00000000-0000-4000-8000-000000000001\n"));
+    TEST_ASSERT_EQUAL_STRING("00112233aabbccdd", config.device_identifier);
+    TEST_ASSERT_EQUAL_STRING("00000000-0000-4000-8000-000000000001", config.device_id);
+    assert_refused("[auth]\ndevice_identifier = a b\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth",
+                   "device_identifier");
+    assert_refused("[auth]\ndevice_id = \x01\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth",
+                   "device_id");
+    char text[SKIFF_CONFIG_DEVICE_ID_MAX + 32];
+    snprintf(text, sizeof text, "[auth]\ndevice_id = ");
+    const size_t start = strlen(text);
+    memset(text + start, 'd', SKIFF_CONFIG_DEVICE_ID_MAX);
+    text[start + SKIFF_CONFIG_DEVICE_ID_MAX] = '\0';
+    assert_refused(text, SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth", "device_id");
+}
+
 static void test_file_names_must_stay_in_the_skiff_folder(void) {
     const char *refused[] = {"certs/ca.pem", "..\\ca.pem", "ms0:/ca.pem", "..", "."};
     for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
@@ -785,6 +803,7 @@ int main(void) {
     RUN_TEST(test_bad_urls_are_refused);
     RUN_TEST(test_values_at_their_limit_pass_and_one_more_is_refused);
     RUN_TEST(test_tokens_with_blanks_or_controls_are_refused);
+    RUN_TEST(test_the_pairing_keys_parse_and_refuse_blanks);
     RUN_TEST(test_file_names_must_stay_in_the_skiff_folder);
     RUN_TEST(test_a_client_certificate_needs_its_key);
     RUN_TEST(test_newer_schema_versions_are_refused);

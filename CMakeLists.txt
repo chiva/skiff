@@ -55,6 +55,7 @@ add_library(
   src/net/entropy.c
   src/net/http.c
   src/net/transport.c
+  src/romm/pairing.c
   src/romm/romm.c
   src/storage/paths.c
   src/storage/storage.c

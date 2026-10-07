@@ -3,7 +3,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -11,6 +13,7 @@
 #define LOCAL_HTTP_POLL_MS 20
 #define LOCAL_HTTP_BACKLOG 4
 #define REQUEST_END "\r\n\r\n"
+#define DECIMAL_BASE 10
 
 /* Waits until fd is readable or the server is told to stop; returns 1 when readable. */
 static int wait_readable(local_http_server *server, int fd) {
@@ -25,6 +28,27 @@ static int wait_readable(local_http_server *server, int fd) {
         }
     }
     return 0;
+}
+
+/* The Content-Length a request's headers announce, 0 without one. */
+static size_t announced_body(const char *request, const char *headers_end) {
+    static const char NAME[] = "\r\ncontent-length:";
+    for (const char *line = request; line < headers_end; line++) {
+        if (strncasecmp(line, NAME, sizeof NAME - 1) == 0) {
+            return (size_t)strtoul(line + sizeof NAME - 1, NULL, DECIMAL_BASE);
+        }
+    }
+    return 0;
+}
+
+/* 1 once the headers and the body they announce (a POST's) have arrived. */
+static int request_complete(const char *request, size_t used) {
+    const char *headers_end = strstr(request, REQUEST_END);
+    if (headers_end == NULL) {
+        return 0;
+    }
+    const size_t header_bytes = (size_t)(headers_end - request) + strlen(REQUEST_END);
+    return used >= header_bytes + announced_body(request, headers_end);
 }
 
 /* Reads one request (or, with on_first_bytes, whatever arrives first) into the next request slot;
@@ -42,7 +66,7 @@ static int read_request(local_http_server *server, int fd, const local_http_repl
         }
         used += (size_t)got;
         request[used] = '\0';
-        if (reply->on_first_bytes || strstr(request, REQUEST_END) != NULL) {
+        if (reply->on_first_bytes || request_complete(request, used)) {
             break;
         }
     }

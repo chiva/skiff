@@ -1,0 +1,7 @@
+HTTP/1.1 400 Bad Request
+Content-Length: 26
+Content-Type: application/json
+Server: nginx/1.30.5
+Via: 1.1 Caddy
+
+{"detail":"access_denied"}

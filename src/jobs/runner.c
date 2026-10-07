@@ -221,7 +221,11 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
 /* Takes the first queued job, marks it active and copies it into *out; 0 when none is queued. */
 static int take_next(skiff_jobs *jobs, skiff_job *out) {
     jobs_lock(jobs);
-    jobs->stop_requested = 0;
+    /* Skiff is quitting: no job starts, however late the request came. */
+    if (jobs->stop_requested) {
+        jobs_unlock(jobs);
+        return 0;
+    }
     for (size_t i = 0; i < jobs->count; i++) {
         skiff_job *job = &jobs->jobs[i];
         if (job->state == SKIFF_JOB_QUEUED) {

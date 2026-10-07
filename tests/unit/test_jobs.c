@@ -993,6 +993,19 @@ static void test_a_quit_leaves_the_job_queued_and_it_resumes(void) {
     assert_complete();
 }
 
+static void test_a_stop_asked_for_between_jobs_starts_no_job(void) {
+    const uint32_t id = add_job();
+    skiff_jobs_request_stop(jobs);
+    int ran = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_run_one(jobs, &env, &ran));
+    TEST_ASSERT_EQUAL_INT(0, ran);
+    TEST_PRINTF("still asked on the next call: the request stays until Skiff quits");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_run_one(jobs, &env, &ran));
+    TEST_ASSERT_EQUAL_INT(0, ran);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, job_with(id).state);
+    TEST_ASSERT_EQUAL_INT(0, env_state.opens);
+}
+
 static void test_a_transport_that_cannot_open_fails_the_job(void) {
     const uint32_t id = add_job();
     env_state.open_error = SKIFF_ERR_NET_NEEDS_ARK;
@@ -1113,6 +1126,7 @@ int main(void) {
     RUN_TEST(test_a_retry_cannot_take_another_jobs_target);
     RUN_TEST(test_a_queued_job_cancels_at_once);
     RUN_TEST(test_a_quit_leaves_the_job_queued_and_it_resumes);
+    RUN_TEST(test_a_stop_asked_for_between_jobs_starts_no_job);
     RUN_TEST(test_a_transport_that_cannot_open_fails_the_job);
     RUN_TEST(test_a_folder_that_cannot_be_made_fails_the_job);
     RUN_TEST(test_every_call_takes_the_lock_once_and_gives_it_back);

@@ -230,15 +230,16 @@ size_t skiff_jobs_list(skiff_jobs *jobs, skiff_job *out, size_t capacity);
 int skiff_jobs_next_event(skiff_jobs *jobs, skiff_jobs_event *out);
 
 /* Asks the runner to stop as soon as it can (Skiff is quitting): the active job stays queued, with
- * its progress saved. Cleared by the next skiff_jobs_run_one(). */
+ * its progress saved, and no other job starts on this queue (the request is never cleared). */
 void skiff_jobs_request_stop(skiff_jobs *jobs);
 
 /*
  * Runs the first queued job to its end: done, failed or cancelled, or still queued after
- * skiff_jobs_request_stop(). The runner's state changes stand for the session even when the queue
- * file cannot be saved (the log says so, and every later save writes the whole queue). *ran is 0
- * when nothing is queued. Returns SKIFF_ERR_INVALID_ARG for a NULL argument or an env without its
- * hooks, SKIFF_OK otherwise: how the job ended is in its state and the events.
+ * skiff_jobs_request_stop(); once a stop is requested no job starts (*ran is 0). The runner's state
+ * changes stand for the session even when the queue file cannot be saved (the log says so, and
+ * every later save writes the whole queue). *ran is 0 when nothing is queued. Returns
+ * SKIFF_ERR_INVALID_ARG for a NULL argument or an env without its hooks, SKIFF_OK otherwise: how
+ * the job ended is in its state and the events.
  */
 skiff_err skiff_jobs_run_one(skiff_jobs *jobs, const skiff_jobs_env *env, int *ran);
 

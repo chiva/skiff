@@ -45,6 +45,24 @@ static int range_is_valid(const skiff_http_request *request) {
            !has_line_break(request->if_range);
 }
 
+/* A body belongs to a POST and a range to a GET; a content type is one header line. */
+static int method_is_valid(const skiff_http_request *request) {
+    if (request->body == NULL && request->body_size > 0) {
+        return 0;
+    }
+    if (request->content_type != NULL &&
+        (request->content_type[0] == '\0' || has_line_break(request->content_type))) {
+        return 0;
+    }
+    switch (request->method) {
+    case SKIFF_HTTP_GET:
+        return request->body == NULL && request->content_type == NULL;
+    case SKIFF_HTTP_POST:
+        return !request->has_range && request->if_range == NULL;
+    }
+    return 0;
+}
+
 static int is_reserved_name(const char *name) {
     for (size_t i = 0; i < sizeof RESERVED_HEADERS / sizeof RESERVED_HEADERS[0]; i++) {
         if (strlen(name) == strlen(RESERVED_HEADERS[i]) &&
@@ -79,7 +97,7 @@ skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_r
     if (transport == NULL || transport->ops == NULL || transport->ops->perform == NULL ||
         request == NULL || request->url == NULL || request->url[0] == '\0' ||
         !skiff_http_headers_valid(request->headers, request->header_count) ||
-        !range_is_valid(request)) {
+        !range_is_valid(request) || !method_is_valid(request)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     if (!skiff_http_url_scheme_valid(request->url)) {

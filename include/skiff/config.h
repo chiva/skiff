@@ -10,7 +10,9 @@
  *   [skiff]    version     schema version; absent means 1
  *   [server]   url         http:// or https:// address of RomM
  *              ca_file     file name in the Skiff folder; empty for the bundled public CAs
- *   [auth]     token       RomM client API token
+ *   [auth]     token       RomM client API token (pairing writes it, or the player pastes one)
+ *              device_identifier   this PSP's name for itself in pairing: random hex, made once
+ *              device_id   the id RomM gave this PSP when pairing was approved
  *   [mtls]     cert_file   client certificate and key, file names in the Skiff folder
  *              key_file
  *   [headers]  <name>      sent on every request (e.g. CF-Access-Client-Id)
@@ -35,9 +37,19 @@
 /* A config.ini larger than this is not one Skiff or a player wrote: SKIFF_ERR_CONFIG_PARSE. */
 #define SKIFF_CONFIG_TEXT_MAX 8192
 
+/* The [auth] keys pairing writes (skiff/romm_pairing.h). */
+#define SKIFF_CONFIG_SECTION_AUTH "auth"
+#define SKIFF_CONFIG_KEY_TOKEN "token"
+#define SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER "device_identifier"
+#define SKIFF_CONFIG_KEY_DEVICE_ID "device_id"
+
 /* Buffer sizes, terminator included. A longer value is refused, never cut. */
 #define SKIFF_CONFIG_URL_MAX 256
 #define SKIFF_CONFIG_TOKEN_MAX 128
+/* 32 hex digits from 16 random bytes, with room to spare. */
+#define SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX 64
+/* RomM's device ids are UUIDs (36 characters). */
+#define SKIFF_CONFIG_DEVICE_ID_MAX 64
 #define SKIFF_CONFIG_FILE_NAME_MAX 64
 #define SKIFF_CONFIG_NAME_MAX 64
 #define SKIFF_CONFIG_HEADER_VALUE_MAX 256
@@ -60,6 +72,8 @@ typedef struct skiff_config {
     char server_url[SKIFF_CONFIG_URL_MAX];
     char ca_file[SKIFF_CONFIG_FILE_NAME_MAX];
     char token[SKIFF_CONFIG_TOKEN_MAX];
+    char device_identifier[SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX];
+    char device_id[SKIFF_CONFIG_DEVICE_ID_MAX];
     char cert_file[SKIFF_CONFIG_FILE_NAME_MAX];
     char key_file[SKIFF_CONFIG_FILE_NAME_MAX];
     skiff_config_header headers[SKIFF_CONFIG_HEADERS_MAX];
@@ -81,10 +95,10 @@ typedef struct skiff_config {
  *     missing one);
  *   - SKIFF_ERR_CONFIG_INVALID_VALUE: a setting given twice, a value too long, a version other than
  *     SKIFF_CONFIG_VERSION, a log level other than skiff_log_level_name()'s, a URL without http://
- *     or https:// or with blanks, a token with blanks or control characters, a file name with a
- *     path in it, a header Skiff sets itself (Authorization, Host, Range, If-Range), a header name
- *     that is not an HTTP token, an empty header value, or more than SKIFF_CONFIG_HEADERS_MAX
- *     headers;
+ *     or https:// or with blanks, a token, device_identifier or device_id with blanks or control
+ *     characters, a file name with a path in it, a header Skiff sets itself (Authorization, Host,
+ *     Range, If-Range), a header name that is not an HTTP token, an empty header value, or more
+ *     than SKIFF_CONFIG_HEADERS_MAX headers;
  *   - SKIFF_ERR_INVALID_ARG: NULL text with a non-zero length, or a NULL out.
  */
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,

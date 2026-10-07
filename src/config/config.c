@@ -9,14 +9,16 @@
 
 #define SECTION_SKIFF "skiff"
 #define SECTION_SERVER "server"
-#define SECTION_AUTH "auth"
+#define SECTION_AUTH SKIFF_CONFIG_SECTION_AUTH
 #define SECTION_MTLS "mtls"
 #define SECTION_HEADERS "headers"
 #define SECTION_LOG "log"
 #define KEY_VERSION "version"
 #define KEY_URL "url"
 #define KEY_CA_FILE "ca_file"
-#define KEY_TOKEN "token"
+#define KEY_TOKEN SKIFF_CONFIG_KEY_TOKEN
+#define KEY_DEVICE_IDENTIFIER SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER
+#define KEY_DEVICE_ID SKIFF_CONFIG_KEY_DEVICE_ID
 #define KEY_CERT_FILE "cert_file"
 #define KEY_KEY_FILE "key_file"
 #define KEY_LEVEL "level"
@@ -59,6 +61,8 @@ static const known_key KNOWN_KEYS[] = {
     {SECTION_SERVER, KEY_URL, VALUE_URL, FIELD(server_url)},
     {SECTION_SERVER, KEY_CA_FILE, VALUE_FILE_NAME, FIELD(ca_file)},
     {SECTION_AUTH, KEY_TOKEN, VALUE_TOKEN, FIELD(token)},
+    {SECTION_AUTH, KEY_DEVICE_IDENTIFIER, VALUE_TOKEN, FIELD(device_identifier)},
+    {SECTION_AUTH, KEY_DEVICE_ID, VALUE_TOKEN, FIELD(device_id)},
     {SECTION_MTLS, KEY_CERT_FILE, VALUE_FILE_NAME, FIELD(cert_file)},
     {SECTION_MTLS, KEY_KEY_FILE, VALUE_FILE_NAME, FIELD(key_file)},
     {SECTION_LOG, KEY_LEVEL, VALUE_LOG_LEVEL, 0, 0},

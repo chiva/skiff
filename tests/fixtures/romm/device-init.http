@@ -1,0 +1,7 @@
+HTTP/1.1 201 Created
+Content-Length: 233
+Content-Type: application/json
+Server: nginx/1.30.5
+Via: 1.1 Caddy
+
+{"device_code":"skiff-device-code-skiff-device-code-skiff-device-code-skiff-devi","user_code":"SKIFF234","verification_path":"/pair/device","verification_path_complete":"/pair/device?user_code=SKIFF234","expires_in":600,"interval":5}

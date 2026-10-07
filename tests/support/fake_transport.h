@@ -15,6 +15,10 @@
  * If-Range gives 206 with Content-Range, a stale one the whole body with 200, an offset
  * at or past the end 416. The request's stop hook is asked before the response and before each
  * body chunk, as the curl transport asks it.
+ *
+ * Several routes may serve one path, for a client that polls: the first route whose path and
+ * method match and that has uses left answers, so a route limited to one use followed by another
+ * replays "pending, then approved".
  */
 
 #include <stddef.h>
@@ -26,6 +30,9 @@
 #define FAKE_TRANSPORT_MAX_LOG 16
 #define FAKE_TRANSPORT_URL_MAX 256
 #define FAKE_TRANSPORT_HEADERS_MAX 512
+/* Request body bytes kept in the log (more are counted in body_size only). */
+#define FAKE_TRANSPORT_BODY_MAX 512
+#define FAKE_TRANSPORT_CONTENT_TYPE_MAX 64
 /* Body bytes per call to the body callback, so a test sees more than one chunk. */
 #define FAKE_TRANSPORT_CHUNK_BYTES 1024
 
@@ -45,16 +52,28 @@ typedef struct fake_route {
     /* Answers a Range request with the whole body (200) even when If-Range matches, as a server
      * without range support does. */
     int ignore_range;
+    /* Only requests with this method match; any method by default. */
+    int match_method;
+    skiff_http_method method;
+    /* Answers this many requests, then lets later routes for the path answer; 0 for no limit. */
+    int max_uses;
+    int uses;
 } fake_route;
 
 /* One request as the fake received it. */
 typedef struct fake_request {
+    skiff_http_method method;
     char url[FAKE_TRANSPORT_URL_MAX];
     int has_range;
     uint64_t range_start;
     char if_range[SKIFF_HTTP_ETAG_MAX];
     /* "Name: value\n" for every request header, in order. */
     char headers[FAKE_TRANSPORT_HEADERS_MAX];
+    /* The request body, NUL-terminated (cut at FAKE_TRANSPORT_BODY_MAX - 1), its size, and its
+     * Content-Type. */
+    char body[FAKE_TRANSPORT_BODY_MAX];
+    size_t body_size;
+    char content_type[FAKE_TRANSPORT_CONTENT_TYPE_MAX];
 } fake_request;
 
 typedef struct fake_transport {

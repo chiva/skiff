@@ -223,6 +223,39 @@ static void test_keep_alive_reuses_the_connection(void) {
     TEST_ASSERT_EQUAL_INT(1, server.connections);
 }
 
+static void test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_none(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\n{}"), LOCAL_HTTP_KEEP_OPEN,
+         0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    static const char BODY[] = "{\"device_code\":\"abc\"}";
+    serve(REPLIES, 2, "http");
+    create(&TEST_CONFIG);
+    request.method = SKIFF_HTTP_POST;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    request.content_type = "application/json";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT64(201, response.status);
+    TEST_PRINTF("the handle is reused: the next GET must not resend the body");
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(0, response.new_connections, "the GET reuses the connection");
+    stop_server();
+    TEST_PRINTF("POST request:\n%s", server.requests[0]);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[0], "POST /api/heartbeat ", 20));
+    assert_request_has(0, "Content-Type: application/json\r\n");
+    assert_request_has(0, "Content-Length: 21\r\n");
+    assert_request_has(0, "\r\n\r\n{\"device_code\":\"abc\"}");
+    TEST_ASSERT_NULL_MESSAGE(strstr(server.requests[0], "Expect:"), "no 100-continue round trip");
+    TEST_PRINTF("GET request:\n%s", server.requests[1]);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[1], "GET /api/heartbeat ", 19));
+    TEST_ASSERT_NULL(strstr(server.requests[1], "Content-Length"));
+    TEST_ASSERT_NULL(strstr(server.requests[1], "device_code"));
+}
+
 static void test_http_error_status_is_a_response_not_a_failure(void) {
     static const local_http_reply REPLIES[] = {
         {STR_AND_SIZE("HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"),
@@ -407,6 +440,7 @@ int main(void) {
     RUN_TEST(test_headers_on_the_wire_and_partial_response);
     RUN_TEST(test_range_offset_above_4_gib);
     RUN_TEST(test_keep_alive_reuses_the_connection);
+    RUN_TEST(test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_none);
     RUN_TEST(test_http_error_status_is_a_response_not_a_failure);
     RUN_TEST(test_connection_refused);
     RUN_TEST(test_stall_before_the_response_times_out);

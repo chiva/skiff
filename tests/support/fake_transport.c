@@ -74,11 +74,15 @@ static const char *path_of(const char *url) {
     return path != NULL ? path : "/";
 }
 
-static fake_route *find_route(fake_transport *fake, const char *url) {
-    const char *path = path_of(url);
+static fake_route *find_route(fake_transport *fake, const skiff_http_request *request) {
+    const char *path = path_of(request->url);
     for (size_t i = 0; i < fake->route_count; i++) {
-        if (strcmp(fake->routes[i].path, path) == 0) {
-            return &fake->routes[i];
+        fake_route *route = &fake->routes[i];
+        if (strcmp(route->path, path) == 0 &&
+            (!route->match_method || route->method == request->method) &&
+            (route->max_uses == 0 || route->uses < route->max_uses)) {
+            route->uses++;
+            return route;
         }
     }
     return NULL;
@@ -91,7 +95,18 @@ static void log_request(fake_transport *fake, const skiff_http_request *request)
     }
     fake_request *entry = &fake->log[fake->log_count++];
     memset(entry, 0, sizeof *entry);
+    entry->method = request->method;
     snprintf(entry->url, sizeof entry->url, "%s", request->url);
+    if (request->body != NULL) {
+        const size_t kept = request->body_size < sizeof entry->body - 1 ? request->body_size
+                                                                        : sizeof entry->body - 1;
+        memcpy(entry->body, request->body, kept);
+        entry->body[kept] = '\0';
+    }
+    entry->body_size = request->body_size;
+    if (request->content_type != NULL) {
+        snprintf(entry->content_type, sizeof entry->content_type, "%s", request->content_type);
+    }
     entry->has_range = request->has_range;
     entry->range_start = request->range_start;
     if (request->if_range != NULL) {
@@ -205,7 +220,7 @@ static skiff_err fake_perform(skiff_transport *base, const skiff_http_request *r
     log_request(fake, request);
     response->new_connections = fake->connected ? 0 : 1;
     fake->connected = 1;
-    const fake_route *route = find_route(fake, request->url);
+    const fake_route *route = find_route(fake, request);
     if (route == NULL) {
         response->status = HTTP_STATUS_NOT_FOUND;
         return SKIFF_OK;

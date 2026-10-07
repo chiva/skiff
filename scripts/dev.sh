@@ -58,6 +58,9 @@ Commands run in the order given and stop at the first failure.
   resume-probe Run the resume probe in PPSSPPHeadless, which has no ARK: the PSP storage (sceIo)
                the downloads write through must work, and TLS must refuse (needs `psp` first; the
                interruptions need a real PSP)
+  jobs-probe   Run the jobs probe in PPSSPPHeadless, which has no ARK: a queued job must fail on
+               the worker thread before any network I/O, and the queue file and log must say so
+               (needs `psp` first; the downloads and interruptions need a real PSP)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
@@ -257,6 +260,9 @@ run_command() {
     ;;
   resume-probe)
     run_emulator build/psp/pbp/skiff_resume_probe/EBOOT.PBP "RESUME PROBE NO ARK"
+    ;;
+  jobs-probe)
+    run_emulator build/psp/pbp/skiff_jobs_probe/EBOOT.PBP "JOBS PROBE NO ARK"
     ;;
   romm-up)
     romm_up 127.0.0.1

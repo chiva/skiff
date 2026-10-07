@@ -760,6 +760,21 @@ static void test_discard_removes_the_progress(void) {
                                   "nothing left to discard is fine");
 }
 
+/* Counts the engine's calls after a block reached the Memory Stick, against the .part writes. */
+static void count_write(void *ctx) { (*(int *)ctx)++; }
+
+static void test_after_write_follows_every_block_written(void) {
+    serve(ETAG);
+    int after_writes = 0;
+    spec.after_write = count_write;
+    spec.write_ctx = &after_writes;
+    storage.fail_suffix = SKIFF_DOWNLOAD_PART_SUFFIX;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_PRINTF("%d .part writes, %d after_write calls", storage.writes, after_writes);
+    TEST_ASSERT_GREATER_THAN_INT(1, after_writes);
+    TEST_ASSERT_EQUAL_INT(storage.writes, after_writes);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_fresh_download_completes_and_is_renamed);
@@ -798,5 +813,6 @@ int main(void) {
     RUN_TEST(test_retryable_failures);
     RUN_TEST(test_arguments_and_limits);
     RUN_TEST(test_discard_removes_the_progress);
+    RUN_TEST(test_after_write_follows_every_block_written);
     return UNITY_END();
 }

@@ -15,6 +15,12 @@ Turn the PSP fully off (hold the power switch up for 3 seconds) and try again. I
 happening, [open a bug report](https://github.com/chiva/skiff/issues/new?template=bug_report.yml)
 with your PSP model and firmware.
 
+## Not an error (5)
+
+| Code | Meaning | What to try |
+|---|---|---|
+| 5 | Cancelled | Nothing to fix: the download was cancelled from the queue, and its partial file deleted. Choose the game again to download it from the start |
+
 ## Network errors (100–111)
 
 | Code | Meaning | What to try |

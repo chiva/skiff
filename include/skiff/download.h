@@ -76,6 +76,10 @@ skiff_err skiff_download_state_parse(const char *text, size_t length, skiff_down
 /* Told after every chunk how many bytes of total the target holds so far, resumed ones included. */
 typedef void (*skiff_download_progress_fn)(void *ctx, uint64_t done, uint64_t total);
 
+/* Told right after a block reached the Memory Stick: Wi-Fi reception is paused during the write
+ * anyway, so other writes (the log's) cost the transfer nothing extra now. */
+typedef void (*skiff_download_write_fn)(void *ctx);
+
 typedef struct skiff_download_spec {
     /* The file's URL and the request headers (an Authorization header, for RomM). */
     const char *url;
@@ -92,6 +96,9 @@ typedef struct skiff_download_spec {
     void *stop_ctx;
     skiff_download_progress_fn on_progress;
     void *progress_ctx;
+    /* NULL for none. */
+    skiff_download_write_fn after_write;
+    void *write_ctx;
 } skiff_download_spec;
 
 typedef struct skiff_download_result {

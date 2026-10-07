@@ -53,7 +53,7 @@ with your PSP model and firmware.
 | 208 | The pairing code expired | The code is valid for a few minutes (RomM shows how long) and only once. Start pairing again on the PSP and enter the new code in RomM in time |
 | 209 | Pairing was approved without the permissions Skiff needs | On RomM's pairing page, someone unticked reading platforms or ROMs, so the token could neither browse nor download; Skiff did not keep it. Delete the half-approved device in RomM, pair again and leave those permissions ticked |
 
-## Memory Stick errors (300–304)
+## Memory Stick errors (300–305)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -62,6 +62,7 @@ with your PSP model and firmware.
 | 302 | Read/write failure | Back up the card and reformat it on the PSP; cheap microSD adapters sometimes fail |
 | 303 | File or folder missing | Usually harmless; Skiff recreates its folders |
 | 304 | File larger than 4 GB | The PSP's file system cannot store it; this game cannot be installed as-is |
+| 305 | The game's name is taken | Skiff never replaces a file it did not install. A file with this game's name, and another with the name plus its RomM number (e.g. `Game [1234].iso`), are already in `ISO/` and were copied by hand or by another program. Move or rename one of them on a computer, then download again |
 
 ## Settings errors (400–402)
 

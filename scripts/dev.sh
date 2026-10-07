@@ -8,6 +8,10 @@ readonly REPO_ROOT
 readonly TOOLCHAIN_IMAGE="skiff-toolchain"
 readonly HOST_IMAGE="skiff-host"
 readonly PPSSPP_IMAGE="skiff-ppsspp"
+# The UI prototype draws a full screen for 10 emulated seconds in the software renderer, which can
+# outlast the emulator's default 30 s on a slow host (tests/emulator/run_eboot.sh). CI passes the same
+# value in its UI prototype step.
+readonly UI_PROTO_TIMEOUT_SECONDS=90
 readonly COVERAGE_FLOOR=85
 # CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
 readonly HOST_COMPILERS=(gcc clang)
@@ -88,10 +92,12 @@ run_toolchain() {
   docker run --rm --platform linux/amd64 "${SOURCE_MOUNTS[@]}" -w /src "$TOOLCHAIN_IMAGE" bash -c "$1"
 }
 
+# The third argument, when given, is the emulator's timeout in seconds (tests/emulator/run_eboot.sh).
 run_emulator() {
   local eboot="$1" name="$2"
   ensure_ppsspp_image
-  docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$PPSSPP_IMAGE" tests/emulator/run_eboot.sh "$eboot" "$name"
+  docker run --rm "${SOURCE_MOUNTS[@]}" -w /src "$PPSSPP_IMAGE" tests/emulator/run_eboot.sh "$eboot" \
+    "$name" "${@:3}"
 }
 
 ensure_host_image() {
@@ -253,7 +259,7 @@ run_command() {
     run_emulator build/psp/pbp/skiff_net_probe/EBOOT.PBP "NET PROBE NO ARK"
     ;;
   ui-proto)
-    run_emulator build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS"
+    run_emulator build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS" "$UI_PROTO_TIMEOUT_SECONDS"
     ;;
   bench)
     run_emulator build/psp/pbp/skiff_bench/EBOOT.PBP "BENCH NO ARK"

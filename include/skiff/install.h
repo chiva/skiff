@@ -218,7 +218,9 @@ typedef struct skiff_install_plan {
      */
     char logical_path[SKIFF_STORAGE_PATH_MAX];
     char path[SKIFF_STORAGE_PATH_MAX];
-    /* Skiff's own earlier copy of this ROM file is there and will be replaced. */
+    /* Skiff's own earlier copy of this ROM file is there and will be replaced: pass it on as the
+     * job's replace_target (skiff/jobs.h). Otherwise the download never removes a file it finds at
+     * path when it finishes, even one copied there after this plan was made. */
     int replaces_own;
     /* The RomM id was added to the name because the plain name is taken. */
     int renamed;

@@ -437,6 +437,12 @@ earlier copy of the same ROM file:
 A plan is also refused when the manifest could not record the result (full, or a RomM id it
 cannot store), so no download ends as a file Skiff no longer knows it owns.
 
+The plan is checked again when the download finishes: a job may replace the file at its target
+only when the plan found Skiff's own copy there (`replaces_own`, kept in the queue as the job's
+`replace_target`). Otherwise a file that appeared at the target after planning (copied over USB
+between two launches, say) stops the download with 305 instead of being removed, and the finished
+`.part` file is kept, so a retry only renames it once the player moves the other file.
+
 ## Saves
 
 PSP saves are folders under `PSP/SAVEDATA/` named after the game ID (e.g. `ULUS10064DATA00`).

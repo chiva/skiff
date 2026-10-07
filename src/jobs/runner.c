@@ -203,6 +203,7 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
         .headers = header_count > 0 ? &authorization : NULL,
         .header_count = header_count,
         .target_path = job->target,
+        .replace_target = job->replace_target,
         .expected_size = job->size,
         .has_expected_crc32 = job->has_crc32,
         .expected_crc32 = job->crc32,

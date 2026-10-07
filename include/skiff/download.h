@@ -87,6 +87,11 @@ typedef struct skiff_download_spec {
     size_t header_count;
     /* Where the file goes; the .part and .resume files sit next to it. */
     const char *target_path;
+    /* 0: a file already at target_path is never removed: the finished download stops with
+     * SKIFF_ERR_STORAGE_NAME_TAKEN and keeps its .part and .resume files, so the next attempt
+     * finishes it once the file is moved. Nonzero: that file is Skiff's own earlier copy of this
+     * download (skiff/install.h) and is replaced. */
+    int replace_target;
     /* What RomM records for the file: its size (required) and, when known, its CRC-32. */
     uint64_t expected_size;
     int has_expected_crc32;
@@ -135,6 +140,8 @@ typedef struct skiff_download_result {
  *     .part file and the progress are deleted, so the next attempt starts over;
  *   - SKIFF_ERR_STORAGE_IO also when the finished .part file is not exactly the expected size; it
  * is deleted with the progress, so the next attempt starts over;
+ *   - SKIFF_ERR_STORAGE_NAME_TAKEN: the whole file arrived and checked out, but a file is already
+ * at the target and replace_target is 0; the progress is kept;
  *   - a storage error (3xx) from the Memory Stick.
  */
 skiff_err skiff_download_attempt(skiff_transport *transport, skiff_storage *storage,

@@ -370,6 +370,14 @@ static void write_text(const char *path, const char *text) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(posix, path, text, strlen(text)));
 }
 
+/* Puts a file at the job's target, in the ISO folder the runner would create. */
+static void place_at_target(const char *text) {
+    char folder[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", folder, sizeof folder));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, folder));
+    write_text(target, text);
+}
+
 /* ---- The queue ---- */
 
 static void test_jobs_are_saved_and_survive_a_restart(void) {
@@ -531,7 +539,9 @@ static void test_the_queue_file_round_trips(void) {
     written[0].state = SKIFF_JOB_FAILED;
     written[0].error = SKIFF_ERR_ROMM_CHECKSUM;
     written[0].attempts = 6;
+    written[0].replace_target = 1;
     written[1] = written[0];
+    written[1].replace_target = 0;
     written[1].id = 4;
     written[1].has_crc32 = 0;
     written[1].crc32 = 0;
@@ -557,6 +567,30 @@ static void test_the_queue_file_round_trips(void) {
                           skiff_jobs_parse("[]", 2, read, &count, &next_id, &dropped));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_format(written, SKIFF_JOBS_MAX + 1, 5,
                                                                    text, sizeof text, &length));
+}
+
+static void test_a_queue_file_without_the_replace_flag_never_replaces(void) {
+    static const char OLDER[] =
+        "{\"version\":1,\"next_id\":2,\"jobs\":[{\"id\":1,\"rom_id\":7,\"title\":\"\","
+        "\"file_name\":\"Game.iso\",\"target\":\"ms0:/ISO/Game.iso\",\"size\":10,"
+        "\"crc32\":null,\"state\":\"queued\",\"error\":0,\"attempts\":0}]}";
+    skiff_job read[SKIFF_JOBS_MAX];
+    size_t count = 0;
+    uint32_t next_id = 0;
+    size_t dropped = 0;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_jobs_parse(OLDER, sizeof OLDER - 1, read, &count, &next_id, &dropped));
+    TEST_ASSERT_EQUAL_size_t(1, count);
+    TEST_ASSERT_EQUAL_INT(0, read[0].replace_target);
+    TEST_PRINTF("a mistyped flag drops the job, as any other mistyped field");
+    static const char MISTYPED[] =
+        "{\"version\":1,\"next_id\":2,\"jobs\":[{\"id\":1,\"rom_id\":7,\"title\":\"\","
+        "\"file_name\":\"Game.iso\",\"target\":\"ms0:/ISO/Game.iso\",\"size\":10,"
+        "\"crc32\":null,\"state\":\"queued\",\"error\":0,\"attempts\":0,\"replace\":1}]}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_parse(MISTYPED, sizeof MISTYPED - 1, read, &count,
+                                                     &next_id, &dropped));
+    TEST_ASSERT_EQUAL_size_t(0, count);
+    TEST_ASSERT_EQUAL_size_t(1, dropped);
 }
 
 static void test_retry_and_clear_finished(void) {
@@ -750,6 +784,39 @@ static void test_an_error_a_retry_cannot_fix_fails_the_job(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_NOT_FOUND, job_with(id).error);
     TEST_ASSERT_EQUAL_UINT32(1, job_with(id).attempts);
     TEST_ASSERT_EQUAL_UINT64(0, env_state.slept_ms);
+}
+
+static void test_a_file_found_at_the_target_fails_the_job_and_keeps_it(void) {
+    serve();
+    place_at_target("mine");
+    const uint32_t id = add_job();
+    run();
+    report(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_FAILED, job_with(id).state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, job_with(id).error);
+    char kept[8];
+    read_text(target, kept, sizeof kept);
+    TEST_ASSERT_EQUAL_STRING("mine", kept);
+    TEST_PRINTF("moved away by the player, a retry finishes from the kept download");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, target));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_retry(jobs, id));
+    run();
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    assert_complete();
+}
+
+static void test_skiffs_own_copy_is_replaced_when_the_job_says_so(void) {
+    serve();
+    place_at_target("an older copy Skiff installed");
+    skiff_job_request request = request_for(FILE_NAME, target);
+    request.replace_target = 1;
+    uint32_t id = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &id));
+    TEST_ASSERT_EQUAL_INT(1, job_with(id).replace_target);
+    run();
+    report(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    assert_complete();
 }
 
 static void test_a_connection_lost_with_progress_is_retried_at_once(void) {
@@ -1099,6 +1166,7 @@ int main(void) {
     RUN_TEST(test_a_damaged_queue_file_starts_an_empty_queue);
     RUN_TEST(test_an_unusable_job_is_dropped_and_the_rest_kept);
     RUN_TEST(test_the_queue_file_round_trips);
+    RUN_TEST(test_a_queue_file_without_the_replace_flag_never_replaces);
     RUN_TEST(test_retry_and_clear_finished);
     RUN_TEST(test_events_coalesce_progress_and_drop_the_oldest);
     RUN_TEST(test_player_changes_the_file_cannot_hold_are_undone);
@@ -1110,6 +1178,8 @@ int main(void) {
     RUN_TEST(test_the_log_is_written_right_after_each_block);
     RUN_TEST(test_progress_reports_bytes_and_speed);
     RUN_TEST(test_an_error_a_retry_cannot_fix_fails_the_job);
+    RUN_TEST(test_a_file_found_at_the_target_fails_the_job_and_keeps_it);
+    RUN_TEST(test_skiffs_own_copy_is_replaced_when_the_job_says_so);
     RUN_TEST(test_a_connection_lost_with_progress_is_retried_at_once);
     RUN_TEST(test_attempts_that_get_nothing_back_off_then_fail);
     RUN_TEST(test_bytes_received_reset_the_count_of_idle_attempts);

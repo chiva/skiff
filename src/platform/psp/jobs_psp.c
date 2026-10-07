@@ -218,10 +218,12 @@ skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worke
         return SKIFF_ERR_NO_MEMORY;
     }
     worker->thread = thread;
+    worker->started = 1;
     worker->running = 1;
     skiff_psp_worker *self = worker;
     const int started = sceKernelStartThread(thread, sizeof self, &self);
     if (started < 0) {
+        worker->started = 0;
         worker->running = 0;
         sceKernelDeleteThread(thread);
         worker->thread = -1;
@@ -236,7 +238,8 @@ skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worke
 }
 
 skiff_err skiff_psp_worker_stop(skiff_psp_worker *worker, long long timeout_us) {
-    if (worker == NULL || worker->thread < 0) {
+    /* A zeroed worker has thread 0; the kernel's thread UIDs are positive. */
+    if (worker == NULL || !worker->started || worker->thread <= 0) {
         return SKIFF_OK;
     }
     worker->stop = 1;
@@ -259,10 +262,10 @@ skiff_err skiff_psp_worker_stop(skiff_psp_worker *worker, long long timeout_us) 
 }
 
 int skiff_psp_worker_stack_free(skiff_psp_worker *worker) {
-    if (worker == NULL) {
+    if (worker == NULL || !worker->started) {
         return -1;
     }
-    if (worker->thread >= 0) {
+    if (worker->thread > 0) {
         measure_stack(worker);
     }
     return worker->stack_free_min;

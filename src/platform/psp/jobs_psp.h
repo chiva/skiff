@@ -87,6 +87,8 @@ typedef struct skiff_psp_worker {
     skiff_jobs_env env;
     SceUID thread;
     volatile int stop;
+    /* skiff_psp_worker_start() created the thread (0 in a zeroed worker). */
+    int started;
     /* The thread is between its start and its end. */
     volatile int running;
     /* The lowest free stack measured, in bytes; -1 before the first measurement. */
@@ -94,7 +96,9 @@ typedef struct skiff_psp_worker {
 } skiff_psp_worker;
 
 /*
- * Starts the worker thread; worker must be zeroed, or stopped by skiff_psp_worker_stop().
+ * Starts the worker thread; worker must be zeroed, or stopped by skiff_psp_worker_stop(). A stop is
+ * final for its queue (skiff_jobs_request_stop() is never cleared), so a worker started again after
+ * a stop needs a new skiff_jobs; on the old one it would run nothing.
  * SKIFF_ERR_INVALID_ARG for a NULL argument, jobs, romm or net, a profile below 1, or a worker
  * whose thread still runs (one queue, one worker); SKIFF_ERR_NO_MEMORY when the kernel cannot
  * create the thread (its stack does not fit), with the firmware's result in the log.
@@ -107,7 +111,7 @@ skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worke
  * SKIFF_ERR_NET_TIMEOUT when it is still busy (a join or a disconnect in progress). The thread may
  * then still use the queue, the log, the RomM client, TLS and the network: the caller must not free
  * or tear down any of them, and should exit (sceKernelExitGame() ends the thread with the process).
- * Does nothing for a worker never started.
+ * Does nothing (SKIFF_OK) for a worker never started, zeroed or whose start failed.
  */
 skiff_err skiff_psp_worker_stop(skiff_psp_worker *worker, long long timeout_us);
 

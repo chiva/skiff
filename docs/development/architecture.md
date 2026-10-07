@@ -421,8 +421,9 @@ files, a file with another extension, or a name RomM gives in a way Skiff cannot
 over the target, so `skiff_install_plan_download()` picks a target that can only hold Skiff's own
 earlier copy of the same ROM file:
 
-1. Skiff's recorded copy keeps its place (the download replaces it), as long as the file there is
-   still the size Skiff recorded; one of another size was replaced outside Skiff and is not
+1. Skiff's recorded copy keeps its place (the download replaces it), as long as it is a file
+   directly in the installer's folder (a record pointing anywhere else, such as a hand-edited one
+   naming `config.ini`, is never a target) and still the size Skiff recorded; one of another size was replaced outside Skiff and is not
    touched. The CRC-32 is not checked, which would mean reading a whole game.
 2. Otherwise the file's safe name in the installer's folder, unless a file is there that Skiff did
    not install for this ROM file (copied by hand, or another ROM's file whose name cleans to the

@@ -255,6 +255,15 @@ static void test_a_rom_id_the_manifest_cannot_store_is_refused(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, plan_download());
 }
 
+static void test_a_record_outside_the_installers_folder_is_never_a_target(void) {
+    TEST_PRINTF("a hand-edited manifest points this ROM file at config.ini");
+    put_file("app:/config.ini");
+    add_record(ROM_ID, "Game.iso", "app:/config.ini");
+    assert_planned("games:/Game.iso", 0, 0);
+    add_record(ROM_ID, "Game.iso", "games:/sub/Game.iso");
+    assert_planned("games:/Game.iso", 0, 0);
+}
+
 static void test_skiffs_own_copy_keeps_its_renamed_place(void) {
     TEST_PRINTF(
         "installed as Game [12].iso earlier; the plain name is free now, but the copy stays");
@@ -381,6 +390,14 @@ static void test_the_manifest_round_trips_through_the_memory_stick(void) {
     TEST_ASSERT_FALSE(second->has_crc32);
     TEST_ASSERT_EQUAL_UINT64(SKIFF_STORAGE_MAX_FILE_BYTES, second->size);
     TEST_ASSERT_EQUAL_PTR(second, skiff_install_manifest_find_path(manifest, "GAMES:/other.CSO"));
+}
+
+static void test_a_name_with_a_literal_backslash_u0000_round_trips(void) {
+    add_record(ROM_ID, "Odd \\u0000 name.iso", "games:/Odd _u0000 name.iso");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_LOADED, load());
+    TEST_ASSERT_NOT_NULL(skiff_install_manifest_find(manifest, ROM_ID, "Odd \\u0000 name.iso"));
 }
 
 static void test_unknown_fields_are_ignored(void) {
@@ -648,6 +665,7 @@ int main(void) {
     RUN_TEST(test_a_recorded_copy_replaced_outside_skiff_is_no_longer_its_own);
     RUN_TEST(test_a_full_manifest_refuses_a_download_it_could_not_record);
     RUN_TEST(test_a_rom_id_the_manifest_cannot_store_is_refused);
+    RUN_TEST(test_a_record_outside_the_installers_folder_is_never_a_target);
     RUN_TEST(test_skiffs_own_copy_keeps_its_renamed_place);
     RUN_TEST(test_a_recorded_copy_deleted_meanwhile_is_downloaded_again_to_its_place);
     RUN_TEST(test_both_names_taken_by_foreign_files_is_refused);
@@ -657,6 +675,7 @@ int main(void) {
     RUN_TEST(test_planning_refuses_null_arguments);
     RUN_TEST(test_the_library_shows_installed_and_changed_games);
     RUN_TEST(test_the_manifest_round_trips_through_the_memory_stick);
+    RUN_TEST(test_a_name_with_a_literal_backslash_u0000_round_trips);
     RUN_TEST(test_unknown_fields_are_ignored);
     RUN_TEST(test_a_damaged_manifest_loads_empty_and_is_replaced_on_save);
     RUN_TEST(test_a_manifest_too_large_or_too_dense_is_damaged);

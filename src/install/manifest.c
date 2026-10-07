@@ -18,8 +18,9 @@
 #define HEX_BASE 16
 /* 2^53: cJSON reads numbers as doubles, exact for every whole number below it. */
 #define JSON_INTEGER_LIMIT 9007199254740992.0
-/* "\u0000" would cut a name short where C strings end; Skiff never writes it. */
-#define JSON_ESCAPED_NUL "\\u0000"
+/* What follows the backslash of an escaped NUL. */
+#define JSON_ESCAPED_NUL "u0000"
+#define JSON_ESCAPED_NUL_LENGTH 5
 /* Structural characters (':' ',' '[' '{') a manifest of SKIFF_INSTALL_RECORDS_MAX records holds
  * at most, with room to spare: about 16 per record. A text with more is not one Skiff wrote, and
  * is refused before cJSON builds a tree of it. */
@@ -254,14 +255,23 @@ skiff_err skiff_install_manifest_format(const skiff_install_manifest *manifest, 
     return err;
 }
 
-/* At most JSON_TOKENS_MAX structural characters outside strings, so cJSON's tree stays small. */
-static int token_count_ok(const char *text, size_t length) {
+/*
+ * At most JSON_TOKENS_MAX structural characters outside strings, so cJSON's tree stays small, and
+ * no escaped NUL ("\u0000") inside one: it would cut a name short where C strings end. Escapes are
+ * followed one at a time, so a name holding a literal backslash before "u0000" (written "\\u0000")
+ * is not mistaken for one.
+ */
+static int json_shape_ok(const char *text, size_t length) {
     size_t tokens = 0;
     int in_string = 0;
     for (size_t i = 0; i < length; i++) {
         const char c = text[i];
         if (in_string) {
             if (c == '\\') {
+                if (length - i > JSON_ESCAPED_NUL_LENGTH &&
+                    memcmp(text + i + 1, JSON_ESCAPED_NUL, JSON_ESCAPED_NUL_LENGTH) == 0) {
+                    return 0;
+                }
                 i++;
             } else if (c == '"') {
                 in_string = 0;
@@ -273,16 +283,6 @@ static int token_count_ok(const char *text, size_t length) {
         }
     }
     return tokens <= JSON_TOKENS_MAX;
-}
-
-static int contains(const char *text, size_t length, const char *needle) {
-    const size_t needle_length = strlen(needle);
-    for (size_t i = 0; i + needle_length <= length; i++) {
-        if (memcmp(text + i, needle, needle_length) == 0) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /* A whole number of a double: in range and exact. */
@@ -385,8 +385,7 @@ skiff_err skiff_install_manifest_parse(skiff_install_manifest *manifest, const c
     manifest->count = 0;
     memset(manifest->records, 0, sizeof manifest->records);
     if (text == NULL || length == 0 || length > SKIFF_INSTALL_MANIFEST_BYTES_MAX ||
-        memchr(text, '\0', length) != NULL || contains(text, length, JSON_ESCAPED_NUL) ||
-        !token_count_ok(text, length)) {
+        memchr(text, '\0', length) != NULL || !json_shape_ok(text, length)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     const char *end = NULL;

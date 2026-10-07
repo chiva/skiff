@@ -196,12 +196,20 @@ static skiff_err try_candidate(const planner *p, const char *logical, int rename
     return err;
 }
 
+/* path is a file directly in folder ("games:/Game.iso" in "games:"): a record pointing anywhere
+ * else (config.ini, a save) is never trusted as a place to download to. */
+static int in_folder(const char *folder, const char *path) {
+    const size_t length = strlen(folder);
+    return strncmp(path, folder, length) == 0 && path[length] == '/' && path[length + 1] != '\0' &&
+           strchr(path + length + 1, '/') == NULL;
+}
+
 static skiff_err plan(const skiff_installer *installer, const planner *p, skiff_install_plan *out) {
     int placed = 0;
     /* Skiff's own recorded copy keeps its place, whatever RomM's name cleans to today. */
     const skiff_install_record *own =
         skiff_install_manifest_find(p->manifest, p->rom->id, p->file->file_name);
-    if (own != NULL) {
+    if (own != NULL && in_folder(installer->target_dir, own->path)) {
         const skiff_err err = try_candidate(p, own->path, 0, out, &placed);
         if (err != SKIFF_OK && err != SKIFF_ERR_INVALID_ARG && err != SKIFF_ERR_BUFFER_TOO_SMALL) {
             return err;

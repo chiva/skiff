@@ -438,7 +438,8 @@ static void on_progress(probe *p, watch *w, const skiff_jobs_event *event) {
     }
     w->status[0] = '\0';
     const unsigned percent = skiff_ui_progress_percent(&w->progress);
-    if (w->phase == PHASE_DOWNLOAD && percent >= WIFI_AT_PERCENT) {
+    /* Only with a speed measured on this attempt: a resumed job passes 20% before its first. */
+    if (w->phase == PHASE_DOWNLOAD && percent >= WIFI_AT_PERCENT && event->bytes_per_s > 0) {
         w->rate_before_wifi = w->rate_last;
         set_action(p, w, PHASE_WIFI_OFF, ACTION_WIFI_OFF);
     } else if (w->phase == PHASE_WIFI_ON && w->switch_on_us != 0) {

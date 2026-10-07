@@ -94,9 +94,10 @@ typedef struct skiff_psp_worker {
 } skiff_psp_worker;
 
 /*
- * Starts the worker thread. SKIFF_ERR_INVALID_ARG for a NULL argument, jobs, romm or net, or a
- * profile below 1; SKIFF_ERR_NO_MEMORY when the kernel cannot create the thread (its stack does not
- * fit), with the firmware's result in the log.
+ * Starts the worker thread; worker must be zeroed, or stopped by skiff_psp_worker_stop().
+ * SKIFF_ERR_INVALID_ARG for a NULL argument, jobs, romm or net, a profile below 1, or a worker
+ * whose thread still runs (one queue, one worker); SKIFF_ERR_NO_MEMORY when the kernel cannot
+ * create the thread (its stack does not fit), with the firmware's result in the log.
  */
 skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worker_config *config);
 

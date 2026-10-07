@@ -186,6 +186,10 @@ skiff_err skiff_psp_worker_start(skiff_psp_worker *worker, const skiff_psp_worke
         config->net == NULL || config->profile < 1) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    /* One worker per queue: a thread still running keeps using this struct. */
+    if (worker->running) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
     memset(worker, 0, sizeof *worker);
     worker->config = *config;
     worker->thread = -1;

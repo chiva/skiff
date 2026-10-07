@@ -47,6 +47,8 @@
     X(SKIFF_ERR_STORAGE_NOT_FOUND, 303, "File or folder not found on the Memory Stick")            \
     X(SKIFF_ERR_STORAGE_FILE_TOO_LARGE, 304,                                                       \
       "File is larger than 4 GB, which the PSP cannot store")                                      \
+    X(SKIFF_ERR_STORAGE_NAME_TAKEN, 305,                                                           \
+      "A file Skiff did not install already has this game's name")                                 \
     X(SKIFF_ERR_CONFIG_PARSE, 400, "The settings file is damaged")                                 \
     X(SKIFF_ERR_CONFIG_MISSING_KEY, 401, "A required setting is missing")                          \
     X(SKIFF_ERR_CONFIG_INVALID_VALUE, 402, "A setting has an invalid value")

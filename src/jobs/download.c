@@ -140,7 +140,8 @@ static int state_usable(const download *d, const skiff_download_state *state) {
     return state->size == d->spec->expected_size &&
            state->has_expected_crc32 == d->spec->has_expected_crc32 &&
            (!state->has_expected_crc32 || state->expected_crc32 == d->spec->expected_crc32) &&
-           is_strong_etag(state->etag) &&
+           /* Resuming needs a strong ETag for If-Range; a complete .part file is only renamed. */
+           (is_strong_etag(state->etag) || state->offset == state->size) &&
            skiff_storage_size(d->storage, d->part_path, &part_size) == SKIFF_OK &&
            part_size >= state->offset && part_size <= state->size;
 }
@@ -290,6 +291,17 @@ static skiff_err finish(download *d) {
     }
     if (d->spec->has_expected_crc32 && d->state.crc32 != d->spec->expected_crc32) {
         return discard_with(d, SKIFF_ERR_ROMM_CHECKSUM);
+    }
+    /* Checked now, not when the download was planned: a file copied there meanwhile (over USB,
+     * between two launches) is never Skiff's to remove, and Skiff's own copy only while it is still
+     * the size Skiff recorded. */
+    uint64_t existing = 0;
+    err = skiff_storage_size(d->storage, d->spec->target_path, &existing);
+    if (err == SKIFF_OK && (!d->spec->replace_target || existing != d->spec->replace_size)) {
+        return SKIFF_ERR_STORAGE_NAME_TAKEN;
+    }
+    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+        return err;
     }
     err = remove_if_present(d->storage, d->spec->target_path);
     if (err == SKIFF_OK) {

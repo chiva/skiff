@@ -377,6 +377,9 @@ static void test_server_ignoring_ranges_restarts(void) {
 }
 
 static void test_weak_or_missing_etag_never_resumes(void) {
+    /* The same file twice: the second download replaces the first, Skiff's own. */
+    spec.replace_target = 1;
+    spec.replace_size = BODY_BYTES;
     fake_route *route = serve(WEAK_ETAG);
     cut_after(route, 5 * MIB);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("", saved_state().etag, "a weak ETag is not kept");
@@ -633,6 +636,9 @@ static void test_failing_sync_never_advances_the_saved_offset(void) {
 
 static void test_untrustworthy_progress_starts_fresh(void) {
     static const char GARBAGE[] = "version=1\nsize=12";
+    /* Each round downloads the same file again over the last one, Skiff's own. */
+    spec.replace_target = 1;
+    spec.replace_size = BODY_BYTES;
     fake_route *route = serve(ETAG);
 
     cut_after(route, 5 * MIB);
@@ -660,10 +666,69 @@ static void test_untrustworthy_progress_starts_fresh(void) {
     assert_complete();
 }
 
-static void test_existing_target_is_replaced(void) {
+static void test_skiffs_own_copy_is_replaced(void) {
     serve(ETAG);
     write_all(target, "old", 3);
+    spec.replace_target = 1;
+    spec.replace_size = 3;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    assert_complete();
+}
+
+static void test_skiffs_copy_changed_meanwhile_is_not_replaced(void) {
+    serve(ETAG);
+    TEST_PRINTF("planned over Skiff's 3-byte copy, but a 4-byte file is there when it finishes");
+    write_all(target, "mine", 4);
+    spec.replace_target = 1;
+    spec.replace_size = 3;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, attempt());
+    TEST_ASSERT_EQUAL_UINT64(4, size_of(target));
+    assert_durable_prefix(BODY_BYTES);
+}
+
+/* A file appears at the target while a download served with `etag` runs: 305, and the finished
+ * download is kept so that, once the file is moved, the next attempt only renames it. */
+static void assert_finished_download_waits_for_the_target(const char *etag) {
+    serve(etag);
+    write_all(target, "mine", 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, attempt());
+    TEST_ASSERT_FALSE(result.complete);
+    assert_durable_prefix(BODY_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, target));
+    const size_t requests = transport.request_count;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(requests, transport.request_count, "nothing left to fetch");
+    assert_complete();
+}
+
+static void test_a_finished_download_without_a_strong_etag_is_kept_after_305(void) {
+    TEST_PRINTF("weak ETag: it could not resume a partial download, but a finished one only needs "
+                "renaming");
+    assert_finished_download_waits_for_the_target(WEAK_ETAG);
+}
+
+static void test_a_finished_download_without_an_etag_is_kept_after_305(void) {
+    assert_finished_download_waits_for_the_target(NULL);
+}
+
+static void test_a_file_found_at_the_target_is_never_removed(void) {
+    serve(ETAG);
+    TEST_PRINTF("a file copied to the target while the download ran (or between two launches)");
+    write_all(target, "mine", 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, attempt());
+    TEST_ASSERT_FALSE(result.complete);
+    uint64_t kept_size = 0;
+    unsigned char *kept = read_all(target, &kept_size);
+    TEST_ASSERT_EQUAL_UINT64(4, kept_size);
+    TEST_ASSERT_EQUAL_MEMORY("mine", kept, 4);
+    free(kept);
+    TEST_PRINTF("the finished download is kept: once the file is moved, the next attempt only "
+                "finishes it");
+    assert_durable_prefix(BODY_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, target));
+    const size_t requests = transport.request_count;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(requests, transport.request_count, "nothing left to fetch");
     assert_complete();
 }
 
@@ -808,7 +873,11 @@ int main(void) {
     RUN_TEST(test_handle_lost_to_a_suspend_costs_one_attempt);
     RUN_TEST(test_failing_sync_never_advances_the_saved_offset);
     RUN_TEST(test_untrustworthy_progress_starts_fresh);
-    RUN_TEST(test_existing_target_is_replaced);
+    RUN_TEST(test_skiffs_own_copy_is_replaced);
+    RUN_TEST(test_a_file_found_at_the_target_is_never_removed);
+    RUN_TEST(test_a_finished_download_without_a_strong_etag_is_kept_after_305);
+    RUN_TEST(test_a_finished_download_without_an_etag_is_kept_after_305);
+    RUN_TEST(test_skiffs_copy_changed_meanwhile_is_not_replaced);
     RUN_TEST(test_stop_hook_ends_the_attempt_and_keeps_the_progress);
     RUN_TEST(test_retryable_failures);
     RUN_TEST(test_arguments_and_limits);

@@ -81,6 +81,11 @@ typedef struct skiff_job {
     char file_name[SKIFF_JOBS_FILE_NAME_MAX];
     /* Where the file goes (a real path, e.g. "ms0:/ISO/Game.iso"). */
     char target[SKIFF_JOBS_TARGET_MAX];
+    /* The file at target is Skiff's own earlier copy, replace_size bytes long, and may be replaced
+     * (skiff_install_plan's replaces_own and own_size); otherwise a file found there when the
+     * download finishes is never removed (skiff_download_spec.replace_target). */
+    int replace_target;
+    uint64_t replace_size;
 } skiff_job;
 
 /* What skiff_jobs_add() takes: a job before it has an id and a state. */
@@ -92,6 +97,9 @@ typedef struct skiff_job_request {
     uint64_t size;
     int has_crc32;
     uint32_t crc32;
+    /* See skiff_job.replace_target and replace_size. */
+    int replace_target;
+    uint64_t replace_size;
 } skiff_job_request;
 
 typedef void (*skiff_jobs_lock_fn)(void *ctx);

@@ -40,8 +40,9 @@ what makes it unit-testable and lets sanitizers run over it.
 
 Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
 text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
-`storage/` (the storage seam, logical roots, free space, safe names), `jobs/` (resumable
-downloads, the download queue and its retry policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
+`storage/` (the storage seam, logical roots, free space, safe names), `install/` (the PSP
+installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
+policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
 network stack, TLS hooks, the GU renderer) exist. The other layers arrive with the
 [roadmap](roadmap.md) phases that need them.
 
@@ -387,9 +388,18 @@ network is back.
   sync flushes the whole device, directory entries included. `skiff_storage_read_whole()` (and the
   next replacement) first finishes one a power cut interrupted: a `.tmp` file is dropped, a `.new`
   file without the file is put in place, and one beside the file is dropped.
-- **Installed state**: a manifest (`PSP/GAME/Skiff/installed.json`: RomM ID → path, size, hash)
-  records what Skiff installed. Scanning folders and matching names is only a fallback for games
-  copied by hand.
+- **Installed state**: `app:/installed.json` (`include/skiff/install.h`) records every file Skiff
+  installed: RomM id, RomM file name, logical path (`games:/Game.iso`, so it follows the device),
+  size, CRC-32 and when, replaced whole like `config.ini`. At most 512 records and 640 KB (512
+  records with the longest names fit, so whatever is recorded can be saved); a file
+  Skiff cannot read (cut, edited by hand, written by a newer Skiff) loads as empty, with a warning,
+  and the next save first moves it to `installed.json.damaged`, so its records are never destroyed.
+  A Memory Stick error while reading it, or too little memory to parse it (checked before parsing,
+  since cJSON reports a failed allocation as a parse error), makes the next save refuse rather than
+  replace the records with an empty list. At startup records whose file is
+  gone (deleted on a computer or in the XMB) or no longer the recorded size (replaced outside
+  Skiff) are dropped, so the library shows the game as not installed; a recorded game whose size or CRC-32 RomM now lists differently shows as changed.
+  Games copied by hand are not recognised; they are only protected from being overwritten (below).
 - **Logical roots**: code addresses `games:` (`<device>/ISO`), `saves:` (`<device>/PSP/SAVEDATA`)
   and `app:` (the EBOOT's folder). The device is the one the EBOOT runs from, read from `argv[0]`:
   `ms0:` for a Memory Stick, `ef0:` for a PSP Go's internal storage. `skiff_storage_resolve()` turns
@@ -406,13 +416,46 @@ An installer maps a RomM platform to where its games go:
 typedef struct skiff_installer {
     const char *romm_platform_slug;     /* "psp" */
     const char *const *extensions;      /* {".iso", ".cso", ".zso", NULL} */
-    const char *target_dir;             /* "games:/ISO" */
+    const char *target_dir;             /* "games:", which is <device>/ISO */
     skiff_err (*post_install)(const char *installed_path); /* optional */
 } skiff_installer;
 ```
 
-The first release registers one installer (PSP). PS1 and emulated systems are new table entries;
-see [Adding a platform](adding-a-platform.md).
+The first release registers one installer, PSP: `psp` → `.iso`, `.cso`, `.zso` (any case) →
+`games:`, which is `<device>/ISO` (`src/install/install.c`). PS1 and emulated systems are new
+table entries; see [Adding a platform](adding-a-platform.md). A ROM that is a folder of several
+files, a file with another extension, or a name RomM gives in a way Skiff cannot use
+(`skiff_romm_name_status`) is listed but not installable, with the reason the UI shows.
+
+**Never replacing a file Skiff did not install.** A download's last step renames its `.part` file
+over the target, so `skiff_install_plan_download()` picks a target that can only hold Skiff's own
+earlier copy of the same ROM file:
+
+1. Skiff's recorded copy keeps its place (the download replaces it), as long as it is a file
+   directly in the installer's folder (a record pointing anywhere else, such as a hand-edited one
+   naming `config.ini`, is never a target) and still the size Skiff recorded; one of another size was replaced outside Skiff and is not
+   touched. The CRC-32 is not checked, which would mean reading a whole game.
+2. Otherwise the file's safe name in the installer's folder, unless a file is there that Skiff did
+   not install for this ROM file (copied by hand, or another ROM's file whose name cleans to the
+   same safe name, `a/b.iso` and `a:b.iso`, or differs only in case, which FAT ignores), another
+   record holds the name, or a queued download is promised it.
+3. Otherwise the name with the RomM id before its extension, `Game [1234].iso`, under the same
+   checks (shortened between characters when long).
+4. Otherwise the download is refused (`SKIFF_ERR_STORAGE_NAME_TAKEN`, 305): nothing is
+   overwritten.
+
+A plan is also refused when the manifest could not record the result (full, or a RomM id it
+cannot store), so no download ends as a file Skiff no longer knows it owns.
+
+A name whose `.part` or `.resume` file already exists counts as taken too: the download engine
+would trust or delete those, and nobody queued them.
+
+The plan is checked again when the download finishes: a job may replace the file at its target
+only when the plan found Skiff's own copy there (`replaces_own` and its recorded size, kept in the
+queue as the job's `replace_target` and `replace_size`), and only while the file there is still
+that size. Otherwise a file that appeared at the target after planning (copied over USB between two
+launches, say) stops the download with 305 instead of being removed, and the finished `.part` file
+is kept, so a retry only renames it once the player moves the other file.
 
 ## Saves
 

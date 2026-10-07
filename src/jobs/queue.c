@@ -18,6 +18,8 @@
 #define KEY_STATE "state"
 #define KEY_ERROR "error"
 #define KEY_ATTEMPTS "attempts"
+#define KEY_REPLACE "replace"
+#define KEY_REPLACE_SIZE "replace_size"
 #define CRC32_HEX_DIGITS 8
 #define HEX_BASE 16
 #define ASCII_DELETE 0x7F
@@ -86,6 +88,25 @@ static int read_text(const cJSON *object, const char *name, char *out, size_t si
 }
 
 /* Exactly eight hexadecimal digits, or absent. */
+/* Whether the job may replace the file at its target (Skiff's own earlier copy); absent is no, as
+ * in a queue written before the field existed. */
+static int read_replace(const cJSON *object, skiff_job *job) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, KEY_REPLACE);
+    job->replace_target = 0;
+    job->replace_size = 0;
+    if (item == NULL || cJSON_IsFalse(item)) {
+        return 1;
+    }
+    double size = 0;
+    if (!cJSON_IsTrue(item) ||
+        !read_number(object, KEY_REPLACE_SIZE, (double)SKIFF_STORAGE_MAX_FILE_BYTES, &size)) {
+        return 0;
+    }
+    job->replace_target = 1;
+    job->replace_size = (uint64_t)size;
+    return 1;
+}
+
 static int read_crc32(const cJSON *object, skiff_job *job) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, KEY_CRC32);
     if (item == NULL || cJSON_IsNull(item)) {
@@ -130,7 +151,8 @@ static int parse_job(const cJSON *object, skiff_job *job) {
         !read_text(object, KEY_TARGET, job->target, sizeof job->target, 0) ||
         !target_fits(job->target) ||
         !read_number(object, KEY_SIZE, (double)SKIFF_STORAGE_MAX_FILE_BYTES, &size) || size == 0 ||
-        !read_crc32(object, job) || !read_state(object, &job->state) ||
+        !read_crc32(object, job) || !read_replace(object, job) ||
+        !read_state(object, &job->state) ||
         !read_number(object, KEY_ERROR, JSON_ERROR_LIMIT, &error) ||
         !read_number(object, KEY_ATTEMPTS, JSON_UINT32_LIMIT, &attempts)) {
         return 0;
@@ -286,7 +308,10 @@ static cJSON *job_object(const skiff_job *job) {
                         : cJSON_AddNullToObject(object, KEY_CRC32)) == NULL ||
         cJSON_AddStringToObject(object, KEY_STATE, skiff_job_state_name(job->state)) == NULL ||
         cJSON_AddNumberToObject(object, KEY_ERROR, (double)job->error) == NULL ||
-        cJSON_AddNumberToObject(object, KEY_ATTEMPTS, (double)job->attempts) == NULL) {
+        cJSON_AddNumberToObject(object, KEY_ATTEMPTS, (double)job->attempts) == NULL ||
+        cJSON_AddBoolToObject(object, KEY_REPLACE, job->replace_target != 0) == NULL ||
+        (job->replace_target &&
+         cJSON_AddNumberToObject(object, KEY_REPLACE_SIZE, (double)job->replace_size) == NULL)) {
         cJSON_Delete(object);
         return NULL;
     }
@@ -531,6 +556,8 @@ static void fill_job(skiff_job *job, uint32_t id, const skiff_job_request *reque
     job->size = request->size;
     job->has_crc32 = request->has_crc32;
     job->crc32 = request->crc32;
+    job->replace_target = request->replace_target != 0;
+    job->replace_size = job->replace_target ? request->replace_size : 0;
     job->state = SKIFF_JOB_QUEUED;
 }
 

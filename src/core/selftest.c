@@ -10,6 +10,7 @@
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/i18n.h"
+#include "skiff/install.h"
 #include "skiff/jobs.h"
 #include "skiff/log.h"
 #include "skiff/romm.h"
@@ -84,6 +85,9 @@ typedef struct selftest_check {
  * exactly. */
 #define SKIFF_SELFTEST_JOBS_TEXT_MAX 2048
 #define SKIFF_SELFTEST_JOBS_ROM_ID 999999999999999ULL
+/* An install recorded at 2026-10-01 00:00:00.123 UTC, in ms: above 2^32, below 2^53. */
+#define SKIFF_SELFTEST_MANIFEST_MS 1790812800123LL
+#define SKIFF_SELFTEST_MANIFEST_TEXT_MAX 512
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
 
@@ -331,6 +335,39 @@ static const char *check_jobs_queue(void) {
                : "a queue file came back with other values";
 }
 
+/* installed.json is written and read with cJSON, which prints numbers through newlib's printf as
+ * doubles: the largest RomM id and a size near 4 GiB must come back exactly. */
+static const char *check_install_manifest(void) {
+    skiff_install_manifest *manifest = NULL;
+    skiff_install_manifest *parsed = NULL;
+    char text[SKIFF_SELFTEST_MANIFEST_TEXT_MAX];
+    size_t length = 0;
+    const skiff_install_record record = {SKIFF_INSTALL_ROM_ID_MAX,
+                                         "Caf\xC3\xA9.iso",
+                                         "games:/Caf\xC3\xA9.iso",
+                                         SKIFF_STORAGE_MAX_FILE_BYTES,
+                                         1,
+                                         SKIFF_SELFTEST_STATE_CRC32,
+                                         SKIFF_SELFTEST_MANIFEST_MS};
+    const char *failure = NULL;
+    if (skiff_install_manifest_create(&manifest) != SKIFF_OK ||
+        skiff_install_manifest_create(&parsed) != SKIFF_OK ||
+        skiff_install_manifest_record(manifest, &record) != SKIFF_OK ||
+        skiff_install_manifest_format(manifest, text, sizeof text, &length) != SKIFF_OK ||
+        skiff_install_manifest_parse(parsed, text, length) != SKIFF_OK || parsed->count != 1) {
+        failure = "installed.json did not survive a round trip";
+    } else if (parsed->records[0].rom_id != record.rom_id ||
+               parsed->records[0].size != record.size || parsed->records[0].crc32 != record.crc32 ||
+               parsed->records[0].installed_ms != record.installed_ms ||
+               strcmp(parsed->records[0].file_name, record.file_name) != 0 ||
+               strcmp(parsed->records[0].path, record.path) != 0) {
+        failure = "installed.json came back with other values";
+    }
+    skiff_install_manifest_destroy(parsed);
+    skiff_install_manifest_destroy(manifest);
+    return failure;
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -348,6 +385,7 @@ static const selftest_check CHECKS[] = {
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},
     {"jobs-queue", check_jobs_queue},
+    {"install-manifest", check_install_manifest},
 };
 // clang-format on
 

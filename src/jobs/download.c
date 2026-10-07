@@ -140,7 +140,8 @@ static int state_usable(const download *d, const skiff_download_state *state) {
     return state->size == d->spec->expected_size &&
            state->has_expected_crc32 == d->spec->has_expected_crc32 &&
            (!state->has_expected_crc32 || state->expected_crc32 == d->spec->expected_crc32) &&
-           is_strong_etag(state->etag) &&
+           /* Resuming needs a strong ETag for If-Range; a complete .part file is only renamed. */
+           (is_strong_etag(state->etag) || state->offset == state->size) &&
            skiff_storage_size(d->storage, d->part_path, &part_size) == SKIFF_OK &&
            part_size >= state->offset && part_size <= state->size;
 }

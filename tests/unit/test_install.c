@@ -459,6 +459,69 @@ static void test_a_damaged_manifest_loads_empty_and_is_replaced_on_save(void) {
     TEST_ASSERT_EQUAL_size_t(1, manifest->count);
 }
 
+/* The whole file at path, or NULL when there is none (free it). */
+static char *file_text(const char *path) {
+    char *text = malloc(SKIFF_INSTALL_MANIFEST_BYTES_MAX + 1);
+    TEST_ASSERT_NOT_NULL(text);
+    size_t length = 0;
+    skiff_file *opened = NULL;
+    if (skiff_storage_open(&storage.base, path, SKIFF_FILE_READ, 0, &opened) != SKIFF_OK) {
+        free(text);
+        return NULL;
+    }
+    size_t got = 0;
+    do {
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                              skiff_file_read(opened, text + length,
+                                              SKIFF_INSTALL_MANIFEST_BYTES_MAX - length, &got));
+        length += got;
+    } while (got > 0 && length < SKIFF_INSTALL_MANIFEST_BYTES_MAX);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(opened));
+    text[length] = '\0';
+    return text;
+}
+
+static void test_a_damaged_manifest_is_kept_aside_not_overwritten(void) {
+    char kept_path[sizeof manifest_path + sizeof SKIFF_INSTALL_DAMAGED_SUFFIX];
+    snprintf(kept_path, sizeof kept_path, "%s" SKIFF_INSTALL_DAMAGED_SUFFIX, manifest_path);
+    TEST_PRINTF("a manifest Skiff cannot read may still hold records: it is moved, not lost");
+    write_manifest("{\"version\":2,\"installed\":[]}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_DAMAGED, load());
+    add_record(ROM_ID, "Game.iso", "games:/Game.iso");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    char *kept = file_text(kept_path);
+    TEST_ASSERT_NOT_NULL(kept);
+    TEST_ASSERT_EQUAL_STRING("{\"version\":2,\"installed\":[]}", kept);
+    free(kept);
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_LOADED, load());
+    TEST_ASSERT_EQUAL_size_t(1, manifest->count);
+    TEST_PRINTF("later saves replace the manifest as usual and leave the kept copy alone");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    kept = file_text(kept_path);
+    TEST_ASSERT_EQUAL_STRING("{\"version\":2,\"installed\":[]}", kept);
+    free(kept);
+}
+
+static void test_a_damaged_manifest_that_cannot_be_moved_is_not_overwritten(void) {
+    write_manifest("not json");
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_DAMAGED, load());
+    add_record(ROM_ID, "Game.iso", "games:/Game.iso");
+    storage.fail_suffix = SKIFF_INSTALL_MANIFEST_NAME;
+    storage.rename_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    storage.rename_error = SKIFF_OK;
+    char *text = file_text(manifest_path);
+    TEST_ASSERT_EQUAL_STRING("not json", text);
+    free(text);
+    TEST_PRINTF("once the move works, the save goes through");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_LOADED, load());
+}
+
 static void test_a_manifest_too_large_or_too_dense_is_damaged(void) {
     char *big = malloc(SKIFF_INSTALL_MANIFEST_BYTES_MAX + 2);
     TEST_ASSERT_NOT_NULL(big);
@@ -692,6 +755,8 @@ int main(void) {
     RUN_TEST(test_a_name_with_a_literal_backslash_u0000_round_trips);
     RUN_TEST(test_unknown_fields_are_ignored);
     RUN_TEST(test_a_damaged_manifest_loads_empty_and_is_replaced_on_save);
+    RUN_TEST(test_a_damaged_manifest_is_kept_aside_not_overwritten);
+    RUN_TEST(test_a_damaged_manifest_that_cannot_be_moved_is_not_overwritten);
     RUN_TEST(test_a_manifest_too_large_or_too_dense_is_damaged);
     RUN_TEST(test_the_manifest_holds_at_most_its_cap);
     RUN_TEST(test_a_full_manifest_of_the_longest_names_still_saves);

@@ -92,6 +92,9 @@ typedef struct skiff_install_manifest {
      * unknown, so skiff_install_manifest_save() refuses with it instead of replacing them with an
      * empty list. A later successful load clears it. */
     skiff_err load_error;
+    /* The last load found a file it could not read: the next save first moves that file to
+     * "<path>" SKIFF_INSTALL_DAMAGED_SUFFIX, so its records stay on the Memory Stick. */
+    int set_aside_damaged;
 } skiff_install_manifest;
 
 /* Allocates an empty manifest (about 290 KB, too large for a PSP thread's stack). Free it with
@@ -101,6 +104,10 @@ skiff_err skiff_install_manifest_create(skiff_install_manifest **out);
 /* Frees the manifest. Does nothing for NULL. */
 void skiff_install_manifest_destroy(skiff_install_manifest *manifest);
 
+/* A manifest Skiff could not read is kept under this suffix rather than overwritten (replacing an
+ * older one kept there), so a misread never loses the records. */
+#define SKIFF_INSTALL_DAMAGED_SUFFIX ".damaged"
+
 /* What skiff_install_manifest_load() found. */
 typedef enum skiff_install_load_result {
     /* The file was read; its records are loaded. */
@@ -108,17 +115,19 @@ typedef enum skiff_install_load_result {
     /* No file yet: nothing installed. */
     SKIFF_INSTALL_NO_MANIFEST,
     /* The file is not one Skiff can read (cut, edited by hand, too large, written by a newer
-     * Skiff): the manifest starts empty, the next save replaces the file, and the caller logs a
-     * warning. Games it listed then count as copied by hand, so their names are never overwritten.
-     */
+     * Skiff): the manifest starts empty, the next save moves the file aside (see
+     * SKIFF_INSTALL_DAMAGED_SUFFIX) before writing a new one, and the caller logs a warning. Games
+     * it listed then count as copied by hand, so their names are never overwritten. */
     SKIFF_INSTALL_DAMAGED,
 } skiff_install_load_result;
 
 /*
  * Replaces manifest's records with those in the file at path (crash-safe read,
  * skiff_storage_read_whole()). A missing or damaged file gives an empty manifest and SKIFF_OK, with
- * *result saying which (result may be NULL). A storage error leaves the manifest empty, returns
- * the error and keeps it in load_error (see there). SKIFF_ERR_INVALID_ARG for a NULL manifest,
+ * *result saying which (result may be NULL). A storage error, or SKIFF_ERR_NO_MEMORY when the
+ * memory to parse the file is not there (it is checked first, since cJSON cannot tell a failed
+ * allocation from a damaged file), leaves the manifest empty, returns the error and keeps it in
+ * load_error (see there). SKIFF_ERR_INVALID_ARG for a NULL manifest,
  * storage or path.
  */
 skiff_err skiff_install_manifest_load(skiff_install_manifest *manifest, skiff_storage *storage,
@@ -126,11 +135,13 @@ skiff_err skiff_install_manifest_load(skiff_install_manifest *manifest, skiff_st
 
 /*
  * Writes the manifest to path, replacing the file whole (crash-safe: a failure leaves the old
- * file). The manifest's load_error when the last load failed; SKIFF_ERR_INVALID_ARG for a NULL
- * argument; otherwise the storage's error.
+ * file). After a load that found the file damaged, that file is first moved to
+ * "<path>" SKIFF_INSTALL_DAMAGED_SUFFIX; if that fails, nothing is written. The manifest's
+ * load_error when the last load failed; SKIFF_ERR_INVALID_ARG for a NULL argument or a path too
+ * long for the suffix; otherwise the storage's error.
  */
-skiff_err skiff_install_manifest_save(const skiff_install_manifest *manifest,
-                                      skiff_storage *storage, const char *path);
+skiff_err skiff_install_manifest_save(skiff_install_manifest *manifest, skiff_storage *storage,
+                                      const char *path);
 
 /* The record for rom_id's file file_name; NULL when there is none. */
 const skiff_install_record *skiff_install_manifest_find(const skiff_install_manifest *manifest,

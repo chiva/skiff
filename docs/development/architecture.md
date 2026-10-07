@@ -393,8 +393,10 @@ network is back.
   size, CRC-32 and when, replaced whole like `config.ini`. At most 512 records and 640 KB (512
   records with the longest names fit, so whatever is recorded can be saved); a file
   Skiff cannot read (cut, edited by hand, written by a newer Skiff) loads as empty, with a warning,
-  and is replaced on the next save, while a Memory Stick error while reading it makes the next
-  save refuse rather than replace the records with an empty list. At startup records whose file is
+  and the next save first moves it to `installed.json.damaged`, so its records are never destroyed.
+  A Memory Stick error while reading it, or too little memory to parse it (checked before parsing,
+  since cJSON reports a failed allocation as a parse error), makes the next save refuse rather than
+  replace the records with an empty list. At startup records whose file is
   gone (deleted on a computer or in the XMB) or no longer the recorded size (replaced outside
   Skiff) are dropped, so the library shows the game as not installed; a recorded game whose size or CRC-32 RomM now lists differently shows as changed.
   Games copied by hand are not recognised; they are only protected from being overwritten (below).

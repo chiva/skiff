@@ -686,6 +686,31 @@ static void test_skiffs_copy_changed_meanwhile_is_not_replaced(void) {
     assert_durable_prefix(BODY_BYTES);
 }
 
+/* A file appears at the target while a download served with `etag` runs: 305, and the finished
+ * download is kept so that, once the file is moved, the next attempt only renames it. */
+static void assert_finished_download_waits_for_the_target(const char *etag) {
+    serve(etag);
+    write_all(target, "mine", 4);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NAME_TAKEN, attempt());
+    TEST_ASSERT_FALSE(result.complete);
+    assert_durable_prefix(BODY_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, target));
+    const size_t requests = transport.request_count;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(requests, transport.request_count, "nothing left to fetch");
+    assert_complete();
+}
+
+static void test_a_finished_download_without_a_strong_etag_is_kept_after_305(void) {
+    TEST_PRINTF("weak ETag: it could not resume a partial download, but a finished one only needs "
+                "renaming");
+    assert_finished_download_waits_for_the_target(WEAK_ETAG);
+}
+
+static void test_a_finished_download_without_an_etag_is_kept_after_305(void) {
+    assert_finished_download_waits_for_the_target(NULL);
+}
+
 static void test_a_file_found_at_the_target_is_never_removed(void) {
     serve(ETAG);
     TEST_PRINTF("a file copied to the target while the download ran (or between two launches)");
@@ -850,6 +875,8 @@ int main(void) {
     RUN_TEST(test_untrustworthy_progress_starts_fresh);
     RUN_TEST(test_skiffs_own_copy_is_replaced);
     RUN_TEST(test_a_file_found_at_the_target_is_never_removed);
+    RUN_TEST(test_a_finished_download_without_a_strong_etag_is_kept_after_305);
+    RUN_TEST(test_a_finished_download_without_an_etag_is_kept_after_305);
     RUN_TEST(test_skiffs_copy_changed_meanwhile_is_not_replaced);
     RUN_TEST(test_stop_hook_ends_the_attempt_and_keeps_the_progress);
     RUN_TEST(test_retryable_failures);

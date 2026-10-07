@@ -25,6 +25,10 @@
  * at most, with room to spare: about 16 per record. A text with more is not one Skiff wrote, and
  * is refused before cJSON builds a tree of it. */
 #define JSON_TOKENS_MAX ((size_t)SKIFF_INSTALL_RECORDS_MAX * 24 + 64)
+/* What cJSON can need for a text of `length` bytes within JSON_TOKENS_MAX: a node per value and per
+ * key, plus copies of the strings. Checked before parsing, because cJSON reports a failed
+ * allocation as a parse error, which would make a readable manifest look damaged. */
+#define PARSE_HEADROOM_BYTES(length) ((2 * JSON_TOKENS_MAX + 2) * sizeof(cJSON) + 2 * (length))
 
 static const char *const LOGICAL_ROOTS[] = {SKIFF_STORAGE_ROOT_APP, SKIFF_STORAGE_ROOT_GAMES,
                                             SKIFF_STORAGE_ROOT_SAVES};
@@ -388,6 +392,11 @@ skiff_err skiff_install_manifest_parse(skiff_install_manifest *manifest, const c
         memchr(text, '\0', length) != NULL || !json_shape_ok(text, length)) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    void *headroom = malloc(PARSE_HEADROOM_BYTES(length));
+    if (headroom == NULL) {
+        return SKIFF_ERR_NO_MEMORY;
+    }
+    free(headroom);
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts(text, length, &end, 0);
     const int ok = root != NULL && end != NULL && end >= text && end <= text + length &&
@@ -429,35 +438,61 @@ skiff_err skiff_install_manifest_load(skiff_install_manifest *manifest, skiff_st
         return SKIFF_ERR_NO_MEMORY;
     }
     size_t length = 0;
-    const skiff_err err =
+    skiff_err err =
         skiff_storage_read_whole(storage, path, text, SKIFF_INSTALL_MANIFEST_BYTES_MAX, &length);
     skiff_install_load_result found = SKIFF_INSTALL_NO_MANIFEST;
+    skiff_err parsed = SKIFF_OK;
     if (err == SKIFF_ERR_BUFFER_TOO_SMALL) {
         found = SKIFF_INSTALL_DAMAGED;
     } else if (err == SKIFF_OK && length > 0) {
-        found = skiff_install_manifest_parse(manifest, text, length) == SKIFF_OK
-                    ? SKIFF_INSTALL_LOADED
-                    : SKIFF_INSTALL_DAMAGED;
+        parsed = skiff_install_manifest_parse(manifest, text, length);
+        found = parsed == SKIFF_OK ? SKIFF_INSTALL_LOADED : SKIFF_INSTALL_DAMAGED;
     }
     free(text);
+    if (parsed == SKIFF_ERR_NO_MEMORY) {
+        err = SKIFF_ERR_NO_MEMORY;
+    }
     if (err != SKIFF_OK && err != SKIFF_ERR_BUFFER_TOO_SMALL) {
         manifest->load_error = err;
         return err;
     }
     manifest->load_error = SKIFF_OK;
+    manifest->set_aside_damaged = found == SKIFF_INSTALL_DAMAGED;
     if (result != NULL) {
         *result = found;
     }
     return SKIFF_OK;
 }
 
-skiff_err skiff_install_manifest_save(const skiff_install_manifest *manifest,
-                                      skiff_storage *storage, const char *path) {
+/* Moves the file the last load could not read to "<path>.damaged", replacing an older one there,
+ * so writing a new manifest never destroys records a misread missed. */
+static skiff_err set_aside(skiff_storage *storage, const char *path) {
+    char kept[SKIFF_STORAGE_PATH_MAX];
+    const int written = snprintf(kept, sizeof kept, "%s" SKIFF_INSTALL_DAMAGED_SUFFIX, path);
+    if (written <= 0 || (size_t)written >= sizeof kept) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    skiff_err err = skiff_storage_remove(storage, kept);
+    if (err == SKIFF_OK || err == SKIFF_ERR_STORAGE_NOT_FOUND) {
+        err = skiff_storage_rename(storage, path, kept);
+    }
+    return err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
+}
+
+skiff_err skiff_install_manifest_save(skiff_install_manifest *manifest, skiff_storage *storage,
+                                      const char *path) {
     if (manifest == NULL || storage == NULL || path == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
     if (manifest->load_error != SKIFF_OK) {
         return manifest->load_error;
+    }
+    if (manifest->set_aside_damaged) {
+        const skiff_err err = set_aside(storage, path);
+        if (err != SKIFF_OK) {
+            return err;
+        }
+        manifest->set_aside_damaged = 0;
     }
     char *text = malloc(SKIFF_INSTALL_MANIFEST_BYTES_MAX);
     if (text == NULL) {

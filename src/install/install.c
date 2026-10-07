@@ -139,8 +139,10 @@ static skiff_err judge(const planner *p, const char *logical, char *path, size_t
     if (size_err != SKIFF_OK) {
         return size_err;
     }
-    /* A file is there: Skiff's own copy of this ROM file, or one it must not touch. */
-    *use = ours ? CANDIDATE_OWN : CANDIDATE_TAKEN;
+    /* A file is there: Skiff's own copy of this ROM file, or one it must not touch. A copy of
+     * another size was replaced outside Skiff since it was recorded, so it is no longer Skiff's.
+     * (The CRC-32 is not checked: that would mean reading a whole game.) */
+    *use = ours && size == record->size ? CANDIDATE_OWN : CANDIDATE_TAKEN;
     return SKIFF_OK;
 }
 
@@ -247,8 +249,17 @@ skiff_err skiff_install_plan_download(const skiff_installer *installer,
         skiff_install_check(installer, rom, file) != SKIFF_INSTALL_SUPPORTED) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    if (rom->id > SKIFF_INSTALL_ROM_ID_MAX) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
     const planner p = {rom, file, roots, manifest, storage, taken, taken_ctx};
-    const skiff_err err = plan(installer, &p, out);
+    skiff_err err = plan(installer, &p, out);
+    /* A download the manifest cannot record would leave a file Skiff no longer knows it owns. */
+    if (err == SKIFF_OK && manifest->count == SKIFF_INSTALL_RECORDS_MAX &&
+        skiff_install_manifest_find(manifest, rom->id, file->file_name) == NULL &&
+        skiff_install_manifest_find_path(manifest, out->logical_path) == NULL) {
+        err = SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
     if (err != SKIFF_OK) {
         memset(out, 0, sizeof *out);
     }

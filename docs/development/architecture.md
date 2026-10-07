@@ -382,12 +382,13 @@ network is back.
   file without the file is put in place, and one beside the file is dropped.
 - **Installed state**: `app:/installed.json` (`include/skiff/install.h`) records every file Skiff
   installed: RomM id, RomM file name, logical path (`games:/Game.iso`, so it follows the device),
-  size, CRC-32 and when, replaced whole like `config.ini`. At most 512 records and 256 KB; a file
+  size, CRC-32 and when, replaced whole like `config.ini`. At most 512 records and 640 KB (512
+  records with the longest names fit, so whatever is recorded can be saved); a file
   Skiff cannot read (cut, edited by hand, written by a newer Skiff) loads as empty, with a warning,
   and is replaced on the next save, while a Memory Stick error while reading it makes the next
   save refuse rather than replace the records with an empty list. At startup records whose file is
-  gone (deleted on a computer or in the XMB) are dropped, so the library shows the game as not
-  installed; a recorded game whose size or CRC-32 RomM now lists differently shows as changed.
+  gone (deleted on a computer or in the XMB) or no longer the recorded size (replaced outside
+  Skiff) are dropped, so the library shows the game as not installed; a recorded game whose size or CRC-32 RomM now lists differently shows as changed.
   Games copied by hand are not recognised; they are only protected from being overwritten (below).
 - **Logical roots**: code addresses `games:` (`<device>/ISO`), `saves:` (`<device>/PSP/SAVEDATA`)
   and `app:` (the EBOOT's folder). The device is the one the EBOOT runs from, read from `argv[0]`:
@@ -420,7 +421,9 @@ files, a file with another extension, or a name RomM gives in a way Skiff cannot
 over the target, so `skiff_install_plan_download()` picks a target that can only hold Skiff's own
 earlier copy of the same ROM file:
 
-1. Skiff's recorded copy keeps its place (the download replaces it).
+1. Skiff's recorded copy keeps its place (the download replaces it), as long as the file there is
+   still the size Skiff recorded; one of another size was replaced outside Skiff and is not
+   touched. The CRC-32 is not checked, which would mean reading a whole game.
 2. Otherwise the file's safe name in the installer's folder, unless a file is there that Skiff did
    not install for this ROM file (copied by hand, or another ROM's file whose name cleans to the
    same safe name, `a/b.iso` and `a:b.iso`, or differs only in case, which FAT ignores), another
@@ -429,6 +432,9 @@ earlier copy of the same ROM file:
    checks (shortened between characters when long).
 4. Otherwise the download is refused (`SKIFF_ERR_STORAGE_NAME_TAKEN`, 305): nothing is
    overwritten.
+
+A plan is also refused when the manifest could not record the result (full, or a RomM id it
+cannot store), so no download ends as a file Skiff no longer knows it owns.
 
 ## Saves
 

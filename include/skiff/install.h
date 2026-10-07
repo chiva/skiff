@@ -64,9 +64,10 @@ skiff_install_support skiff_install_check(const skiff_installer *installer,
  * the largest cards and small CSO files, and keeps the manifest in memory under 300 KB. */
 #define SKIFF_INSTALL_RECORDS_MAX 512
 /* The largest installed.json read or written. A record is about 200 bytes of JSON with typical
- * names and at most about 1.2 KB with the longest ones; 512 typical records come to about 100 KB,
- * so 256 KB holds them with room for long names. A larger file is treated as damaged. */
-#define SKIFF_INSTALL_MANIFEST_BYTES_MAX ((size_t)256 * 1024)
+ * names and at most about 1.2 KB with the longest ones (every '"' and '\\' written twice), so 512
+ * records always fit 640 KB: whatever the manifest can record, it can save. Read and save hold it
+ * in memory only while they run. A larger file is treated as damaged. */
+#define SKIFF_INSTALL_MANIFEST_BYTES_MAX ((size_t)640 * 1024)
 /* RomM ids are written as JSON numbers, which cJSON prints with 15 significant digits: an id must
  * stay below 10^15 to come back unchanged. */
 #define SKIFF_INSTALL_ROM_ID_MAX 999999999999999ULL
@@ -159,7 +160,8 @@ int skiff_install_manifest_forget(skiff_install_manifest *manifest, uint64_t rom
                                   const char *file_name);
 
 /*
- * Drops the records whose file is no longer there (deleted on a computer, or by the XMB), so the
+ * Drops the records whose file is no longer there (deleted on a computer, or by the XMB) or no
+ * longer the size Skiff recorded (replaced outside Skiff, so no longer Skiff's to replace), so the
  * library shows them as not installed; *forgotten (may be NULL) counts them. A record whose path
  * does not resolve is dropped too. Any storage error but SKIFF_ERR_STORAGE_NOT_FOUND stops and is
  * returned, keeping the records not yet checked. Save afterwards when *forgotten > 0.
@@ -224,14 +226,16 @@ typedef struct skiff_install_plan {
 
 /*
  * Picks where rom's file is downloaded to under installer, applying the overwrite policy above:
- * Skiff's own recorded copy keeps its path (replaces_own); otherwise the safe name
+ * Skiff's own recorded copy keeps its path (replaces_own; a file there of another size than
+ * recorded was replaced outside Skiff and counts as taken); otherwise the safe name
  * (skiff_storage_safe_name()) in installer's folder, unless a file is there that Skiff did not
  * install for this ROM file, another record holds that path (ignoring case), or taken (may be
  * NULL) says it is promised; then the name with " [<rom id>]" before its extension, under the same
- * checks. Errors: SKIFF_ERR_STORAGE_NAME_TAKEN when both names are taken; SKIFF_ERR_INVALID_ARG for
- * a NULL argument, a file skiff_install_check() does not support, or a name that cleans to nothing;
- * the storage's error when it cannot tell whether a name is free; skiff_storage_resolve()'s error.
- * out is zeroed on any error.
+ * checks. Errors: SKIFF_ERR_STORAGE_NAME_TAKEN when both names are taken;
+ * SKIFF_ERR_BUFFER_TOO_SMALL when the download would need a new record and the manifest is full;
+ * SKIFF_ERR_INVALID_ARG for a NULL argument, a file skiff_install_check() does not support, a rom
+ * id over SKIFF_INSTALL_ROM_ID_MAX, or a name that cleans to nothing; the storage's error when it
+ * cannot tell whether a name is free; skiff_storage_resolve()'s error. out is zeroed on any error.
  */
 skiff_err skiff_install_plan_download(const skiff_installer *installer,
                                       const skiff_romm_rom_summary *rom,

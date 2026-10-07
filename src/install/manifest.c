@@ -182,11 +182,11 @@ skiff_err skiff_install_manifest_reconcile(skiff_install_manifest *manifest, ski
         if (err == SKIFF_OK) {
             err = skiff_storage_size(storage, path, &size);
         }
-        if (err == SKIFF_OK) {
+        if (err == SKIFF_OK && size == manifest->records[i].size) {
             i++;
             continue;
         }
-        if (err != SKIFF_ERR_STORAGE_NOT_FOUND && err != SKIFF_ERR_INVALID_ARG &&
+        if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND && err != SKIFF_ERR_INVALID_ARG &&
             err != SKIFF_ERR_BUFFER_TOO_SMALL) {
             return err;
         }

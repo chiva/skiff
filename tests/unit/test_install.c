@@ -66,13 +66,19 @@ void tearDown(void) {
     temp_dir_remove(dir);
 }
 
-/* A file at the logical path, as if copied there by hand. */
-static void put_file(const char *logical) {
+/* A file of size bytes at the logical path. */
+static void put_file_of(const char *logical, size_t size) {
     char path[SKIFF_STORAGE_PATH_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&roots, logical, path, sizeof path));
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(posix, path, "x", 1));
-    TEST_PRINTF("file on the Memory Stick: %s", logical);
+    unsigned char *data = calloc(1, size);
+    TEST_ASSERT_NOT_NULL(data);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(posix, path, data, size));
+    free(data);
+    TEST_PRINTF("file on the Memory Stick: %s (%zu bytes)", logical, size);
 }
+
+/* A file of the size the records here carry, as if Skiff (or a hand copy) put it there. */
+static void put_file(const char *logical) { put_file_of(logical, GAME_SIZE); }
 
 static skiff_install_record record_of(uint64_t rom_id, const char *file_name, const char *logical) {
     skiff_install_record record;
@@ -217,6 +223,36 @@ static void test_skiffs_own_copy_is_replaced_in_place(void) {
     add_record(ROM_ID, "Game.iso", "games:/Game.iso");
     put_file("games:/Game.iso");
     assert_planned("games:/Game.iso", 0, 1);
+}
+
+static void test_a_recorded_copy_replaced_outside_skiff_is_no_longer_its_own(void) {
+    TEST_PRINTF("Skiff installed Game.iso, then someone put another file of another size there");
+    add_record(ROM_ID, "Game.iso", "games:/Game.iso");
+    put_file_of("games:/Game.iso", 1);
+    assert_planned("games:/Game [12].iso", 1, 0);
+}
+
+static void test_a_full_manifest_refuses_a_download_it_could_not_record(void) {
+    for (uint64_t i = 1; i <= SKIFF_INSTALL_RECORDS_MAX; i++) {
+        char name[32];
+        char logical[48];
+        snprintf(name, sizeof name, "Other %llu.iso", (unsigned long long)i);
+        snprintf(logical, sizeof logical, "games:/%s", name);
+        const skiff_install_record record = record_of(1000 + i, name, logical);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    }
+    TEST_ASSERT_EQUAL_STRING(skiff_err_name(SKIFF_ERR_BUFFER_TOO_SMALL),
+                             skiff_err_name(plan_download()));
+    TEST_ASSERT_EQUAL_STRING("", plan.logical_path);
+    TEST_PRINTF("a ROM already recorded can still be downloaded again");
+    rom.id = 1001;
+    snprintf(file.file_name, sizeof file.file_name, "Other 1.iso");
+    assert_planned("games:/Other 1.iso", 0, 0);
+}
+
+static void test_a_rom_id_the_manifest_cannot_store_is_refused(void) {
+    rom.id = SKIFF_INSTALL_ROM_ID_MAX + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, plan_download());
 }
 
 static void test_skiffs_own_copy_keeps_its_renamed_place(void) {
@@ -438,6 +474,31 @@ static void test_the_manifest_holds_at_most_its_cap(void) {
     TEST_ASSERT_EQUAL_size_t(SKIFF_INSTALL_RECORDS_MAX, manifest->count);
 }
 
+static void test_a_full_manifest_of_the_longest_names_still_saves(void) {
+    TEST_PRINTF("names of quotes and backslashes, each written twice in JSON");
+    for (uint64_t i = 0; i < SKIFF_INSTALL_RECORDS_MAX; i++) {
+        skiff_install_record record;
+        memset(&record, 0, sizeof record);
+        record.rom_id = SKIFF_INSTALL_ROM_ID_MAX - i;
+        int used =
+            snprintf(record.file_name, sizeof record.file_name, "%04llu", (unsigned long long)i);
+        memset(record.file_name + used, '"', sizeof record.file_name - 1 - (size_t)used);
+        used = snprintf(record.path, sizeof record.path, "games:/%04llu", (unsigned long long)i);
+        memset(record.path + used, '\\', sizeof record.path - 1 - (size_t)used);
+        record.size = SKIFF_STORAGE_MAX_FILE_BYTES;
+        record.has_crc32 = 1;
+        record.installed_ms = INSTALLED_MS;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    uint64_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_size(posix, manifest_path, &size));
+    TEST_PRINTF("installed.json: %llu bytes", (unsigned long long)size);
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_LOADED, load());
+    TEST_ASSERT_EQUAL_size_t(SKIFF_INSTALL_RECORDS_MAX, manifest->count);
+}
+
 static void test_recording_replaces_the_rom_file_and_whatever_was_at_its_path(void) {
     add_record(ROM_ID, "Game.iso", "games:/Game [12].iso");
     add_record(OTHER_ROM_ID, "Old.iso", "games:/Game.iso");
@@ -492,6 +553,16 @@ static void test_reconcile_forgets_files_deleted_meanwhile(void) {
     TEST_ASSERT_EQUAL_INT(
         SKIFF_INSTALL_NOT_INSTALLED,
         skiff_install_state_of(manifest, &(skiff_romm_rom_summary){.id = OTHER_ROM_ID}));
+}
+
+static void test_reconcile_forgets_files_replaced_outside_skiff(void) {
+    add_record(ROM_ID, "Game.iso", "games:/Game.iso");
+    put_file_of("games:/Game.iso", 1);
+    size_t forgotten = 0;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_install_manifest_reconcile(manifest, &storage.base, &roots, &forgotten));
+    TEST_ASSERT_EQUAL_size_t(1, forgotten);
+    TEST_ASSERT_EQUAL_size_t(0, manifest->count);
 }
 
 static void test_reconcile_stops_at_an_unreadable_memory_stick(void) {
@@ -574,6 +645,9 @@ int main(void) {
     RUN_TEST(test_names_that_clean_to_the_same_name_do_not_collide);
     RUN_TEST(test_a_record_of_another_rom_holds_its_name_even_without_the_file);
     RUN_TEST(test_skiffs_own_copy_is_replaced_in_place);
+    RUN_TEST(test_a_recorded_copy_replaced_outside_skiff_is_no_longer_its_own);
+    RUN_TEST(test_a_full_manifest_refuses_a_download_it_could_not_record);
+    RUN_TEST(test_a_rom_id_the_manifest_cannot_store_is_refused);
     RUN_TEST(test_skiffs_own_copy_keeps_its_renamed_place);
     RUN_TEST(test_a_recorded_copy_deleted_meanwhile_is_downloaded_again_to_its_place);
     RUN_TEST(test_both_names_taken_by_foreign_files_is_refused);
@@ -587,10 +661,12 @@ int main(void) {
     RUN_TEST(test_a_damaged_manifest_loads_empty_and_is_replaced_on_save);
     RUN_TEST(test_a_manifest_too_large_or_too_dense_is_damaged);
     RUN_TEST(test_the_manifest_holds_at_most_its_cap);
+    RUN_TEST(test_a_full_manifest_of_the_longest_names_still_saves);
     RUN_TEST(test_recording_replaces_the_rom_file_and_whatever_was_at_its_path);
     RUN_TEST(test_records_are_checked);
     RUN_TEST(test_forgetting_a_record);
     RUN_TEST(test_reconcile_forgets_files_deleted_meanwhile);
+    RUN_TEST(test_reconcile_forgets_files_replaced_outside_skiff);
     RUN_TEST(test_reconcile_stops_at_an_unreadable_memory_stick);
     RUN_TEST(test_a_failed_save_keeps_the_old_manifest);
     RUN_TEST(test_an_unreadable_manifest_is_never_overwritten);

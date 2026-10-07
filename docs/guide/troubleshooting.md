@@ -62,7 +62,7 @@ with your PSP model and firmware.
 | 302 | Read/write failure | Back up the card and reformat it on the PSP; cheap microSD adapters sometimes fail |
 | 303 | File or folder missing | Usually harmless; Skiff recreates its folders |
 | 304 | File larger than 4 GB | The PSP's file system cannot store it; this game cannot be installed as-is |
-| 305 | The game's name is taken | Skiff never replaces a file it did not install. A file with this game's name, and another with the name plus its RomM number (e.g. `Game [1234].iso`), are already in `ISO/` and were copied by hand or by another program. Move or rename one of them on a computer, then download again |
+| 305 | The game's name is taken | Skiff never replaces a file it did not install. **Before the download:** a file with this game's name, and another with the name plus its RomM number (e.g. `Game [1234].iso`), are already in `ISO/`, copied by hand or by another program: move or rename one of them on a computer, then download again. **At the end of a download:** a file appeared under the game's name while it was downloading (for example copied over USB), or Skiff's own earlier copy is no longer the size it recorded: move or rename that one file, then retry the download. Skiff kept what it downloaded, so the retry finishes without downloading again |
 
 ## Settings errors (400–402)
 

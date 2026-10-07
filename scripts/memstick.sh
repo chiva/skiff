@@ -12,11 +12,11 @@ readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
 readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe
-  skiff_bench skiff_resume_probe)
+  skiff_bench skiff_resume_probe skiff_jobs_probe)
 readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe
-  SkiffBench SkiffResumeProbe)
+  SkiffBench SkiffResumeProbe SkiffJobsProbe)
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
 # address (from its certificate's addresses), the test CA and the client certificates. The keys are
 # test material for that throwaway server; uninstall removes them with the folder.
@@ -34,6 +34,10 @@ readonly BENCH_FILES=(ca.crt)
 # scenarios=, wait_s= and awake_s= (tests/hardware/resume_probe.c).
 readonly RESUME_FOLDER="SkiffResumeProbe"
 readonly RESUME_FILES=(ca.crt)
+# The jobs probe downloads the seeded file through the download queue's worker thread (a large one
+# too). Optional SKIFF_JOBS_WAIT_S becomes wait_s= (tests/hardware/jobs_probe.c).
+readonly JOBS_FOLDER="SkiffJobsProbe"
+readonly JOBS_FILES=(ca.crt)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
 # The seeded file and the API token, for the probe's download checks through Skiff's transport.
 readonly INTEGRATION_SEED="$REPO_ROOT/build/integration/romm.json"
@@ -149,6 +153,11 @@ install_probe_configs() {
     resume_extra+="awake_s=$SKIFF_RESUME_AWAKE_S"$'\n'
   fi
   install_probe_config "$RESUME_FOLDER" resume-probe.ini "${resume_extra%$'\n'}" "${RESUME_FILES[@]}"
+  local jobs_extra=""
+  if [[ -n "${SKIFF_JOBS_WAIT_S:-}" ]]; then
+    jobs_extra+="wait_s=$SKIFF_JOBS_WAIT_S"$'\n'
+  fi
+  install_probe_config "$JOBS_FOLDER" jobs-probe.ini "${jobs_extra%$'\n'}" "${JOBS_FILES[@]}"
 }
 
 install_eboots() {

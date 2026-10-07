@@ -99,6 +99,13 @@ void skiff_probe_config_read(FILE *file, skiff_probe_config *config);
 /* 1 if config names a server, a profile, the token and the seeded file with its size and CRC-32. */
 int skiff_probe_config_complete(const skiff_probe_config *config);
 
+/*
+ * Decodes a percent-encoded URL path segment, as memstick.sh writes file_name=, into out: "%20" is
+ * a blank, everything else is copied. 0 for a NULL argument, a '%' not followed by two hexadecimal
+ * digits, an escape that decodes to NUL, or a result that does not fit (out is then empty).
+ */
+int skiff_probe_url_decode(const char *text, char *out, size_t out_size);
+
 /* Sorts values in place and returns the median (the mean of the middle two for an even count); 0
  * for none. values[0] and values[count - 1] are then the minimum and maximum. */
 long long skiff_probe_median(long long *values, size_t count);

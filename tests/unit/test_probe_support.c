@@ -270,6 +270,36 @@ static void test_crc32_in_chunks_equals_crc32_in_one_go(void) {
     TEST_ASSERT_EQUAL_HEX32(whole, table);
 }
 
+static void assert_decodes(const char *text, const char *expected) {
+    char out[SKIFF_PROBE_FILE_NAME_MAX];
+    const int ok = skiff_probe_url_decode(text, out, sizeof out);
+    NARRATE("'%s' -> %d '%s'", text, ok, out);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL_STRING(expected, out);
+}
+
+static void test_url_decoding_reverses_memstick_encoding(void) {
+    assert_decodes("Skiff%20Test%20Payload.iso", "Skiff Test Payload.iso");
+    assert_decodes("Caf%C3%A9%20%26%20Co%2B.iso", "Caf\xC3\xA9 & Co+.iso");
+    assert_decodes("plain-name_1.iso", "plain-name_1.iso");
+    assert_decodes("", "");
+}
+
+static void test_url_decoding_refuses_broken_escapes_and_overflow(void) {
+    char out[8];
+    const char *refused[] = {"a%2", "a%zz", "%", "a%00b", "a%G0"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        NARRATE("refuses '%s'", refused[i]);
+        TEST_ASSERT_FALSE(skiff_probe_url_decode(refused[i], out, sizeof out));
+        TEST_ASSERT_EQUAL_STRING("", out);
+    }
+    TEST_ASSERT_TRUE(skiff_probe_url_decode("1234567", out, sizeof out));
+    TEST_ASSERT_FALSE(skiff_probe_url_decode("12345678", out, sizeof out));
+    TEST_ASSERT_FALSE(skiff_probe_url_decode(NULL, out, sizeof out));
+    TEST_ASSERT_FALSE(skiff_probe_url_decode("a", NULL, sizeof out));
+    TEST_ASSERT_FALSE(skiff_probe_url_decode("a", out, 0));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_defaults_select_every_section_and_three_runs);
@@ -297,5 +327,7 @@ int main(void) {
     RUN_TEST(test_both_crc32_versions_match_the_check_value);
     RUN_TEST(test_crc32_of_nothing_is_zero);
     RUN_TEST(test_crc32_in_chunks_equals_crc32_in_one_go);
+    RUN_TEST(test_url_decoding_reverses_memstick_encoding);
+    RUN_TEST(test_url_decoding_refuses_broken_escapes_and_overflow);
     return UNITY_END();
 }

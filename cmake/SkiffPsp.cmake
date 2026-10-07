@@ -177,3 +177,23 @@ skiff_set_warnings(skiff_psp_ui)
 # firmware fonts, the on-screen keyboard and the network picker (see tests/prototype/ui_proto.c).
 skiff_add_psp_app(skiff_ui_proto "${SKIFF_PBP_TITLE} UI prototype" tests/prototype/ui_proto.c)
 target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ui)
+
+# The download queue's worker on the PSP (src/platform/psp/jobs_psp.h): the thread running
+# skiff_jobs_run_one(), and the hooks the runner asks for (curl transport, Wi-Fi switch, rejoining
+# and reloading the network, suspends, keep-awake, clock), plus the mutex and real-time clock the
+# queue and the log use. The app links it once it has screens; the jobs probe does now.
+add_library(skiff_psp_jobs OBJECT src/platform/psp/jobs_psp.c)
+target_compile_options(skiff_psp_jobs PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_jobs PUBLIC skiff_core skiff_net skiff_psp_net)
+target_include_directories(skiff_psp_jobs PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_jobs)
+
+# Jobs probe (Phase 2, hardware row J1): the download queue on its worker thread while the main
+# thread draws with the UI renderer, interrupted by the Wi-Fi switch and a suspend, against the test
+# RomM (see tests/hardware/jobs_probe.c). Without ARK a job fails on the worker thread before any
+# network I/O, and the queue file and the log are checked.
+skiff_add_psp_app(skiff_jobs_probe "${SKIFF_PBP_TITLE} jobs probe" tests/hardware/jobs_probe.c)
+target_link_libraries(skiff_jobs_probe PRIVATE skiff_net skiff_probe_support skiff_psp_check
+                                               skiff_psp_net skiff_psp_storage skiff_psp_jobs
+                                               skiff_psp_ui skiff_psp_ark skiff_psp_tls
+                                               skiff_psp_entropy)

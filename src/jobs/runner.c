@@ -274,6 +274,16 @@ static void conclude(run *r, const skiff_job *taken, skiff_job_state state, skif
                      uint32_t attempts) {
     skiff_jobs *jobs = r->jobs;
     jobs_commit_lock(jobs);
+    /* From here the job is no longer the active one: a cancel waits for the commit lock and acts on
+     * the outcome as published. One that arrived since the attempt ended is honoured now. */
+    jobs_lock(jobs);
+    if (jobs->cancel_active && (state == SKIFF_JOB_QUEUED || state == SKIFF_JOB_FAILED)) {
+        state = SKIFF_JOB_CANCELLED;
+        error = SKIFF_ERR_CANCELLED;
+    }
+    jobs->active_id = 0;
+    jobs->cancel_active = 0;
+    jobs_unlock(jobs);
     const skiff_err saved =
         jobs_commit_state(jobs, r->job_id, state, error, attempts, JOBS_COMMIT_ALWAYS);
     /* A cancel's partial files go only once the queue file says cancelled: if it could not be
@@ -289,10 +299,6 @@ static void conclude(run *r, const skiff_job *taken, skiff_job_state state, skif
             (void)jobs_commit_state(jobs, r->job_id, state, error, attempts, JOBS_COMMIT_ALWAYS);
         }
     }
-    jobs_lock(jobs);
-    jobs->active_id = 0;
-    jobs->cancel_active = 0;
-    jobs_unlock(jobs);
     jobs_commit_unlock(jobs);
     skiff_log_write(jobs->log, state == SKIFF_JOB_FAILED ? SKIFF_LOG_ERROR : SKIFF_LOG_INFO,
                     JOBS_LOG_TAG, "job %u %s after %u attempt(s): %s (%d)", (unsigned)r->job_id,

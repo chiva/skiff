@@ -105,12 +105,21 @@ typedef struct lock_tracker {
     /* Opens of the queue file (saves), and those made without the commit lock. */
     int queue_opens;
     int queue_opens_without_commit;
+    /* Runs once, just before the commit lock is taken for the commit_hook_at-th time. */
+    void (*commit_hook)(void);
+    int commit_hook_at;
 } lock_tracker;
 
 static lock_tracker locks;
 
 static void tracked_lock_take(void *ctx) {
     tracked_lock *lock = ctx;
+    if (lock == &locks.commit && locks.commit_hook != NULL &&
+        locks.commit.takes + 1 == locks.commit_hook_at) {
+        void (*hook)(void) = locks.commit_hook;
+        locks.commit_hook = NULL;
+        hook();
+    }
     if (lock == &locks.commit) {
         locks.commit_under_state += locks.state.held;
         locks.forbidden_commits += locks.forbid_commit;
@@ -1334,6 +1343,32 @@ static void test_a_stop_asked_for_during_the_start_save_starts_nothing(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
 }
 
+static uint32_t late_cancel_id;
+
+static void cancel_as_the_job_ends(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, late_cancel_id));
+}
+
+/* A cancel acknowledged after the attempt ended, just before the runner records how: it is not
+ * lost, whatever the attempt's own outcome (here a quit, which leaves the job queued). */
+static void test_a_cancel_as_the_job_ends_is_not_lost(void) {
+    create_tracked_jobs();
+    late_cancel_id = add_job();
+    /* The run's commits: the start, then the end. */
+    locks.commit_hook = cancel_as_the_job_ends;
+    locks.commit_hook_at = locks.commit.takes + 2;
+    env_state.stop_at = 900;
+    run();
+    TEST_PRINTF("job %s, .part %s", skiff_job_state_name(job_with(late_cancel_id).state),
+                exists(part) ? "kept" : "deleted");
+    TEST_ASSERT_NULL(locks.commit_hook);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, job_with(late_cancel_id).state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CANCELLED, job_with(late_cancel_id).error);
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+    assert_locks_used_well();
+}
+
 static void test_bad_arguments_are_refused(void) {
     skiff_jobs *other = NULL;
     skiff_jobs_config config = {&storage.base, queue_path, NULL, tracked_lock_take,
@@ -1419,6 +1454,7 @@ int main(void) {
     RUN_TEST(test_a_save_that_fails_leaves_no_trace_for_the_reader);
     RUN_TEST(test_a_cancelled_jobs_files_go_under_the_commit_lock_alone);
     RUN_TEST(test_a_stop_asked_for_during_the_start_save_starts_nothing);
+    RUN_TEST(test_a_cancel_as_the_job_ends_is_not_lost);
     RUN_TEST(test_bad_arguments_are_refused);
     return UNITY_END();
 }

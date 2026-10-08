@@ -357,16 +357,21 @@ print_file() {
       line = $0
       for (i = 1; i <= count; i++) {
         if (secrets[i] == "") continue
+        # Searches only what follows each replacement, so a secret inside the mask cannot loop.
+        out = ""
         while ((at = index(line, secrets[i])) > 0) {
-          line = substr(line, 1, at - 1) ENVIRON["MASK"] substr(line, at + length(secrets[i]))
+          out = out substr(line, 1, at - 1) ENVIRON["MASK"]
+          line = substr(line, at + length(secrets[i]))
         }
+        line = out line
       }
       print line
     }' "$1"
 }
 
 # The app's secrets (the token pairing wrote, the test header's value) must appear in no file Skiff
-# folders hold but config.ini. Names what leaked where, never the value; 1 if anything did.
+# folders hold but config.ini and the next version a cut save leaves beside it (SAVE_SUFFIXES).
+# Names what leaked where, never the value; 1 if anything did.
 check_app_secrets() {
   local config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG" value leaks i
   echo "== secrets"
@@ -374,7 +379,10 @@ check_app_secrets() {
     echo "(no $APP_CONFIG in PSP/GAME/$APP_FOLDER)"
     return 0
   fi
-  local status=0 checked=0
+  local status=0 checked=0 config_excludes=() suffix
+  for suffix in "${SAVE_SUFFIXES[@]}"; do
+    config_excludes+=("--exclude=$APP_CONFIG$suffix")
+  done
   for i in "${!SECRET_KEYS[@]}"; do
     value="$(ini_value "$config" "${SECRET_SECTIONS[$i]}" "${SECRET_KEYS[$i]}")"
     if [[ -z "$value" ]]; then
@@ -383,7 +391,7 @@ check_app_secrets() {
       continue
     fi
     checked=$((checked + 1))
-    leaks="$(grep -rlF --exclude="$APP_CONFIG" -e "$value" "$GAME_DIR"/Skiff* || true)"
+    leaks="$(grep -rlF "${config_excludes[@]}" -e "$value" "$GAME_DIR"/Skiff* || true)"
     if [[ -n "$leaks" ]]; then
       echo "FAIL [${SECRET_SECTIONS[$i]}] ${SECRET_KEYS[$i]} found in (shown as $REDACTED above):"
       printf '%s\n' "$leaks" | sed 's/^/  /'
@@ -391,7 +399,8 @@ check_app_secrets() {
     fi
   done
   if [[ "$status" == 0 ]]; then
-    echo "ok   $checked secret value(s) from $APP_CONFIG in no other file under PSP/GAME/Skiff*"
+    echo "ok   $checked secret value(s) from $APP_CONFIG in no other file under PSP/GAME/Skiff*" \
+      "(its cut-save versions aside)"
   fi
   return "$status"
 }

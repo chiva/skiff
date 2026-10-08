@@ -25,9 +25,10 @@
  * Speed is judged against the conditions of the day, not a fixed number: a ui=1 run passes if its
  * download, over all its attempts, keeps at least MIN_SPEED_PERCENT of the speed of a ui=0 run of
  * the last BASELINE_MAX_AGE_S (read back from jobs-log.txt), so a session is one ui=0 run, then
- * one ui=1 run. A frame gap is held for a few frames before it counts: the power callback that
- * says a suspend happened can arrive after the frame that spans it, and such a gap is listed as
- * excluded instead.
+ * one ui=1 run. A frame gap is judged without the probe's own reporting (the app writes no
+ * result.txt), and one within SUSPEND_SETTLE_US of a suspend or resume event, before or after it,
+ * is listed as excluded instead: the power callback reaches the probe seconds after the frame that
+ * spans the sleep.
  *
  * A job left unfinished by an earlier run (HOME > Quit, a crash) is still in the queue file and
  * resumes from its .part file, which tests the queue across launches.
@@ -113,9 +114,7 @@ enum {
     MIN_STACK_FREE_BYTES = 8 * 1024,
     /* The longest the UI may go between two frames (a suspend excepted): six frames. */
     MAX_FRAME_GAP_MS = 100,
-    /* A gap over the limit waits this many frames for a suspend's power events; at most this many
-     * wait at once. */
-    SUSPEND_SETTLE_FRAMES = 10,
+    /* At most this many gaps over the limit wait at once for a suspend's power events. */
     PENDING_GAPS_MAX = 4,
     /* Memory and the stack are sampled this often, in frames. */
     SAMPLE_EVERY_FRAMES = 60,
@@ -141,6 +140,9 @@ enum {
 };
 
 #define US_PER_S (1000LL * 1000)
+/* A gap over the limit within this long of a suspend's power events is the suspend: on a PSP-1000
+ * the callback reached the probe 2.2 s after the frame that spanned the sleep (J1 runs 3-5). */
+#define SUSPEND_SETTLE_US (3LL * 1000 * 1000)
 #define WIFI_JOIN_TIMEOUT_US (30LL * 1000 * 1000)
 #define DISCONNECT_TIMEOUT_US (10LL * 1000 * 1000)
 /* Without ARK the job fails at once; this much is plenty, inside run_eboot.sh's 30 s. */
@@ -273,7 +275,8 @@ typedef struct watch {
     /* Gaps over the limit waiting to see whether a suspend's power events follow. */
     gap_record pending[PENDING_GAPS_MAX];
     int pending_count;
-    int frames_since_pending;
+    /* When the last suspend or resume event was seen; 0 for none. */
+    long long last_power_us;
     attempt_record attempts[ATTEMPTS_MAX];
     int attempts_seen;
     int attempt_open;
@@ -707,6 +710,9 @@ static void draw(probe *p, const watch *w) {
     skiff_psp_ui_end_frame(&p->ui);
 }
 
+/* What a gap counts as: the app does not write the probe's report, so that time is not the UI's. */
+static long long judged_us(const gap_record *gap) { return gap->gap_us - gap->parts.report_us; }
+
 /* Lists a gap over the limit; one that spanned a suspend is listed but not counted. */
 static void keep_gap(watch *w, const gap_record *gap, int excluded) {
     if (w->gaps_kept < GAPS_MAX) {
@@ -719,8 +725,8 @@ static void keep_gap(watch *w, const gap_record *gap, int excluded) {
         return;
     }
     w->gaps_over++;
-    if (gap->gap_us > w->frame_gap_max_us) {
-        w->frame_gap_max_us = gap->gap_us;
+    if (judged_us(gap) > w->frame_gap_max_us) {
+        w->frame_gap_max_us = judged_us(gap);
     }
 }
 
@@ -740,17 +746,25 @@ static void exclude_pending(watch *w) {
     w->pending_count = 0;
 }
 
-static void hold_gap(watch *w, const gap_record *gap) {
-    if (w->pending_count == PENDING_GAPS_MAX) {
-        accept_pending(w);
-    }
-    w->pending[w->pending_count++] = *gap;
-    w->frames_since_pending = 0;
+/* Counts the oldest waiting gap and drops it from the wait. */
+static void accept_oldest_pending(watch *w) {
+    keep_gap(w, &w->pending[0], 0);
+    w->pending_count--;
+    memmove(&w->pending[0], &w->pending[1], (size_t)w->pending_count * sizeof w->pending[0]);
 }
 
-static void settle_pending(watch *w) {
-    if (w->pending_count > 0 && ++w->frames_since_pending >= SUSPEND_SETTLE_FRAMES) {
-        accept_pending(w);
+static void hold_gap(watch *w, const gap_record *gap) {
+    if (w->pending_count == PENDING_GAPS_MAX) {
+        accept_oldest_pending(w);
+    }
+    w->pending[w->pending_count++] = *gap;
+}
+
+/* Each waiting gap counts once its own SUSPEND_SETTLE_US has passed with no power event; the
+ * gaps wait in the order they came, so only the oldest can be due. */
+static void settle_pending(watch *w, long long now) {
+    while (w->pending_count > 0 && now - (w->start_us + w->pending[0].at_us) >= SUSPEND_SETTLE_US) {
+        accept_oldest_pending(w);
     }
 }
 
@@ -760,27 +774,30 @@ static int power_events(void) {
     return power.suspends + power.resumes;
 }
 
-/* One frame's gap: a suspend's frame is not counted, nor one whose power events come a few frames
- * later; any other over the limit counts once that wait is over. */
+/* One frame's gap, less the probe's own reporting: a gap within SUSPEND_SETTLE_US of a suspend's
+ * power events, before or after them, is the suspend and is not counted; any other over the limit
+ * counts once that wait is over. */
 static void judge_gap(watch *w, long long now, const frame_parts *parts, int slept) {
     if (slept) {
         exclude_pending(w);
+        w->last_power_us = now;
     }
+    const int near_power = w->last_power_us != 0 && now - w->last_power_us < SUSPEND_SETTLE_US;
     if (w->last_frame_us != 0) {
         const gap_record gap = {.at_us = now - w->start_us,
                                 .phase = w->phase,
                                 .gap_us = now - w->last_frame_us,
                                 .parts = *parts};
-        const int over = gap.gap_us > MAX_FRAME_GAP_MS * US_PER_MS;
-        if (over && slept) {
+        const int over = judged_us(&gap) > MAX_FRAME_GAP_MS * US_PER_MS;
+        if (over && near_power) {
             keep_gap(w, &gap, 1);
         } else if (over) {
             hold_gap(w, &gap);
-        } else if (!slept && gap.gap_us > w->frame_gap_max_us) {
-            w->frame_gap_max_us = gap.gap_us;
+        } else if (!near_power && judged_us(&gap) > w->frame_gap_max_us) {
+            w->frame_gap_max_us = judged_us(&gap);
         }
     }
-    settle_pending(w);
+    settle_pending(w, now);
 }
 
 /*

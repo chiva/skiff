@@ -51,8 +51,15 @@ static skiff_err load_network(skiff_psp_app *platform) {
     if (platform->net.stage == SKIFF_PSP_NET_APCTL) {
         return SKIFF_OK;
     }
-    /* Whatever is up from a failed load goes down first, so this one starts clean. */
-    (void)skiff_psp_net_unload(&platform->net);
+    /* Whatever is up from a failed load goes down first, so this one starts clean. A layer that
+     * will not come down keeps its stage: loading over it would lose track of it, so the error is
+     * returned instead (the next try unloads again). */
+    if (platform->net.stage != SKIFF_PSP_NET_NONE) {
+        const skiff_err err = skiff_psp_net_unload(&platform->net);
+        if (err != SKIFF_OK) {
+            return err;
+        }
+    }
     const skiff_err err = skiff_psp_net_load(&platform->net, SKIFF_PSP_NET_CPU_MHZ);
     if (err != SKIFF_OK) {
         (void)skiff_psp_net_unload(&platform->net);

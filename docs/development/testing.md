@@ -68,6 +68,13 @@ times count only from a PSP.
 `flash0:` (where the firmware fonts live). The build fails if the patch stops applying, so a PPSSPP
 bump shows whether it is still needed.
 
+## Release zip
+
+`scripts/dev.sh package` checks the zip it writes: it must hold `PSP/GAME/Skiff/EBOOT.PBP`,
+`cacert.pem` (the app's default CA bundle), `LICENSE.txt` and the licences that are always collected
+(pspsdk, newlib, pthread-embedded and `cacert`). A missing entry deletes the zip and fails the
+command. CI runs it in the `psp-release` build on every PR, and the release job runs it again.
+
 ## Integration server
 
 `tests/integration/` runs a disposable RomM behind a TLS proxy, for the integration tests and for
@@ -171,7 +178,7 @@ line, so a run started from the XMB can be read back from the Memory Stick.
 
 1. Build: `scripts/dev.sh psp`.
 2. Put the PSP in USB mode (or use a card reader), then `scripts/memstick.sh install <mount>`
-   (e.g. `/Volumes/PSP`). Eject.
+   (e.g. `/Volumes/PSP`). It copies the app's `cacert.pem` next to its EBOOT too. Eject.
 3. On the PSP, from Game → Memory Stick, run **Skiff self-test** and **Skiff TLS probe**. Each
    returns to the XMB when done.
 4. Back in USB mode: `scripts/memstick.sh results <mount>` → expect `SKIFF SELFTEST OK` and

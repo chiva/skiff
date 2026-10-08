@@ -91,6 +91,26 @@ on purpose. Verify the new archive, then update its `*_SHA256` value in
 Mbed TLS stays on the 4.1 LTS line (Renovate's `allowedVersions`); moving to the next LTS is a
 deliberate change.
 
+## The CA bundle
+
+The app trusts Mozilla's root certificates by default, as curl publishes them
+([CA extract](https://curl.se/docs/caextract.html)). `docker/ca-bundle/fetch-ca-bundle.sh` fetches
+one dated file (`cacert-<date>.pem`), checks it against the SHA256 pinned there and installs it,
+with the MPL-2.0 text beside it, into the toolchain image at `$SKIFF_CA_BUNDLE_DIR`. It runs in a
+layer after the TLS build, so a bundle bump does not recompile mbedtls and curl. Fetched with the
+image like the TLS archives rather than committed, so the repository holds no third-party file and
+every PSP build has the bundle without a network step of its own.
+
+- `scripts/dev.sh psp` and `psp-release` copy it next to the app's EBOOT
+  (`build/<preset>/pbp/skiff/cacert.pem`), where `scripts/memstick.sh install` and the release zip
+  take it from.
+- `scripts/collect-licenses.sh` adds its licence as `third-party-licenses/cacert/`.
+
+**Bumping it.** Take the newest dated file from the CA extract page, compare its SHA256 with the
+`cacert-<date>.pem.sha256` curl.se publishes beside it, and update `CA_BUNDLE_DATE` and
+`CA_BUNDLE_SHA256` together. Renovate does not track it; bump it before a release when Mozilla's
+list has changed.
+
 ## Host
 
 `docker/host.Dockerfile` (Ubuntu 24.04 with cmake, gcc, clang, clang-tidy, cppcheck, gcovr) is the
@@ -117,6 +137,7 @@ All presets build with `-Werror` and a strict warning set (`cmake/SkiffWarnings.
 |---|---|---|
 | pspdev toolchain | `docker/toolchain.Dockerfile` `FROM` | tag + digest, Renovate |
 | Mbed TLS, curl | `docker/toolchain.Dockerfile` | version + SHA256, Renovate + manual verification |
+| Mozilla CA bundle (`cacert.pem`) | `docker/ca-bundle/fetch-ca-bundle.sh` | date + SHA256, manual (above) |
 | Unity (C test framework) | `tests/CMakeLists.txt` FetchContent | commit, Renovate |
 | PPSSPP (emulator tests) | `docker/ppsspp.Dockerfile` | commit, Renovate; Debian base by digest and packages from a dated snapshot.debian.org archive (bump `SNAPSHOT` with the commit); one-line patch for `flash0:` reads, checked at build time |
 | GitHub Actions | workflows | commit SHA, Renovate |
@@ -128,6 +149,6 @@ cJSON and intraFont come from pspdev's packages; argosy-sigil will be a pinned s
 
 Every package linked into the EBOOT must be listed in `scripts/psp-packages.txt`. `scripts/dev.sh
 package` and the release workflow then collect its licence (and its dependencies') with pspdev's
-`psp-create-license-directory` into the zip's `third-party-licenses/`. pspsdk, newlib and
-pthread-embedded are always included; see [Architecture](architecture.md#licensing-of-the-binary)
+`psp-create-license-directory` into the zip's `third-party-licenses/`. pspsdk, newlib,
+pthread-embedded and the CA bundle's MPL-2.0 are always included; see [Architecture](architecture.md#licensing-of-the-binary)
 for what that implies.

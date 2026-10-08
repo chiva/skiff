@@ -10,6 +10,7 @@
  *   [skiff]    version     schema version; absent means 1
  *   [server]   url         http:// or https:// address of RomM
  *              ca_file     file name in the Skiff folder; empty for the bundled public CAs
+ *                          (cacert.pem, SKIFF_APP_DEFAULT_CA_FILE), which a set one replaces
  *   [auth]     token       RomM client API token (pairing writes it, or the player pastes one)
  *              device_identifier   this PSP's name for itself in pairing: random hex, made once
  *              device_id   the id RomM gave this PSP when pairing was approved

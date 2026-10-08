@@ -67,6 +67,11 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/dev.sh ${{ matrix.preset }}
+      # The release zip and its contents check (EBOOT, cacert.pem, licences), on every PR rather than
+      # first at release time.
+      - name: Package the release zip
+        if: matrix.preset == 'psp-release'
+        run: scripts/dev.sh package
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: eboot-${{ matrix.preset }}

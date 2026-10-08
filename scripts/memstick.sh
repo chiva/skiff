@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Hardware tier without PSPLINK: copies the debug EBOOTs to a mounted Memory Stick (PSP in USB mode
-# or a card reader), then reads back the result.txt each check EBOOT writes next to itself. Plain
-# file copies on the host; needs no Docker and no PSP tools. Build first with `scripts/dev.sh psp`.
+# Hardware tier without PSPLINK: copies the debug EBOOTs (and the app's CA bundle) to a mounted
+# Memory Stick (PSP in USB mode or a card reader), then reads back the result.txt each check EBOOT
+# writes next to itself. Plain file copies on the host; needs no Docker and no PSP tools. Build
+# first with `scripts/dev.sh psp`.
 # Usage: scripts/memstick.sh install|results|uninstall <memory-stick-mount>
 set -euo pipefail
 
@@ -15,6 +16,9 @@ readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui
   skiff_bench skiff_resume_probe skiff_jobs_probe)
 readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe
   SkiffBench SkiffResumeProbe SkiffJobsProbe)
+# The app gets the CA bundle it trusts by default next to its EBOOT, where scripts/dev.sh psp put it.
+readonly APP_TARGET="skiff"
+readonly CA_BUNDLE_NAME="cacert.pem"
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
 readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
@@ -167,6 +171,15 @@ install_probe_configs() {
   install_probe_config "$JOBS_FOLDER" jobs-probe.ini "${jobs_extra%$'\n'}" "${JOBS_FILES[@]}"
 }
 
+install_ca_bundle() {
+  local source="$BUILD_PBP_DIR/$APP_TARGET/$CA_BUNDLE_NAME"
+  if [[ ! -f "$source" ]]; then
+    echo "error: $source not found; run scripts/dev.sh psp first" >&2
+    exit 1
+  fi
+  cp "$source" "$1/$CA_BUNDLE_NAME"
+}
+
 install_eboots() {
   for i in "${!TARGETS[@]}"; do
     local source="$BUILD_PBP_DIR/${TARGETS[$i]}/EBOOT.PBP"
@@ -177,6 +190,9 @@ install_eboots() {
     fi
     mkdir -p "$dest"
     cp "$source" "$dest/EBOOT.PBP"
+    if [[ "${TARGETS[$i]}" == "$APP_TARGET" ]]; then
+      install_ca_bundle "$dest"
+    fi
     # A stale result would be mistaken for a new run.
     rm -f "$dest/$RESULT_FILE"
     remove_macos_metadata "${FOLDERS[$i]}"
@@ -189,7 +205,7 @@ install_eboots() {
 
 print_results() {
   for i in "${!TARGETS[@]}"; do
-    [[ "${TARGETS[$i]}" == skiff ]] && continue
+    [[ "${TARGETS[$i]}" == "$APP_TARGET" ]] && continue
     echo "== ${FOLDERS[$i]}"
     local result="$GAME_DIR/${FOLDERS[$i]}/$RESULT_FILE"
     if [[ -f "$result" ]]; then

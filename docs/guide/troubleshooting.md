@@ -73,4 +73,4 @@ resort; you will need to pair again.
 |---|---|---|
 | 400 | The file is damaged | Open it on a computer and go to the line Skiff names; look for a line without `=` or a missing `]`, or delete the file |
 | 401 | A required setting is missing | Add the setting Skiff names, e.g. `key_file` next to `cert_file` (see [Connect to RomM](04-connect-to-romm.md)) |
-| 402 | A setting has an invalid value | Fix the value Skiff names: an address must start with `http://` or `https://`; a file name such as `ca_file` must be a file in the Skiff folder, without folders; each setting may appear only once |
+| 402 | A setting has an invalid value | Fix the value Skiff names: an address must start with `http://` or `https://`; a file name such as `ca_file` must be a file in the Skiff folder, without folders; each setting may appear only once. On an HTTPS server with no `ca_file` set, `cacert.pem` is missing from the Skiff folder: unzip the release again |

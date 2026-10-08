@@ -25,6 +25,12 @@ readonly ROMM_ADMIN_USER="skiff"
 # synthetic file seeded while recording them, kept small so the fixture stays small.
 readonly FIXTURES_DIR="tests/fixtures/romm"
 readonly FIXTURE_PAYLOAD_BYTES=4096
+# The app's build target, and the CA bundle the toolchain image holds in $SKIFF_CA_BUNDLE_DIR
+# (docker/ca-bundle/fetch-ca-bundle.sh). PSP builds copy it next to the app's EBOOT: the app reads
+# it from its own folder (SKIFF_APP_DEFAULT_CA_FILE), and scripts/memstick.sh and package take it
+# from there.
+readonly APP_TARGET="skiff"
+readonly CA_BUNDLE_NAME="cacert.pem"
 
 # Bind mounts for every container. In a git worktree, .git is a file pointing at the main
 # repository's .git directory by absolute host path; mounting that directory read-only at the same
@@ -42,9 +48,9 @@ Usage: scripts/dev.sh <command> [<command>...]
 
 Commands run in the order given and stop at the first failure.
 
-  psp          Build the debug EBOOTs        -> build/psp/pbp/
+  psp          Build the debug EBOOTs        -> build/psp/pbp/ (the app's with cacert.pem)
   psp-release  Build the release EBOOTs      -> build/psp-release/pbp/
-  package      Build release and zip it      -> dist/skiff-<version>.zip
+  package      Build release and zip it      -> dist/skiff-<version>.zip (checks its contents)
   test         Host unit tests, gcc and clang  -> build/host-{gcc,clang}/
   asan         Host unit tests under ASan + UBSan, gcc and clang
   coverage     Host unit tests with coverage (fails under 85% line coverage)
@@ -85,6 +91,13 @@ ensure_toolchain_image() {
   echo "toolchain image: building if docker/toolchain.Dockerfile changed..." >&2
   docker build --quiet --platform linux/amd64 -t "$TOOLCHAIN_IMAGE" \
     -f "$REPO_ROOT/docker/toolchain.Dockerfile" "$REPO_ROOT/docker" >/dev/null
+}
+
+# The toolchain command that builds a PSP preset and puts the CA bundle next to the app's EBOOT.
+psp_build_command() {
+  local preset="$1"
+  printf '%s' "cmake --preset $preset >/dev/null && cmake --build --preset $preset && install -m 644 \
+    \"\$SKIFF_CA_BUNDLE_DIR/$CA_BUNDLE_NAME\" build/$preset/pbp/$APP_TARGET/$CA_BUNDLE_NAME"
 }
 
 run_toolchain() {
@@ -223,12 +236,13 @@ run_command() {
   local cmd="$1"
   case "$cmd" in
   psp | psp-release)
-    run_toolchain "cmake --preset $cmd >/dev/null && cmake --build --preset $cmd"
+    run_toolchain "$(psp_build_command "$cmd")"
     ;;
   package)
-    run_toolchain "cmake --preset psp-release >/dev/null && cmake --build --preset psp-release \
+    run_toolchain "$(psp_build_command psp-release) \
       && scripts/collect-licenses.sh build/psp-release/licenses >/dev/null"
-    "$REPO_ROOT/scripts/package.sh" "$REPO_ROOT/build/psp-release/pbp/skiff/EBOOT.PBP" \
+    "$REPO_ROOT/scripts/package.sh" "$REPO_ROOT/build/psp-release/pbp/$APP_TARGET/EBOOT.PBP" \
+      "$REPO_ROOT/build/psp-release/pbp/$APP_TARGET/$CA_BUNDLE_NAME" \
       "$REPO_ROOT/build/psp-release/licenses/third-party-licenses"
     ;;
   test)

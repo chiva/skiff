@@ -128,6 +128,16 @@ static void test_unusable_scenarios_and_timings_keep_the_defaults(void) {
     TEST_ASSERT_EQUAL_INT(7, config.invalid_values);
 }
 
+static void test_jobs_probe_ui_defaults_on_and_takes_only_0_or_1(void) {
+    TEST_ASSERT_EQUAL_INT(1, config.ui);
+    read_text("ui=0\nui=off\nui=\n");
+    NARRATE("-> ui %d after ui=0, ui=off, ui= (invalid %d)\n", config.ui, config.invalid_values);
+    TEST_ASSERT_EQUAL_INT(0, config.ui);
+    TEST_ASSERT_EQUAL_INT(2, config.invalid_values);
+    read_text("ui=1\n");
+    TEST_ASSERT_EQUAL_INT(1, config.ui);
+}
+
 static void test_plain_http_takes_only_0_or_1(void) {
     read_text("plain_http=1\nplain_http=yes\nplain_http=\n");
     TEST_ASSERT_EQUAL_INT(1, config.plain_http);
@@ -300,6 +310,97 @@ static void test_url_decoding_refuses_broken_escapes_and_overflow(void) {
     TEST_ASSERT_FALSE(skiff_probe_url_decode("a", out, 0));
 }
 
+/* A summary line as the jobs probe appends it, trimmed to the words the baseline reads. */
+#define SUMMARY_UI0_DONE                                                                           \
+    "jobs ok=0 state=done error=SKIFF_OK kb_s_first=401 crc=1 ui=0 attempts=3 kb_s_attempts=412 "  \
+    "gaps_excluded=1 utc=10000\n"
+
+static void test_line_words_match_whole_keys_and_values(void) {
+    const char *line = SUMMARY_UI0_DONE;
+    unsigned long long number = 0;
+    TEST_ASSERT_TRUE(skiff_probe_line_has(line, "state", "done"));
+    TEST_ASSERT_TRUE(skiff_probe_line_has(line, "ui", "0"));
+    TEST_ASSERT_FALSE(skiff_probe_line_has(line, "state", "don"));
+    TEST_ASSERT_FALSE(skiff_probe_line_has(line, "ok", "1"));
+    TEST_ASSERT_FALSE(skiff_probe_line_has(line, "missing", "1"));
+    /* "attempts" is its own word, not the tail of "kb_s_attempts". */
+    TEST_ASSERT_TRUE(skiff_probe_line_number(line, "attempts", &number));
+    NARRATE("attempts=%llu", number);
+    TEST_ASSERT_EQUAL_UINT64(3, number);
+    TEST_ASSERT_TRUE(skiff_probe_line_number(line, "kb_s_attempts", &number));
+    TEST_ASSERT_EQUAL_UINT64(412, number);
+    /* The last word, before the newline. */
+    TEST_ASSERT_TRUE(skiff_probe_line_number(line, "utc", &number));
+    TEST_ASSERT_EQUAL_UINT64(10000, number);
+    /* The first word of a line has no blank before it. */
+    TEST_ASSERT_TRUE(skiff_probe_line_number("ok=1 kb=2", "ok", &number));
+    TEST_ASSERT_EQUAL_UINT64(1, number);
+}
+
+static void test_line_numbers_refuse_text_overflow_and_missing_words(void) {
+    unsigned long long number = 7;
+    const char *refused[] = {"kb=", "kb=12x", "kb=-1", "kb=99999999999999999999", "kbs=1"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        NARRATE("refuses '%s'", refused[i]);
+        TEST_ASSERT_FALSE(skiff_probe_line_number(refused[i], "kb", &number));
+    }
+    TEST_ASSERT_EQUAL_UINT64(7, number);
+    TEST_ASSERT_FALSE(skiff_probe_line_number(NULL, "kb", &number));
+    TEST_ASSERT_FALSE(skiff_probe_line_number("kb=1", "", &number));
+    TEST_ASSERT_FALSE(skiff_probe_line_number("kb=1", "kb", NULL));
+    TEST_ASSERT_FALSE(skiff_probe_line_has("kb=1", "kb", NULL));
+}
+
+/* Runs skiff_probe_jobs_baseline() over text, as the probe reads jobs-log.txt. */
+static int baseline_of(const char *text, unsigned long long now_s, unsigned long long *kb_s,
+                       unsigned long long *age_s) {
+    FILE *file = tmpfile();
+    TEST_ASSERT_NOT_NULL(file);
+    TEST_ASSERT_EQUAL_INT(0, fputs(text, file) < 0);
+    TEST_ASSERT_EQUAL_INT(0, fseek(file, 0, SEEK_SET));
+    const int found = skiff_probe_jobs_baseline(file, now_s, 7200, kb_s, age_s);
+    fclose(file);
+    NARRATE("now %llu -> found %d, %llu KB/s, %llu s old", now_s, found, *kb_s, *age_s);
+    return found;
+}
+
+static void test_baseline_is_the_last_finished_ui0_run_within_the_age(void) {
+    const char *log =
+        /* An older build's line: no utc, no kb_s_attempts. */
+        "jobs ok=0 state=done error=SKIFF_OK kb_s_first=361 crc=1\n"
+        "jobs state=done crc=1 ui=0 kb_s_attempts=300 utc=1000\n" SUMMARY_UI0_DONE
+        "jobs state=done crc=1 ui=1 kb_s_attempts=390 utc=10500\n"
+        "jobs state=failed crc=0 ui=0 kb_s_attempts=200 utc=10600\n"
+        "jobs state=done crc=1 ui=0 kb_s_attempts=0 utc=10700\n";
+    unsigned long long kb_s = 0;
+    unsigned long long age_s = 0;
+    TEST_ASSERT_TRUE(baseline_of(log, 11000, &kb_s, &age_s));
+    TEST_ASSERT_EQUAL_UINT64(412, kb_s);
+    TEST_ASSERT_EQUAL_UINT64(1000, age_s);
+    /* 2 h after it, the run is too old; before it (a clock set back), it does not count. */
+    TEST_ASSERT_FALSE(baseline_of(log, 10000 + 7201, &kb_s, &age_s));
+    TEST_ASSERT_FALSE(baseline_of(log, 9999, &kb_s, &age_s));
+    TEST_ASSERT_TRUE(
+        baseline_of("jobs state=done crc=1 ui=0 kb_s_attempts=5 utc=9", 9, &kb_s, &age_s));
+    TEST_ASSERT_EQUAL_UINT64(5, kb_s);
+    TEST_ASSERT_FALSE(baseline_of("", 9, &kb_s, &age_s));
+}
+
+static void test_baseline_skips_a_line_too_long_to_read_whole(void) {
+    static char log[SKIFF_PROBE_LOG_LINE_MAX * 3];
+    /* The baseline's words land in the second piece of an overlong line. */
+    memset(log, 'x', SKIFF_PROBE_LOG_LINE_MAX);
+    snprintf(log + SKIFF_PROBE_LOG_LINE_MAX, sizeof log - SKIFF_PROBE_LOG_LINE_MAX, " %s",
+             SUMMARY_UI0_DONE);
+    unsigned long long kb_s = 0;
+    unsigned long long age_s = 0;
+    TEST_ASSERT_FALSE(baseline_of(log, 10000, &kb_s, &age_s));
+    /* A good line after it still counts. */
+    strncat(log, SUMMARY_UI0_DONE, sizeof log - strlen(log) - 1);
+    TEST_ASSERT_TRUE(baseline_of(log, 10000, &kb_s, &age_s));
+    TEST_ASSERT_FALSE(skiff_probe_jobs_baseline(NULL, 0, 0, &kb_s, &age_s));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_defaults_select_every_section_and_three_runs);
@@ -311,6 +412,7 @@ int main(void) {
     RUN_TEST(test_reads_scenarios_and_their_timings);
     RUN_TEST(test_speed_is_chosen_by_name_not_by_all);
     RUN_TEST(test_unusable_scenarios_and_timings_keep_the_defaults);
+    RUN_TEST(test_jobs_probe_ui_defaults_on_and_takes_only_0_or_1);
     RUN_TEST(test_plain_http_takes_only_0_or_1);
     RUN_TEST(test_reads_the_clock_and_its_section);
     RUN_TEST(test_a_clock_other_than_222_or_333_is_invalid);
@@ -329,5 +431,9 @@ int main(void) {
     RUN_TEST(test_crc32_in_chunks_equals_crc32_in_one_go);
     RUN_TEST(test_url_decoding_reverses_memstick_encoding);
     RUN_TEST(test_url_decoding_refuses_broken_escapes_and_overflow);
+    RUN_TEST(test_line_words_match_whole_keys_and_values);
+    RUN_TEST(test_line_numbers_refuse_text_overflow_and_missing_words);
+    RUN_TEST(test_baseline_is_the_last_finished_ui0_run_within_the_age);
+    RUN_TEST(test_baseline_skips_a_line_too_long_to_read_whole);
     return UNITY_END();
 }

@@ -302,6 +302,12 @@ install_app_config() {
     return
   fi
   url="https://$host:$TEST_SERVER_TLS_PORT"
+  # Checked here: an exit inside the command substitution below would end only its subshell, and an
+  # empty identity would be written.
+  if [[ ! -f "$INTEGRATION_ENV" ]]; then
+    echo "error: $INTEGRATION_ENV not found; run scripts/dev.sh romm-lan first" >&2
+    exit 1
+  fi
   server_id="$(test_server_id)"
   # Every romm-lan makes a new test CA, so the bundle is rewritten even for a kept config.ini.
   cat "$dest/$CA_BUNDLE_NAME" "$INTEGRATION_CERTS/ca.crt" >"$dest/$APP_CA_FILE"

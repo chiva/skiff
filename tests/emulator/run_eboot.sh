@@ -11,7 +11,7 @@
 # on one Mac and ran past 30 s on CI runners, so it passes a longer timeout.
 set -euo pipefail
 
-readonly USAGE="usage: run_eboot.sh <path/to/EBOOT.PBP> <NAME> [timeout seconds]"
+readonly USAGE="usage: run_eboot.sh <path/to/EBOOT.PBP or .iso/.cso> <NAME> [timeout seconds]"
 readonly EBOOT="${1:?$USAGE}"
 readonly NAME="${2:?$USAGE}"
 readonly DEFAULT_TIMEOUT_SECONDS=30

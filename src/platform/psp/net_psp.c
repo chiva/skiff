@@ -309,23 +309,21 @@ skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us) {
         return SKIFF_ERR_INVALID_ARG;
     }
     clear_failure(net);
-    const int abandoning_join = net->join_pending;
-    end_join(net);
     int state = PSP_NET_APCTL_STATE_DISCONNECTED;
     if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
         return SKIFF_ERR_NET_UNAVAILABLE;
     }
     net->apctl_state = state;
-    if (state == PSP_NET_APCTL_STATE_DISCONNECTED && !abandoning_join) {
+    if (state == PSP_NET_APCTL_STATE_DISCONNECTED && !net->join_pending) {
         return SKIFF_OK;
     }
-    /* A join just asked for may still read DISCONNECTED before it starts scanning: it is told to
-     * stop all the same, and only a refusal while the state shows a connection counts. */
-    const int disconnected = sceNetApctlDisconnect();
-    if (state != PSP_NET_APCTL_STATE_DISCONNECTED &&
-        !step(net, "sceNetApctlDisconnect", disconnected)) {
+    /* A join just asked for may still read DISCONNECTED before it starts scanning, so it is told to
+     * stop all the same. Until the firmware accepts that, the join stays pending: unloading must
+     * still refuse. */
+    if (!step(net, "sceNetApctlDisconnect", sceNetApctlDisconnect())) {
         return SKIFF_ERR_NET_UNAVAILABLE;
     }
+    end_join(net);
     const long long start_us = sceKernelGetSystemTimeWide();
     while (sceKernelGetSystemTimeWide() - start_us < timeout_us) {
         if (step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {

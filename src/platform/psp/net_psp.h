@@ -148,7 +148,8 @@ skiff_err skiff_psp_net_online(skiff_psp_net *net);
 /*
  * Drops the connection, if any, and waits up to timeout_us until it is reported gone. SKIFF_OK only
  * then; otherwise the modules must stay loaded (process exit releases them). A pending join is
- * abandoned first (its handler removed, the firmware told to disconnect).
+ * abandoned once the firmware accepts the disconnect (its handler is then removed); if it refuses,
+ * the join stays pending: poll it to its end, then disconnect again.
  */
 skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us);
 

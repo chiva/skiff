@@ -96,6 +96,14 @@ security-critical settings so an option renamed in a future release fails the im
 of silently reverting. The profile is written into the installed headers, so libcurl, Skiff and
 mbedtls itself are compiled against the same configuration.
 
+It also turns on Mbed TLS's threading layer over pthreads (`MBEDTLS_THREADING_C`,
+`MBEDTLS_THREADING_PTHREAD`). The app browses RomM on its UI thread while the download worker
+transfers on its own, each over its own connection, but PSA crypto keeps state that both share (the
+random generator, the key slots), and without the threading layer it is not safe to use from two
+threads. pspdev already links pthread-embedded into every program for newlib's locks, so this adds
+nothing to the EBOOT's dependencies. `tests/unit/test_host_tls.c` pins the setting and runs crypto
+on four threads at once.
+
 curl is built with HTTP and HTTPS only, IPv4 only, and no optional dependencies (no HTTP/2, IDN,
 public-suffix list or compression).
 

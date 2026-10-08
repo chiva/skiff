@@ -77,6 +77,13 @@ turn_on MBEDTLS_PLATFORM_MS_TIME_ALT
 # clock read from the PSP's real-time clock before main() runs.
 turn_on MBEDTLS_PLATFORM_TIME_ALT
 
+# Two threads use TLS at once: the app's UI browses RomM while the download worker transfers. Each
+# has its own connection, but PSA crypto keeps global state (the random generator, the key slots)
+# that is not thread-safe without THREADING_C. pthread-embedded is linked into every pspdev
+# program already (newlib's locks use it), and works from threads made with sceKernelCreateThread.
+turn_on MBEDTLS_THREADING_C
+turn_on MBEDTLS_THREADING_PTHREAD
+
 # Persistent PSA keys: Skiff keeps none, and the file backend would write into the working directory.
 turn_off MBEDTLS_PSA_CRYPTO_STORAGE_C
 turn_off MBEDTLS_PSA_ITS_FILE_C

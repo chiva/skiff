@@ -39,7 +39,9 @@ readonly APP_MANIFEST="installed.json"
 readonly APP_FILES=("$APP_MANIFEST" "$APP_QUEUE")
 # A download in progress keeps these next to its target (include/skiff/download.h).
 readonly DOWNLOAD_SUFFIXES=(.part .resume)
-readonly MEMORY_STICK_DEVICE="ms0:/"
+# Queue targets are on the device the app runs from (the Memory Stick, or a PSP Go's internal
+# storage), which is the one mounted: either prefix maps onto the mount.
+readonly APP_DEVICES=("ms0:/" "ef0:/")
 readonly SECRET_RANDOM_BYTES=16
 # Each romm-up or romm-lan is a new server (empty volumes, new secrets) even at the same address,
 # where an old token no longer works: config.ini records which one it was written for, as a digest
@@ -240,11 +242,16 @@ install_probe_configs() {
 # (src/app/app_settings.c): the queue and its downloads' partial files, and installed.json's records.
 # The games stay, protected from then on as copied by hand.
 forget_server_state() {
-  local dest="$1" target path suffix partials=0
+  local dest="$1" target path device suffix partials=0
   if [[ -f "$dest/$APP_QUEUE" ]]; then
     while IFS= read -r target; do
-      [[ "$target" == "$MEMORY_STICK_DEVICE"* ]] || continue
-      path="$MOUNT/${target#"$MEMORY_STICK_DEVICE"}"
+      path=""
+      for device in "${APP_DEVICES[@]}"; do
+        if [[ "$target" == "$device"* ]]; then
+          path="$MOUNT/${target#"$device"}"
+        fi
+      done
+      [[ -n "$path" ]] || continue
       for suffix in "${DOWNLOAD_SUFFIXES[@]}"; do
         if [[ -f "$path$suffix" ]]; then
           rm -f "$path$suffix"

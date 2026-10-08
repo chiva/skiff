@@ -38,7 +38,7 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `app/` (screens and state machine, host-tested; the PSP wiring arrives next), `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
+Status: `app/` (screens and state machine, host-tested, and run on the PSP by `src/platform/psp/app_main.c`), `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
 text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
 `storage/` (the storage seam, logical roots, free space, safe names), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
@@ -145,6 +145,17 @@ dialogs and the network, and reaches it through `skiff_app_env`.
 - **installed.json is saved off the lock the UI reads**: the worker records a finished download
   under the manifest lock, copies the manifest, and saves the copy without it, so drawing the
   library never waits for the Memory Stick.
+- **On the PSP** (`src/platform/psp/app_psp.h`, `app_main.c`): one frame is read the buttons,
+  update the app, draw its view, run the system dialog it asks for, present. Five mutexes are
+  created at startup: the log's, the queue's two, `installed.json`'s and the network's. The network
+  stack is used by one thread at a time, so the UI holds the network lock from the start of a join
+  to its end, and while the network picker is open, taking it without waiting (while the worker
+  rejoins, up to 30 s, the screen keeps drawing); the worker takes it to rejoin or reload. Each
+  request to RomM from the UI holds it too, so the worker never tears the network down under one;
+  one made while the worker recovers fails as a lost connection, and Retry joins again. Quitting
+  stops the worker (5 s); only when it stopped are the app, the network (after a disconnect that
+  succeeded), TLS and the mutexes released, otherwise the process exit does it. A system dialog
+  that will not close ends the app the same way.
 - **Secrets**: the token and every custom header value of at least 8 characters are registered
   with the log; a shorter value cannot be found reliably and registering it would withhold every
   line.
@@ -164,7 +175,7 @@ The UI draws with the PSP's GU directly and renders text with intraFont, rather 
   font's fallback (`intraFontSetAltFont()`), loaded only when a string needs it. Text is UTF-8
   throughout, so that change stays inside `ui/`.
 - `libintrafont` is packaged by pspdev. Its licence (CC BY-SA 3.0) ships with the release's
-  third-party licences once the app links it (`scripts/psp-packages.txt`).
+  third-party licences (`scripts/psp-packages.txt`).
 
 Phase 1 confirmed this with a prototype on hardware (`tests/prototype/ui_proto.c`, see
 [Testing](testing.md#ui-prototype)). The prototype still draws a Japanese line and measures both

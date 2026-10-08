@@ -44,6 +44,10 @@ void skiff_psp_mutex_unlock(void *ctx) {
     sceKernelSignalSema(mutex->sema, SEMA_ONE);
 }
 
+int skiff_psp_mutex_try_lock(skiff_psp_mutex *mutex) {
+    return mutex != NULL && sceKernelPollSema(mutex->sema, SEMA_ONE) >= 0;
+}
+
 int skiff_psp_utc_ms(void *ctx, int64_t *unix_ms) {
     (void)ctx;
     u64 tick = 0;

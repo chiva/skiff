@@ -12,6 +12,9 @@ readonly PPSSPP_IMAGE="skiff-ppsspp"
 # outlast the emulator's default 30 s on a slow host (tests/emulator/run_eboot.sh). CI passes the same
 # value in its UI prototype step.
 readonly UI_PROTO_TIMEOUT_SECONDS=90
+# The app smoke test draws its first screen for 60 frames in the same software renderer, after
+# reading its files; CI passes the same value in its app step.
+readonly APP_SMOKE_TIMEOUT_SECONDS=90
 readonly COVERAGE_FLOOR=85
 # CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
 readonly HOST_COMPILERS=(gcc clang)
@@ -71,6 +74,9 @@ Commands run in the order given and stop at the first failure.
   jobs-probe   Run the jobs probe in PPSSPPHeadless, which has no ARK: a queued job must fail on
                the worker thread before any network I/O, and the queue file and log must say so
                (needs `psp` first; the downloads and interruptions need a real PSP)
+  app-smoke    Run the app's smoke test in PPSSPPHeadless, which has no ARK and no config.ini: the
+               app must start, reach the screen asking for the server address, draw it, and tear
+               down (needs `psp` first; pairing, browsing and downloads need a real PSP)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
   romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
@@ -283,6 +289,9 @@ run_command() {
     ;;
   jobs-probe)
     run_emulator build/psp/pbp/skiff_jobs_probe/EBOOT.PBP "JOBS PROBE NO ARK"
+    ;;
+  app-smoke)
+    run_emulator build/psp/pbp/skiff_app_smoke/EBOOT.PBP "APP SMOKE" "$APP_SMOKE_TIMEOUT_SECONDS"
     ;;
   romm-up)
     romm_up 127.0.0.1

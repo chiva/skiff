@@ -17,11 +17,12 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench,skiff_resume_probe,skiff_jobs_probe}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench,skiff_resume_probe,skiff_jobs_probe,skiff_app_smoke}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |
 | UI prototype, headless (fonts and frames) | `scripts/dev.sh ui-proto` (after `psp`) |
+| App smoke test, headless (boots to the first screen) | `scripts/dev.sh app-smoke` (after `psp`) |
 | Network probe without ARK (modules load, TLS must refuse) | `scripts/dev.sh net-probe` (after `psp`) |
 | Benchmark without ARK (TLS must refuse, CRC-32 and Memory Stick code runs) | `scripts/dev.sh bench` (after `psp`) |
 | Resume probe without ARK (PSP storage works, TLS must refuse) | `scripts/dev.sh resume-probe` (after `psp`) |
@@ -74,9 +75,9 @@ existing ones.
 - PPSSPPHeadless prints a program's stdout only in its full log (`-l`, `I stdout: ` prefix).
 - Check EBOOTs report through `src/platform/psp/report.h` (stdout, screen, and `result.txt` next to
   the EBOOT, found from `argv[0]`); a new check EBOOT should use it too.
-- Every package linked into the EBOOT goes in `scripts/psp-packages.txt` so its licence ships
-  (`mbedtls` and `curl` too, once the app links them: the toolchain image installs their licences
-  where `psp-create-license-directory` looks).
+- Every package linked into the app's EBOOT goes in `scripts/psp-packages.txt` so its licence ships
+  (`mbedtls` and `curl` too: the toolchain image installs their licences where
+  `psp-create-license-directory` looks).
 - Mbed TLS's config lives in its installed headers (`docker/toolchain/configure-mbedtls.sh`); never
   pass `MBEDTLS_*CONFIG_FILE` defines to a consumer, or Skiff and libcurl disagree on struct layouts.
 - psp-gcc links `psputility`, `psprtc`, `pspnet_inet` and `pspnet_resolver` after everything else.

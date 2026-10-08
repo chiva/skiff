@@ -58,6 +58,8 @@ void skiff_psp_mutex_destroy(skiff_psp_mutex *mutex);
  * lock. */
 void skiff_psp_mutex_lock(void *ctx);
 void skiff_psp_mutex_unlock(void *ctx);
+/* Takes the mutex if it is free: 1 then, 0 (without waiting) when another thread holds it. */
+int skiff_psp_mutex_try_lock(skiff_psp_mutex *mutex);
 
 /* skiff_log_clock_fn: milliseconds since 1970 in UTC from the real-time clock (the C library's
  * time() has no date on a PSP); 0 when the clock cannot be read. */

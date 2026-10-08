@@ -163,6 +163,70 @@ static void test_resolving_needs_roots_and_room(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_resolve(&roots, "games:", out, 0));
 }
 
+/* ---- Back from a real path ---- */
+
+static void assert_logical(const char *path, const char *expected) {
+    const skiff_err err = skiff_storage_logical_path(&roots, path, out, OUT_MAX);
+    TEST_PRINTF("%s -> %s (%s)", path, out, skiff_err_name(err));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_ASSERT_EQUAL_STRING(expected, out);
+    char again[OUT_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&roots, out, again, sizeof again));
+    TEST_ASSERT_EQUAL_STRING(path, again);
+}
+
+static void test_real_paths_go_back_to_their_root(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_from_program(MEMORY_STICK_EBOOT, &roots));
+    assert_logical("ms0:/ISO/Skiff Test.iso", "games:/Skiff Test.iso");
+    assert_logical("ms0:/ISO", "games:");
+    assert_logical("ms0:/PSP/SAVEDATA/ULUS10064DATA00/DATA.BIN", "saves:/ULUS10064DATA00/DATA.BIN");
+    assert_logical("ms0:/PSP/GAME/Skiff/installed.json", "app:/installed.json");
+    assert_logical("ms0:/ISO/Pok\xC3\xA9mon [12].iso", "games:/Pok\xC3\xA9mon [12].iso");
+}
+
+static void test_the_longest_root_folder_wins(void) {
+    TEST_PRINTF("app: inside games: (host roots can nest): the deeper folder names the root");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_roots_init("/tmp/skiff", "/tmp/skiff/ISO/app", &roots));
+    assert_logical("/tmp/skiff/ISO/app/config.ini", "app:/config.ini");
+    assert_logical("/tmp/skiff/ISO/apple.iso", "games:/apple.iso");
+}
+
+static void test_paths_outside_every_root_are_refused(void) {
+    TEST_PRINTF("roots never set: no folder to match");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_logical_path(&roots, "ms0:/ISO/a.iso", out, OUT_MAX));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_from_program(MEMORY_STICK_EBOOT, &roots));
+    const char *refused[] = {"ms0:/ISOS/a.iso", "ms0:/iso/a.iso",    "ef0:/ISO/a.iso",
+                             "ms0:/ISO/",       "ms0:/ISO//a.iso",   "ms0:/ISO/../PSP/x",
+                             "ms0:/ISO/a.iso.", "ms0:/ISO/a\\..\\b", "ms0:/ISO/a:b.iso",
+                             "ms0:/",           "games:/a.iso",      ""};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        const skiff_err err = skiff_storage_logical_path(&roots, refused[i], out, OUT_MAX);
+        TEST_PRINTF("'%s' -> %s", refused[i], skiff_err_name(err));
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, err);
+        TEST_ASSERT_EQUAL_STRING("", out);
+    }
+}
+
+static void test_going_back_needs_arguments_and_room(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_from_program(MEMORY_STICK_EBOOT, &roots));
+    const size_t exact = strlen("games:/a.iso") + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_logical_path(&roots, "ms0:/ISO/a.iso", out, exact));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_storage_logical_path(&roots, "ms0:/ISO/a.iso", out, exact - 1));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_logical_path(NULL, "ms0:/ISO", out, OUT_MAX));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_logical_path(&roots, NULL, out, OUT_MAX));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_logical_path(&roots, "ms0:/ISO", NULL, 8));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_logical_path(&roots, "ms0:/ISO", out, 0));
+}
+
 /* ---- Sibling paths ---- */
 
 static void test_sibling_path_uses_the_given_file_name(void) {
@@ -396,6 +460,10 @@ int main(void) {
     RUN_TEST(test_logical_paths_resolve_on_their_root);
     RUN_TEST(test_nothing_resolves_outside_its_root);
     RUN_TEST(test_resolving_needs_roots_and_room);
+    RUN_TEST(test_real_paths_go_back_to_their_root);
+    RUN_TEST(test_the_longest_root_folder_wins);
+    RUN_TEST(test_paths_outside_every_root_are_refused);
+    RUN_TEST(test_going_back_needs_arguments_and_room);
     RUN_TEST(test_sibling_path_uses_the_given_file_name);
     RUN_TEST(test_sibling_path_rejects_a_null_file_name_or_no_folder);
     RUN_TEST(test_sibling_path_sizes_the_buffer_for_its_own_name);

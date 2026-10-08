@@ -157,6 +157,47 @@ skiff_err skiff_storage_resolve(const skiff_storage_roots *roots, const char *lo
     return SKIFF_OK;
 }
 
+/* The part of path after the longest root folder it starts with, or NULL when it starts with none;
+ * *name is that root's logical name. */
+static const char *after_folder(const skiff_storage_roots *roots, const char *path,
+                                const char **name) {
+    static const char *const NAMES[] = {SKIFF_STORAGE_ROOT_APP, SKIFF_STORAGE_ROOT_GAMES,
+                                        SKIFF_STORAGE_ROOT_SAVES};
+    const char *const folders[] = {roots->app, roots->games, roots->saves};
+    const char *rest = NULL;
+    size_t best = 0;
+    for (size_t i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
+        const size_t length = strlen(folders[i]);
+        if (length > best && strncmp(path, folders[i], length) == 0 &&
+            (path[length] == '\0' || path[length] == PATH_SEPARATOR)) {
+            best = length;
+            rest = path + length;
+            *name = NAMES[i];
+        }
+    }
+    return rest;
+}
+
+skiff_err skiff_storage_logical_path(const skiff_storage_roots *roots, const char *path, char *out,
+                                     size_t out_size) {
+    if (out != NULL && out_size > 0) {
+        out[0] = '\0';
+    }
+    if (roots == NULL || path == NULL || out == NULL || out_size == 0) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const char *name = NULL;
+    const char *rest = after_folder(roots, path, &name);
+    if (rest == NULL || !plain_parts(rest)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    if (!join(name, rest, out, out_size)) {
+        out[0] = '\0';
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    return SKIFF_OK;
+}
+
 skiff_err skiff_storage_sibling_path(const char *program_path, const char *file_name, char *out,
                                      size_t out_size) {
     if (out != NULL && out_size > 0) {

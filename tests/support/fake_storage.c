@@ -27,6 +27,9 @@ static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mod
                            uint64_t offset, skiff_file **out) {
     fake_storage *fake = (fake_storage *)base;
     fake->opens++;
+    if (fake->on_call != NULL) {
+        fake->on_call(fake->on_call_ctx, "open", path);
+    }
     fake_file *file = calloc(1, sizeof *file);
     if (file == NULL) {
         return SKIFF_ERR_NO_MEMORY;
@@ -112,6 +115,9 @@ static skiff_err fake_rename(skiff_storage *base, const char *from, const char *
 
 static skiff_err fake_remove(skiff_storage *base, const char *path) {
     const fake_storage *fake = (const fake_storage *)base;
+    if (fake->on_call != NULL) {
+        fake->on_call(fake->on_call_ctx, "remove", path);
+    }
     const skiff_err err = skiff_storage_remove(fake->inner, path);
     return err == SKIFF_OK && fake->remove_error != SKIFF_OK && matches(fake, path)
                ? fake->remove_error

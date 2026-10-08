@@ -53,7 +53,12 @@ network stack, TLS hooks, the GU renderer) exist. The other layers arrive with t
   (`include/skiff/jobs.h`, `skiff_jobs_run_one()`), and posts progress and results to the UI as
   events: a small ring of state and recovery events, oldest dropped if the UI falls behind, and
   only the latest progress per job (bytes, size, speed). Both threads share the queue through lock
-  hooks; the runner holds the lock only between attempts. Modules hold no global mutable state, so
+  hooks and two locks. The state lock guards what the UI reads every frame (the jobs, events,
+  progress) and is held only for moments. The commit lock is held for a whole change that saves
+  the queue file: the change is made to a copy, the copy is saved without the state lock, and only
+  then does the UI see it. So the UI never waits for the Memory Stick (on hardware it waited 113 ms
+  for a save at the end of a job before this split), and the queue never shows what a restart would
+  undo. The runner holds neither lock during a transfer. Modules hold no global mutable state, so
   a job owns its transport and file handles.
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
   at a lower priority than the UI (`SKIFF_PSP_WORKER_PRIORITY` 0x30 against the main thread's 0x20,
@@ -61,8 +66,8 @@ network stack, TLS hooks, the GU renderer) exist. The other layers arrive with t
   worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 64 KB to
   start) comes from the same memory as the network modules, about 148 KB once joined in blocks of
   at most 80 KB, so its high-water mark (`sceKernelGetThreadStackFreeSize()`) is measured on
-  hardware (the [jobs probe](testing.md#jobs-probe)). The queue and the log each lock with their
-  own semaphore-backed mutex (the queue logs while it holds its lock); rejoining or reloading the
+  hardware (the [jobs probe](testing.md#jobs-probe)). The queue's two locks and the log each
+  have their own semaphore-backed mutex (the queue logs while it holds its commit lock); rejoining or reloading the
   network can take a further lock other threads share. Quitting asks the runner to stop and waits
   up to 5 s for the thread; a join still in progress is left to the process exit.
 - **Power**: during a job, `skiff_psp_keep_awake()` (`scePowerTick(PSP_POWER_TICK_SUSPEND)`, at

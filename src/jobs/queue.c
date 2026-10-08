@@ -169,13 +169,13 @@ static int finished(skiff_job_state state) {
     return state == SKIFF_JOB_DONE || state == SKIFF_JOB_CANCELLED;
 }
 
-/* Drops the oldest finished job; 0 when there is none. Lock held. */
-static int drop_oldest_finished(skiff_jobs *jobs) {
-    for (size_t i = 0; i < jobs->count; i++) {
-        if (finished(jobs->jobs[i].state)) {
-            memmove(&jobs->jobs[i], &jobs->jobs[i + 1],
-                    (jobs->count - i - 1) * sizeof jobs->jobs[0]);
-            jobs->count--;
+/* Drops the oldest finished job; 0 when there is none. */
+static int drop_oldest_finished(jobs_table *table) {
+    for (size_t i = 0; i < table->count; i++) {
+        if (finished(table->jobs[i].state)) {
+            memmove(&table->jobs[i], &table->jobs[i + 1],
+                    (table->count - i - 1) * sizeof table->jobs[0]);
+            table->count--;
             return 1;
         }
     }
@@ -369,22 +369,40 @@ void jobs_unlock(skiff_jobs *jobs) {
     }
 }
 
-skiff_job *jobs_find(skiff_jobs *jobs, uint32_t id) {
-    for (size_t i = 0; i < jobs->count; i++) {
-        if (jobs->jobs[i].id == id) {
-            return &jobs->jobs[i];
+void jobs_commit_lock(skiff_jobs *jobs) {
+    if (jobs->lock != NULL) {
+        jobs->lock(jobs->save_lock_ctx);
+    }
+}
+
+void jobs_commit_unlock(skiff_jobs *jobs) {
+    if (jobs->unlock != NULL) {
+        jobs->unlock(jobs->save_lock_ctx);
+    }
+}
+
+skiff_job *jobs_table_find(jobs_table *table, uint32_t id) {
+    for (size_t i = 0; i < table->count; i++) {
+        if (table->jobs[i].id == id) {
+            return &table->jobs[i];
         }
     }
     return NULL;
 }
 
-skiff_err jobs_save(skiff_jobs *jobs) {
+jobs_table *jobs_stage(skiff_jobs *jobs) {
+    jobs->staged = jobs->table;
+    return &jobs->staged;
+}
+
+skiff_err jobs_save_staged(skiff_jobs *jobs) {
     char *text = malloc(SKIFF_JOBS_FILE_MAX);
     if (text == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
+    const jobs_table *staged = &jobs->staged;
     size_t length = 0;
-    skiff_err err = skiff_jobs_format(jobs->jobs, jobs->count, jobs->next_id, text,
+    skiff_err err = skiff_jobs_format(staged->jobs, staged->count, staged->next_id, text,
                                       SKIFF_JOBS_FILE_MAX, &length);
     if (err == SKIFF_OK) {
         err = skiff_storage_replace_whole(jobs->storage, jobs->path, text, length);
@@ -396,6 +414,8 @@ skiff_err jobs_save(skiff_jobs *jobs) {
     }
     return err;
 }
+
+void jobs_publish(skiff_jobs *jobs) { jobs->table = jobs->staged; }
 
 void jobs_push_event(skiff_jobs *jobs, const skiff_jobs_event *event) {
     if (event->kind == SKIFF_JOBS_EVENT_STATE && jobs->has_progress &&
@@ -416,7 +436,7 @@ void jobs_set_progress(skiff_jobs *jobs, const skiff_jobs_event *event) {
     jobs->has_progress = 1;
 }
 
-static void push_state_event(skiff_jobs *jobs, const skiff_job *job) {
+void jobs_push_state_event(skiff_jobs *jobs, const skiff_job *job) {
     skiff_jobs_event event;
     memset(&event, 0, sizeof event);
     event.kind = SKIFF_JOBS_EVENT_STATE;
@@ -426,31 +446,23 @@ static void push_state_event(skiff_jobs *jobs, const skiff_job *job) {
     jobs_push_event(jobs, &event);
 }
 
-skiff_err jobs_set_state(skiff_jobs *jobs, skiff_job *job, skiff_job_state state, skiff_err error) {
-    job->state = state;
-    job->error = error;
-    /* What happened stays true for this session even if the Memory Stick refused it (logged by
-     * jobs_save()); every later save writes the whole queue again. */
-    const skiff_err err = jobs_save(jobs);
-    push_state_event(jobs, job);
-    return err;
-}
-
-/* The player's change to a job, kept only once the queue file holds it: on a failed save the job
- * is put back and the error returned, so the queue never shows what a restart would undo. */
-static skiff_err change_state(skiff_jobs *jobs, skiff_job *job, skiff_job_state state,
-                              skiff_err error, uint32_t attempts) {
-    const skiff_job before = *job;
+skiff_err jobs_commit_state(skiff_jobs *jobs, uint32_t id, skiff_job_state state, skiff_err error,
+                            uint32_t attempts, jobs_commit_mode mode) {
+    skiff_job *job = jobs_table_find(jobs_stage(jobs), id);
+    if (job == NULL) {
+        return SKIFF_ERR_STORAGE_NOT_FOUND;
+    }
     job->state = state;
     job->error = error;
     job->attempts = attempts;
-    const skiff_err err = jobs_save(jobs);
-    if (err != SKIFF_OK) {
-        *job = before;
-        return err;
+    const skiff_err err = jobs_save_staged(jobs);
+    if (err == SKIFF_OK || mode == JOBS_COMMIT_ALWAYS) {
+        jobs_lock(jobs);
+        jobs_publish(jobs);
+        jobs_push_state_event(jobs, jobs_table_find(&jobs->table, id));
+        jobs_unlock(jobs);
     }
-    push_state_event(jobs, job);
-    return SKIFF_OK;
+    return err;
 }
 
 /* Reads the queue file; a file that is not a queue is set aside, not fatal. */
@@ -459,20 +471,21 @@ static skiff_err load(skiff_jobs *jobs) {
     if (text == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
+    jobs_table *table = &jobs->table;
     size_t length = 0;
     skiff_err err =
         skiff_storage_read_whole(jobs->storage, jobs->path, text, SKIFF_JOBS_FILE_MAX, &length);
     size_t dropped = 0;
     if (err == SKIFF_OK && length > 0) {
-        err = skiff_jobs_parse(text, length, jobs->jobs, &jobs->count, &jobs->next_id, &dropped);
+        err = skiff_jobs_parse(text, length, table->jobs, &table->count, &table->next_id, &dropped);
     }
     free(text);
     if (err == SKIFF_ERR_CONFIG_PARSE || err == SKIFF_ERR_BUFFER_TOO_SMALL) {
         skiff_log_write(jobs->log, SKIFF_LOG_WARN, JOBS_LOG_TAG,
                         "the queue file is not usable (%s); starting with an empty queue",
                         skiff_err_name(err));
-        jobs->count = 0;
-        jobs->next_id = 1;
+        table->count = 0;
+        table->next_id = 1;
         return SKIFF_OK;
     }
     if (dropped > 0) {
@@ -482,6 +495,15 @@ static skiff_err load(skiff_jobs *jobs) {
     return err;
 }
 
+/* Both hooks with two distinct lock contexts, or no hooks. */
+static int locks_valid(const skiff_jobs_config *config) {
+    if (config->lock == NULL && config->unlock == NULL) {
+        return 1;
+    }
+    return config->lock != NULL && config->unlock != NULL && config->save_lock_ctx != NULL &&
+           config->save_lock_ctx != config->lock_ctx;
+}
+
 skiff_err skiff_jobs_create(const skiff_jobs_config *config, skiff_jobs **out) {
     if (out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
@@ -489,7 +511,7 @@ skiff_err skiff_jobs_create(const skiff_jobs_config *config, skiff_jobs **out) {
     *out = NULL;
     if (config == NULL || config->storage == NULL || config->path == NULL ||
         config->path[0] == '\0' || strlen(config->path) >= SKIFF_STORAGE_PATH_MAX ||
-        (config->lock == NULL) != (config->unlock == NULL)) {
+        !locks_valid(config)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     skiff_jobs *jobs = calloc(1, sizeof *jobs);
@@ -502,16 +524,17 @@ skiff_err skiff_jobs_create(const skiff_jobs_config *config, skiff_jobs **out) {
     jobs->lock = config->lock;
     jobs->unlock = config->unlock;
     jobs->lock_ctx = config->lock_ctx;
-    jobs->next_id = 1;
+    jobs->save_lock_ctx = config->save_lock_ctx;
+    jobs->table.next_id = 1;
     const skiff_err err = load(jobs);
     if (err != SKIFF_OK) {
         free(jobs);
         return err;
     }
     /* Left active by a quit or a crash: its .part file lets it resume. */
-    for (size_t i = 0; i < jobs->count; i++) {
-        if (jobs->jobs[i].state == SKIFF_JOB_ACTIVE) {
-            jobs->jobs[i].state = SKIFF_JOB_QUEUED;
+    for (size_t i = 0; i < jobs->table.count; i++) {
+        if (jobs->table.jobs[i].state == SKIFF_JOB_ACTIVE) {
+            jobs->table.jobs[i].state = SKIFF_JOB_QUEUED;
         }
     }
     *out = jobs;
@@ -522,10 +545,10 @@ void skiff_jobs_destroy(skiff_jobs *jobs) { free(jobs); }
 
 /* Another job not yet finished owns one of target's files: two jobs sharing a .part file would
  * overwrite or delete each other's progress. The job for the same file is not another. */
-static int target_taken(skiff_jobs *jobs, uint64_t rom_id, const char *file_name,
+static int target_taken(const jobs_table *table, uint64_t rom_id, const char *file_name,
                         const char *target) {
-    for (size_t i = 0; i < jobs->count; i++) {
-        const skiff_job *job = &jobs->jobs[i];
+    for (size_t i = 0; i < table->count; i++) {
+        const skiff_job *job = &table->jobs[i];
         const int same_file = job->rom_id == rom_id && strcmp(job->file_name, file_name) == 0;
         if (!same_file && !finished(job->state) && paths_collide(job->target, target)) {
             return 1;
@@ -534,9 +557,9 @@ static int target_taken(skiff_jobs *jobs, uint64_t rom_id, const char *file_name
     return 0;
 }
 
-static skiff_job *find_same_file(skiff_jobs *jobs, const skiff_job_request *request) {
-    for (size_t i = 0; i < jobs->count; i++) {
-        skiff_job *job = &jobs->jobs[i];
+static skiff_job *find_same_file(jobs_table *table, const skiff_job_request *request) {
+    for (size_t i = 0; i < table->count; i++) {
+        skiff_job *job = &table->jobs[i];
         if (job->rom_id == request->rom_id && strcmp(job->file_name, request->file_name) == 0) {
             return job;
         }
@@ -561,83 +584,109 @@ static void fill_job(skiff_job *job, uint32_t id, const skiff_job_request *reque
     job->state = SKIFF_JOB_QUEUED;
 }
 
+/* Commit lock held: puts the request in staged; its id goes to *id. */
+static skiff_err stage_request(skiff_jobs *jobs, const skiff_job_request *request,
+                               const skiff_job *same, uint32_t *id) {
+    jobs_table *staged = jobs_stage(jobs);
+    skiff_job *job = same != NULL ? jobs_table_find(staged, same->id) : NULL;
+    if (job != NULL) {
+        fill_job(job, job->id, request);
+    } else if (staged->count == SKIFF_JOBS_MAX && !drop_oldest_finished(staged)) {
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    } else {
+        job = &staged->jobs[staged->count++];
+        fill_job(job, staged->next_id++, request);
+    }
+    *id = job->id;
+    return SKIFF_OK;
+}
+
 skiff_err skiff_jobs_add(skiff_jobs *jobs, const skiff_job_request *request, uint32_t *id) {
     if (jobs == NULL || request == NULL || id == NULL || !request_valid(request)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    jobs_lock(jobs);
-    if (target_taken(jobs, request->rom_id, request->file_name, request->target)) {
-        jobs_unlock(jobs);
+    jobs_commit_lock(jobs);
+    if (target_taken(&jobs->table, request->rom_id, request->file_name, request->target)) {
+        jobs_commit_unlock(jobs);
         return SKIFF_ERR_INVALID_ARG;
     }
-    skiff_job *job = find_same_file(jobs, request);
-    if (job != NULL && (job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE)) {
-        *id = job->id;
-        jobs_unlock(jobs);
+    const skiff_job *same = find_same_file(&jobs->table, request);
+    if (same != NULL && (same->state == SKIFF_JOB_QUEUED || same->state == SKIFF_JOB_ACTIVE)) {
+        *id = same->id;
+        jobs_commit_unlock(jobs);
         return SKIFF_OK;
     }
-    /* The queue as it was, put back if the file cannot hold the new one. */
-    skiff_job *backup = malloc(sizeof jobs->jobs);
-    if (backup == NULL) {
-        jobs_unlock(jobs);
-        return SKIFF_ERR_NO_MEMORY;
-    }
-    memcpy(backup, jobs->jobs, sizeof jobs->jobs);
-    const size_t backup_count = jobs->count;
-    const uint32_t backup_next_id = jobs->next_id;
-    skiff_err err = SKIFF_OK;
-    if (job != NULL) {
-        fill_job(job, job->id, request);
-    } else if (jobs->count == SKIFF_JOBS_MAX && !drop_oldest_finished(jobs)) {
-        err = SKIFF_ERR_BUFFER_TOO_SMALL;
-    } else {
-        job = &jobs->jobs[jobs->count++];
-        fill_job(job, jobs->next_id++, request);
+    /* Staged only: the queue keeps it only once the file holds it. */
+    uint32_t added = 0;
+    skiff_err err = stage_request(jobs, request, same, &added);
+    if (err == SKIFF_OK) {
+        err = jobs_save_staged(jobs);
     }
     if (err == SKIFF_OK) {
-        err = jobs_save(jobs);
-    }
-    if (err != SKIFF_OK) {
-        memcpy(jobs->jobs, backup, sizeof jobs->jobs);
-        jobs->count = backup_count;
-        jobs->next_id = backup_next_id;
-    } else {
-        *id = job->id;
+        jobs_lock(jobs);
+        jobs_publish(jobs);
+        const skiff_job *job = jobs_table_find(&jobs->table, added);
+        jobs_push_state_event(jobs, job);
+        jobs_unlock(jobs);
+        *id = added;
         skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG,
-                        "queued job %u: rom %llu, %llu bytes", (unsigned)job->id,
-                        (unsigned long long)job->rom_id, (unsigned long long)job->size);
-        push_state_event(jobs, job);
+                        "queued job %u: rom %llu, %llu bytes", (unsigned)added,
+                        (unsigned long long)request->rom_id, (unsigned long long)request->size);
     }
-    free(backup);
-    jobs_unlock(jobs);
+    jobs_commit_unlock(jobs);
     return err;
+}
+
+/* The active job is cancelled by a flag the runner's stop hook reads, under the state lock alone:
+ * 1 when id is that job. */
+static int flag_active_cancel(skiff_jobs *jobs, uint32_t id) {
+    jobs_lock(jobs);
+    const skiff_job *job = jobs_table_find(&jobs->table, id);
+    const int active = job != NULL && job->state == SKIFF_JOB_ACTIVE && jobs->active_id == id;
+    if (active) {
+        /* The runner's stop hook sees it within about a second. */
+        jobs->cancel_active = 1;
+    }
+    jobs_unlock(jobs);
+    return active;
 }
 
 skiff_err skiff_jobs_cancel(skiff_jobs *jobs, uint32_t id) {
     if (jobs == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    jobs_lock(jobs);
-    skiff_job *job = jobs_find(jobs, id);
+    if (flag_active_cancel(jobs, id)) {
+        return SKIFF_OK;
+    }
+    jobs_commit_lock(jobs);
+    /* Again under the commit lock: the runner may have taken the job meanwhile. */
+    if (flag_active_cancel(jobs, id)) {
+        jobs_commit_unlock(jobs);
+        return SKIFF_OK;
+    }
+    const skiff_job *job = jobs_table_find(&jobs->table, id);
     skiff_err err = job == NULL ? SKIFF_ERR_STORAGE_NOT_FOUND : SKIFF_OK;
-    if (job != NULL && job->state == SKIFF_JOB_ACTIVE && jobs->active_id == id) {
-        /* The runner's stop hook sees it within about a second. */
-        jobs->cancel_active = 1;
-    } else if (job != NULL && (job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_FAILED)) {
+    if (job != NULL && (job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_FAILED)) {
         /* The cancel is saved before the partial files go, so a refused save leaves the job as it
          * was with its progress. Files that then cannot be deleted fail the job with the Memory
-         * Stick's error instead: a retry resumes from them, a second cancel tries again. */
-        err = change_state(jobs, job, SKIFF_JOB_CANCELLED, SKIFF_ERR_CANCELLED, job->attempts);
+         * Stick's error instead: a retry resumes from them, a second cancel tries again. The commit
+         * lock is held until they are gone, so no other job can claim the target meanwhile. */
+        const uint32_t attempts = job->attempts;
+        char target[SKIFF_JOBS_TARGET_MAX];
+        memcpy(target, job->target, strlen(job->target) + 1);
+        err = jobs_commit_state(jobs, id, SKIFF_JOB_CANCELLED, SKIFF_ERR_CANCELLED, attempts,
+                                JOBS_COMMIT_IF_SAVED);
         if (err == SKIFF_OK) {
-            err = skiff_download_discard(jobs->storage, job->target);
+            err = skiff_download_discard(jobs->storage, target);
             if (err != SKIFF_OK) {
-                (void)jobs_set_state(jobs, job, SKIFF_JOB_FAILED, err);
+                (void)jobs_commit_state(jobs, id, SKIFF_JOB_FAILED, err, attempts,
+                                        JOBS_COMMIT_ALWAYS);
             }
         }
         skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG, "cancel job %u: %s (%d)",
                         (unsigned)id, skiff_err_name(err), (int)err);
     }
-    jobs_unlock(jobs);
+    jobs_commit_unlock(jobs);
     return err;
 }
 
@@ -645,18 +694,18 @@ skiff_err skiff_jobs_retry(skiff_jobs *jobs, uint32_t id) {
     if (jobs == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    jobs_lock(jobs);
-    skiff_job *job = jobs_find(jobs, id);
+    jobs_commit_lock(jobs);
+    const skiff_job *job = jobs_table_find(&jobs->table, id);
     skiff_err err = SKIFF_OK;
     if (job == NULL) {
         err = SKIFF_ERR_STORAGE_NOT_FOUND;
     } else if ((job->state != SKIFF_JOB_FAILED && job->state != SKIFF_JOB_CANCELLED) ||
-               target_taken(jobs, job->rom_id, job->file_name, job->target)) {
+               target_taken(&jobs->table, job->rom_id, job->file_name, job->target)) {
         err = SKIFF_ERR_INVALID_ARG;
     } else {
-        err = change_state(jobs, job, SKIFF_JOB_QUEUED, SKIFF_OK, 0);
+        err = jobs_commit_state(jobs, id, SKIFF_JOB_QUEUED, SKIFF_OK, 0, JOBS_COMMIT_IF_SAVED);
     }
-    jobs_unlock(jobs);
+    jobs_commit_unlock(jobs);
     return err;
 }
 
@@ -664,27 +713,22 @@ skiff_err skiff_jobs_clear_finished(skiff_jobs *jobs) {
     if (jobs == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    skiff_job *backup = malloc(sizeof jobs->jobs);
-    if (backup == NULL) {
-        return SKIFF_ERR_NO_MEMORY;
-    }
-    jobs_lock(jobs);
-    memcpy(backup, jobs->jobs, sizeof jobs->jobs);
-    const size_t backup_count = jobs->count;
+    jobs_commit_lock(jobs);
+    jobs_table *staged = jobs_stage(jobs);
     size_t kept = 0;
-    for (size_t i = 0; i < jobs->count; i++) {
-        if (!finished(jobs->jobs[i].state)) {
-            jobs->jobs[kept++] = jobs->jobs[i];
+    for (size_t i = 0; i < staged->count; i++) {
+        if (!finished(staged->jobs[i].state)) {
+            staged->jobs[kept++] = staged->jobs[i];
         }
     }
-    jobs->count = kept;
-    const skiff_err err = jobs_save(jobs);
-    if (err != SKIFF_OK) {
-        memcpy(jobs->jobs, backup, sizeof jobs->jobs);
-        jobs->count = backup_count;
+    staged->count = kept;
+    const skiff_err err = jobs_save_staged(jobs);
+    if (err == SKIFF_OK) {
+        jobs_lock(jobs);
+        jobs_publish(jobs);
+        jobs_unlock(jobs);
     }
-    jobs_unlock(jobs);
-    free(backup);
+    jobs_commit_unlock(jobs);
     return err;
 }
 
@@ -693,9 +737,9 @@ size_t skiff_jobs_list(skiff_jobs *jobs, skiff_job *out, size_t capacity) {
         return 0;
     }
     jobs_lock(jobs);
-    const size_t count = jobs->count;
+    const size_t count = jobs->table.count;
     for (size_t i = 0; out != NULL && i < count && i < capacity; i++) {
-        out[i] = jobs->jobs[i];
+        out[i] = jobs->table.jobs[i];
     }
     jobs_unlock(jobs);
     return count;

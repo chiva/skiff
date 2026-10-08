@@ -220,54 +220,80 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
     return skiff_download_attempt(transport, r->jobs->storage, &spec, result);
 }
 
-/* Takes the first queued job, marks it active and copies it into *out; 0 when none is queued. */
-static int take_next(skiff_jobs *jobs, skiff_job *out) {
+/* Skiff is quitting: no job starts, however late the request came. */
+static int stop_requested(skiff_jobs *jobs) {
     jobs_lock(jobs);
-    /* Skiff is quitting: no job starts, however late the request came. */
-    if (jobs->stop_requested) {
-        jobs_unlock(jobs);
-        return 0;
-    }
-    for (size_t i = 0; i < jobs->count; i++) {
-        skiff_job *job = &jobs->jobs[i];
-        if (job->state == SKIFF_JOB_QUEUED) {
-            jobs->active_id = job->id;
-            jobs->cancel_active = 0;
-            (void)jobs_set_state(jobs, job, SKIFF_JOB_ACTIVE, SKIFF_OK);
-            *out = *job;
-            jobs_unlock(jobs);
-            return 1;
+    const int stop = jobs->stop_requested;
+    jobs_unlock(jobs);
+    return stop;
+}
+
+/* The first queued job, read under the commit lock; NULL when none is queued. */
+static const skiff_job *first_queued(skiff_jobs *jobs) {
+    for (size_t i = 0; i < jobs->table.count; i++) {
+        if (jobs->table.jobs[i].state == SKIFF_JOB_QUEUED) {
+            return &jobs->table.jobs[i];
         }
     }
+    return NULL;
+}
+
+/* Takes the first queued job, marks it active and copies it into *out; 0 when none is queued. */
+static int take_next(skiff_jobs *jobs, skiff_job *out) {
+    jobs_commit_lock(jobs);
+    const skiff_job *queued = stop_requested(jobs) ? NULL : first_queued(jobs);
+    if (queued == NULL) {
+        jobs_commit_unlock(jobs);
+        return 0;
+    }
+    const uint32_t id = queued->id;
+    skiff_job *job = jobs_table_find(jobs_stage(jobs), id);
+    job->state = SKIFF_JOB_ACTIVE;
+    job->error = SKIFF_OK;
+    /* The state stands for the session even if the file refused it (logged). */
+    (void)jobs_save_staged(jobs);
+    jobs_lock(jobs);
+    /* A stop asked for during the save still starts nothing. The file may then say active, which a
+     * restart reads as queued. */
+    const int started = !jobs->stop_requested;
+    if (started) {
+        jobs_publish(jobs);
+        jobs->active_id = id;
+        jobs->cancel_active = 0;
+        const skiff_job *active = jobs_table_find(&jobs->table, id);
+        jobs_push_state_event(jobs, active);
+        *out = *active;
+    }
     jobs_unlock(jobs);
-    return 0;
+    jobs_commit_unlock(jobs);
+    return started;
 }
 
 /* How the job ended. The job may have moved in the table (UI calls), so it is found by id. */
 static void conclude(run *r, const skiff_job *taken, skiff_job_state state, skiff_err error,
                      uint32_t attempts) {
     skiff_jobs *jobs = r->jobs;
-    jobs_lock(jobs);
-    skiff_job *job = jobs_find(jobs, r->job_id);
-    if (job != NULL) {
-        job->attempts = attempts;
-        const skiff_err saved = jobs_set_state(jobs, job, state, error);
-        /* A cancel's partial files go only once the queue file says cancelled: if it could not be
-         * saved, a restart finds the job queued with its progress intact. The lock is held until
-         * they are gone, so no other job can claim the target meanwhile. Files that cannot be
-         * deleted fail the job with the Memory Stick's error; a retry resumes from them. */
-        if (state == SKIFF_JOB_CANCELLED && saved == SKIFF_OK) {
-            const skiff_err err = skiff_download_discard(jobs->storage, taken->target);
-            if (err != SKIFF_OK) {
-                state = SKIFF_JOB_FAILED;
-                error = err;
-                (void)jobs_set_state(jobs, job, state, error);
-            }
+    jobs_commit_lock(jobs);
+    const skiff_err saved =
+        jobs_commit_state(jobs, r->job_id, state, error, attempts, JOBS_COMMIT_ALWAYS);
+    /* A cancel's partial files go only once the queue file says cancelled: if it could not be
+     * saved, a restart finds the job queued with its progress intact. The commit lock is held until
+     * they are gone, so no other job can claim the target meanwhile, while the UI keeps reading the
+     * queue. Files that cannot be deleted fail the job with the Memory Stick's error; a retry
+     * resumes from them. */
+    if (state == SKIFF_JOB_CANCELLED && saved == SKIFF_OK) {
+        const skiff_err err = skiff_download_discard(jobs->storage, taken->target);
+        if (err != SKIFF_OK) {
+            state = SKIFF_JOB_FAILED;
+            error = err;
+            (void)jobs_commit_state(jobs, r->job_id, state, error, attempts, JOBS_COMMIT_ALWAYS);
         }
     }
+    jobs_lock(jobs);
     jobs->active_id = 0;
     jobs->cancel_active = 0;
     jobs_unlock(jobs);
+    jobs_commit_unlock(jobs);
     skiff_log_write(jobs->log, state == SKIFF_JOB_FAILED ? SKIFF_LOG_ERROR : SKIFF_LOG_INFO,
                     JOBS_LOG_TAG, "job %u %s after %u attempt(s): %s (%d)", (unsigned)r->job_id,
                     skiff_job_state_name(state), (unsigned)attempts, skiff_err_name(error),

@@ -50,7 +50,7 @@ LIBRARY_SEED = b"skiff-integration-library"
 UNSUPPORTED_NAME = "Skiff Not A Game.zip"
 LONG_NAME = "Skiff " + "A Name Far Too Long For The Memory Stick " * 4 + "End.iso"
 SPECIAL_BYTES = 2048
-# Room for every ROM on one listing page when the seed looks them up after the scan.
+# ROMs per listing page when the seed looks them up after the scan.
 LIST_LIMIT = 500
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
 # same hashes on every run and every machine.
@@ -194,13 +194,18 @@ def find_roms(auth, names):
     platform = next((p for p in platforms or [] if p["fs_slug"] == PLATFORM_SLUG), None)
     if status != HTTP_OK or platform is None:
         raise SystemExit(f"seed: platform {PLATFORM_SLUG} missing after the scan (HTTP {status})")
-    status, page = request(
-        "GET",
-        f"/api/roms?platform_ids={platform['id']}&limit={LIST_LIMIT}&with_char_index=false"
-        "&with_filter_values=false&with_rom_id_index=false",
-        auth,
-    )
-    items = (page or {}).get("items", [])
+    items = []
+    while True:
+        status, page = request(
+            "GET",
+            f"/api/roms?platform_ids={platform['id']}&limit={LIST_LIMIT}&offset={len(items)}"
+            "&with_char_index=false&with_filter_values=false&with_rom_id_index=false",
+            auth,
+        )
+        batch = (page or {}).get("items", [])
+        items += batch
+        if status != HTTP_OK or not batch or len(items) >= (page or {}).get("total", 0):
+            break
     on_disk = sorted(path.name for path in LIBRARY_DIR.iterdir() if path.is_file())
     scanned = sorted(rom["fs_name"] for rom in items)
     if status != HTTP_OK or scanned != on_disk:

@@ -34,7 +34,12 @@ readonly APP_LOG_LEVEL="debug"
 readonly TEST_SERVER_TLS_PORT=8443
 # What the app writes next to its EBOOT, printed by results. result.txt there comes from the
 # launch check (tests/hardware/launch_check.c), a game the app downloads: its disc is read-only.
-readonly APP_FILES=(installed.json queue.json)
+readonly APP_QUEUE="queue.json"
+readonly APP_MANIFEST="installed.json"
+readonly APP_FILES=("$APP_MANIFEST" "$APP_QUEUE")
+# A download in progress keeps these next to its target (include/skiff/download.h).
+readonly DOWNLOAD_SUFFIXES=(.part .resume)
+readonly MEMORY_STICK_DEVICE="ms0:/"
 readonly SECRET_RANDOM_BYTES=16
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
 readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
@@ -210,6 +215,31 @@ install_probe_configs() {
   install_probe_config "$JOBS_FOLDER" jobs-probe.ini "${jobs_extra%$'\n'}" "${JOBS_FILES[@]}"
 }
 
+# A new server's ROM ids say nothing about the old one's, so before a config.ini for another server
+# goes in, the old server's state goes, as when the server changes in the app's Settings
+# (src/app/app_settings.c): the queue and its downloads' partial files, and installed.json's records.
+# The games stay, protected from then on as copied by hand.
+forget_server_state() {
+  local dest="$1" target path suffix partials=0
+  if [[ -f "$dest/$APP_QUEUE" ]]; then
+    while IFS= read -r target; do
+      [[ "$target" == "$MEMORY_STICK_DEVICE"* ]] || continue
+      path="$MOUNT/${target#"$MEMORY_STICK_DEVICE"}"
+      for suffix in "${DOWNLOAD_SUFFIXES[@]}"; do
+        if [[ -f "$path$suffix" ]]; then
+          rm -f "$path$suffix"
+          partials=$((partials + 1))
+        fi
+      done
+    done < <(grep -o '"target": *"[^"]*"' "$dest/$APP_QUEUE" | sed -E 's/^"target": *"(.*)"$/\1/')
+  fi
+  if [[ -f "$dest/$APP_QUEUE" || -f "$dest/$APP_MANIFEST" ]]; then
+    rm -f "$dest/$APP_QUEUE" "$dest/$APP_MANIFEST"
+    echo "$APP_FOLDER: the previous server's queue ($partials partial file(s)) and install records" \
+      "removed; its games stay"
+  fi
+}
+
 install_app_config() {
   local dest="$GAME_DIR/$APP_FOLDER" host url
   host="$(test_server_lan_ip)"
@@ -225,6 +255,7 @@ install_app_config() {
     echo "$APP_FOLDER: config.ini for $url kept (pairing and network too)"
     return
   fi
+  forget_server_state "$dest"
   printf '%s\n' "# Written by scripts/memstick.sh install for the test RomM" "[server]" "url = $url" \
     "ca_file = $APP_CA_FILE" "" "[headers]" "$APP_TEST_HEADER = $(random_hex)" "" "[log]" \
     "level = $APP_LOG_LEVEL" >"$dest/$APP_CONFIG"

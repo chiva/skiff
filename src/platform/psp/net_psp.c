@@ -9,6 +9,7 @@
 #include <psputility.h>
 #include <pspwlan.h>
 #include <stdio.h>
+#include <string.h>
 
 enum {
     /* sceNetInit's pool and its callout and interrupt threads, as pspsdk's samples set them. */
@@ -20,7 +21,6 @@ enum {
     APCTL_STACK_BYTES = 0x8000,
     APCTL_PRIORITY = 48,
     APCTL_POLL_US = 50 * 1000,
-    FIRST_PROFILE = 1,
     WLAN_SWITCH_OFF = 0,
     /* Before reading the clock back after a change. */
     CLOCK_SETTLE_US = 10 * 1000,
@@ -71,6 +71,7 @@ skiff_err skiff_psp_net_load(skiff_psp_net *net, int cpu_mhz) {
     net->apctl_furthest_state = PSP_NET_APCTL_STATE_DISCONNECTED;
     net->apctl_error = 0;
     net->clock_changed = 0;
+    net->join_pending = 0;
     clear_failure(net);
     if (cpu_mhz < SKIFF_PSP_NET_CPU_MHZ_UNCHANGED || cpu_mhz > SKIFF_PSP_NET_CPU_MHZ) {
         return SKIFF_ERR_INVALID_ARG;
@@ -126,32 +127,46 @@ static skiff_err join_failed(skiff_psp_net *net, const char *call) {
     return SKIFF_ERR_NET_WIFI_JOIN;
 }
 
-static skiff_err wait_for_ip(skiff_psp_net *net, long long timeout_us) {
-    /* The state climbs through scanning, joining and getting an address; falling back to
-     * DISCONNECTED after it moved means the access point refused or vanished. */
-    const long long start_us = sceKernelGetSystemTimeWide();
-    int progressed = 0;
-    while (sceKernelGetSystemTimeWide() - start_us < timeout_us) {
-        int state = PSP_NET_APCTL_STATE_DISCONNECTED;
-        if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
-            return SKIFF_ERR_NET_WIFI_JOIN;
-        }
-        net->apctl_state = state;
-        if (state == PSP_NET_APCTL_STATE_GOT_IP) {
-            return SKIFF_OK;
-        }
-        if (state != PSP_NET_APCTL_STATE_DISCONNECTED) {
-            progressed = 1;
-        } else if (progressed || net->apctl_error != 0) {
-            return join_failed(net, "sceNetApctlConnect (join failed)");
-        }
-        sceKernelDelayThread(APCTL_POLL_US);
+/* Removes a pending join's event handler: after this the firmware no longer writes into net. */
+static void end_join(skiff_psp_net *net) {
+    if (net->join_pending) {
+        sceNetApctlDelHandler(net->join_handler);
+        net->join_pending = 0;
     }
-    return join_failed(net, "sceNetApctlConnect (timed out)");
 }
 
-skiff_err skiff_psp_net_connect(skiff_psp_net *net, int profile, long long timeout_us) {
-    if (net == NULL || profile < FIRST_PROFILE || net->stage != SKIFF_PSP_NET_APCTL) {
+/*
+ * One look at a pending join; returns 1 once it has ended, with *result its outcome. The state
+ * climbs through scanning, joining and getting an address; falling back to DISCONNECTED after it
+ * moved means the access point refused or vanished.
+ */
+static int join_ended(skiff_psp_net *net, skiff_err *result) {
+    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+    if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
+        *result = SKIFF_ERR_NET_WIFI_JOIN;
+        return 1;
+    }
+    net->apctl_state = state;
+    if (state == PSP_NET_APCTL_STATE_GOT_IP) {
+        *result = SKIFF_OK;
+        return 1;
+    }
+    if (state != PSP_NET_APCTL_STATE_DISCONNECTED) {
+        net->join_progressed = 1;
+    } else if (net->join_progressed || net->apctl_error != 0) {
+        *result = join_failed(net, "sceNetApctlConnect (join failed)");
+        return 1;
+    }
+    if (sceKernelGetSystemTimeWide() >= net->join_deadline_us) {
+        *result = join_failed(net, "sceNetApctlConnect (timed out)");
+        return 1;
+    }
+    return 0;
+}
+
+skiff_err skiff_psp_net_connect_start(skiff_psp_net *net, int profile, long long timeout_us) {
+    if (net == NULL || profile < SKIFF_PSP_NET_FIRST_PROFILE || net->stage != SKIFF_PSP_NET_APCTL ||
+        net->join_pending) {
         return SKIFF_ERR_INVALID_ARG;
     }
     clear_failure(net);
@@ -168,12 +183,97 @@ skiff_err skiff_psp_net_connect(skiff_psp_net *net, int profile, long long timeo
     if (!step(net, "sceNetApctlAddHandler", handler)) {
         return SKIFF_ERR_NET_UNAVAILABLE;
     }
-    skiff_err err = SKIFF_ERR_NET_WIFI_JOIN;
-    if (step(net, "sceNetApctlConnect", sceNetApctlConnect(profile))) {
-        err = wait_for_ip(net, timeout_us);
+    if (!step(net, "sceNetApctlConnect", sceNetApctlConnect(profile))) {
+        sceNetApctlDelHandler(handler);
+        return SKIFF_ERR_NET_WIFI_JOIN;
     }
-    sceNetApctlDelHandler(handler);
+    net->join_pending = 1;
+    net->join_handler = handler;
+    net->join_progressed = 0;
+    net->join_deadline_us = (long long)sceKernelGetSystemTimeWide() + timeout_us;
+    return SKIFF_OK;
+}
+
+int skiff_psp_net_connect_poll(skiff_psp_net *net, skiff_err *result) {
+    if (result == NULL) {
+        return 1;
+    }
+    if (net == NULL || !net->join_pending) {
+        *result = SKIFF_ERR_INVALID_ARG;
+        return 1;
+    }
+    if (!join_ended(net, result)) {
+        return 0;
+    }
+    end_join(net);
+    return 1;
+}
+
+skiff_err skiff_psp_net_connect(skiff_psp_net *net, int profile, long long timeout_us) {
+    skiff_err err = skiff_psp_net_connect_start(net, profile, timeout_us);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    while (!skiff_psp_net_connect_poll(net, &err)) {
+        sceKernelDelayThread(APCTL_POLL_US);
+    }
     return err;
+}
+
+skiff_err skiff_psp_net_profile_name(int profile, char *name, size_t name_size) {
+    if (name != NULL && name_size > 0) {
+        name[0] = '\0';
+    }
+    if (name == NULL || name_size == 0 || profile < SKIFF_PSP_NET_FIRST_PROFILE) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    netData data;
+    memset(&data, 0, sizeof data);
+    if (sceUtilityCheckNetParam(profile) < 0 ||
+        sceUtilityGetNetParam(profile, PSP_NETPARAM_NAME, &data) < 0) {
+        return SKIFF_ERR_NET_UNAVAILABLE;
+    }
+    data.asString[sizeof data.asString - 1] = '\0';
+    const size_t length = strlen(data.asString);
+    if (length >= name_size) {
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    memcpy(name, data.asString, length + 1);
+    return SKIFF_OK;
+}
+
+skiff_err skiff_psp_net_connected_profile(skiff_psp_net *net, int *profile) {
+    if (net == NULL || profile == NULL || net->stage != SKIFF_PSP_NET_APCTL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    clear_failure(net);
+    int state = PSP_NET_APCTL_STATE_DISCONNECTED;
+    if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
+        return SKIFF_ERR_NET_UNAVAILABLE;
+    }
+    net->apctl_state = state;
+    if (state != PSP_NET_APCTL_STATE_GOT_IP) {
+        step(net, "skiff_psp_net_connected_profile (not connected)", -1);
+        return SKIFF_ERR_NET_UNAVAILABLE;
+    }
+    union SceNetApctlInfo info;
+    memset(&info, 0, sizeof info);
+    if (!step(net, "sceNetApctlGetInfo(PROFILE_NAME)",
+              sceNetApctlGetInfo(PSP_NET_APCTL_INFO_PROFILE_NAME, &info))) {
+        return SKIFF_ERR_NET_UNAVAILABLE;
+    }
+    info.name[sizeof info.name - 1] = '\0';
+    for (int candidate = SKIFF_PSP_NET_FIRST_PROFILE; candidate <= SKIFF_PSP_NET_LAST_PROFILE;
+         candidate++) {
+        char name[SKIFF_PSP_NET_PROFILE_NAME_MAX];
+        if (skiff_psp_net_profile_name(candidate, name, sizeof name) == SKIFF_OK &&
+            strcmp(name, info.name) == 0) {
+            *profile = candidate;
+            return SKIFF_OK;
+        }
+    }
+    step(net, "skiff_psp_net_connected_profile (no profile has its name)", -1);
+    return SKIFF_ERR_NET_UNAVAILABLE;
 }
 
 skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size) {
@@ -214,12 +314,16 @@ skiff_err skiff_psp_net_disconnect(skiff_psp_net *net, long long timeout_us) {
         return SKIFF_ERR_NET_UNAVAILABLE;
     }
     net->apctl_state = state;
-    if (state == PSP_NET_APCTL_STATE_DISCONNECTED) {
+    if (state == PSP_NET_APCTL_STATE_DISCONNECTED && !net->join_pending) {
         return SKIFF_OK;
     }
+    /* A join just asked for may still read DISCONNECTED before it starts scanning, so it is told to
+     * stop all the same. Until the firmware accepts that, the join stays pending: unloading must
+     * still refuse. */
     if (!step(net, "sceNetApctlDisconnect", sceNetApctlDisconnect())) {
         return SKIFF_ERR_NET_UNAVAILABLE;
     }
+    end_join(net);
     const long long start_us = sceKernelGetSystemTimeWide();
     while (sceKernelGetSystemTimeWide() - start_us < timeout_us) {
         if (step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {
@@ -264,10 +368,14 @@ static int restore_clock(skiff_psp_net *net) {
     return !net->clock_changed;
 }
 
-/* Whether the layers may come down: never while the access point is connected. */
+/* Whether the layers may come down: never while the access point is connected or being joined. */
 static int access_point_released(skiff_psp_net *net) {
     if (net->stage < SKIFF_PSP_NET_APCTL) {
         return 1;
+    }
+    if (net->join_pending) {
+        step(net, "skiff_psp_net_unload (join pending)", -1);
+        return 0;
     }
     int state = PSP_NET_APCTL_STATE_DISCONNECTED;
     if (!step(net, "sceNetApctlGetState", sceNetApctlGetState(&state))) {

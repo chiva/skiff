@@ -3,8 +3,10 @@
 
 /*
  * The parts of the UI that are not drawing, so they run and are tested on the host: buttons to
- * actions (with repeat for a held d-pad), a scrolling list, text cut to a width, and download
- * progress with its rate and time left. src/platform/psp/ui_psp.h draws them with GU and intraFont.
+ * actions (with repeat for a held d-pad), a scrolling list, text cut to a width, UTF-8 to and from
+ * the UTF-16 the system dialogs use, and download progress with its rate and time left.
+ * src/platform/psp/ui_psp.h draws them with GU and intraFont; src/platform/psp/dialog_psp.h runs
+ * the dialogs.
  */
 
 #include <stddef.h>
@@ -109,6 +111,33 @@ typedef float (*skiff_ui_measure_fn)(void *ctx, const char *text);
  */
 skiff_err skiff_ui_fit_text(const char *text, float max_width, skiff_ui_measure_fn measure,
                             void *measure_ctx, char *out, size_t out_size);
+
+/* ---- UTF-16, the system dialogs' text ---- */
+
+/* The character put in place of a sequence that is not valid UTF-8 or UTF-16. */
+#define SKIFF_UI_REPLACEMENT_CHARACTER 0xFFFDU
+
+/* The most UTF-8 bytes one UTF-16 unit becomes (a pair of two becomes 4): out_size for
+ * skiff_ui_utf16_to_utf8() of n units is at most n * SKIFF_UI_UTF8_BYTES_PER_UTF16_UNIT + 1. */
+#define SKIFF_UI_UTF8_BYTES_PER_UTF16_UNIT 3U
+
+/*
+ * UTF-8 text as UTF-16 units into out, ended by a 0 unit; characters above U+FFFF become surrogate
+ * pairs. A byte sequence that is not UTF-8 (a stray continuation byte, a cut or overlong sequence,
+ * a surrogate or a code point above U+10FFFF) becomes one SKIFF_UI_REPLACEMENT_CHARACTER per
+ * maximal invalid part, so text from a hand-edited file still reaches the keyboard. *length (when
+ * not NULL) gets the units written, without the end. SKIFF_ERR_INVALID_ARG for a NULL text or out,
+ * or no out_units; SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit (out empty, *length 0).
+ */
+skiff_err skiff_ui_utf8_to_utf16(const char *text, uint16_t *out, size_t out_units, size_t *length);
+
+/*
+ * UTF-16 text, up to its first 0 unit or max_units, as UTF-8 into out. A surrogate without its
+ * other half becomes SKIFF_UI_REPLACEMENT_CHARACTER. Errors as for skiff_ui_utf8_to_utf16() (out
+ * empty when it does not fit); a NULL text is invalid even with max_units 0.
+ */
+skiff_err skiff_ui_utf16_to_utf8(const uint16_t *text, size_t max_units, char *out,
+                                 size_t out_size);
 
 /* ---- Progress ---- */
 

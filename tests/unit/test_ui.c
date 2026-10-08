@@ -1,6 +1,7 @@
 /*
  * The UI's models (skiff/ui.h): buttons become actions with the console's confirm button and a
  * held d-pad repeats; a list scrolls and wraps; text is cut to a width between UTF-8 characters;
+ * UTF-8 to and from the system dialogs' UTF-16, with invalid input replaced;
  * progress, rate and time left; sizes and durations as the player reads them.
  */
 #include <stdio.h>
@@ -280,6 +281,147 @@ static void test_fitting_refuses_bad_arguments(void) {
                           skiff_ui_fit_text("a", 1.0f, measure_characters, NULL, out, 3));
 }
 
+/* ---- UTF-16, the system dialogs' text ---- */
+
+#define UTF16_BUFFER_UNITS 32
+#define UTF8_BUFFER_BYTES 64
+
+/* Converts text to UTF-16 and checks the units, then back, checking the UTF-8 it returns. */
+static void check_utf16(const char *text, const uint16_t *expected, size_t expected_length,
+                        const char *back) {
+    uint16_t units[UTF16_BUFFER_UNITS];
+    size_t length = 99;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_ui_utf8_to_utf16(text, units, UTF16_BUFFER_UNITS, &length));
+    TEST_PRINTF("\"%s\": %zu UTF-16 units", text, length);
+    TEST_ASSERT_EQUAL_size_t(expected_length, length);
+    if (expected_length > 0) {
+        TEST_ASSERT_EQUAL_HEX16_ARRAY(expected, units, expected_length);
+    }
+    TEST_ASSERT_EQUAL_HEX16(0, units[length]);
+    char utf8[UTF8_BUFFER_BYTES];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_ui_utf16_to_utf8(units, UTF16_BUFFER_UNITS, utf8, sizeof utf8));
+    TEST_PRINTF("back to UTF-8: \"%s\"", utf8);
+    TEST_ASSERT_EQUAL_STRING(back, utf8);
+}
+
+static void test_utf8_and_utf16_round_trip(void) {
+    TEST_PRINTF("ASCII, two-byte (é, ñ) and three-byte (日本) characters are one unit each");
+    const uint16_t latin[] = {'C', 'a', 'f', 0x00E9, ' ', 0x00F1};
+    check_utf16("Caf\xC3\xA9 \xC3\xB1", latin, 6, "Caf\xC3\xA9 \xC3\xB1");
+    const uint16_t japanese[] = {0x65E5, 0x672C};
+    check_utf16("\xE6\x97\xA5\xE6\x9C\xAC", japanese, 2, "\xE6\x97\xA5\xE6\x9C\xAC");
+    TEST_PRINTF("a character above U+FFFF (U+1F3AE) becomes a surrogate pair and comes back");
+    const uint16_t pair[] = {'a', 0xD83C, 0xDFAE, 'b'};
+    check_utf16("a\xF0\x9F\x8E\xAE"
+                "b",
+                pair, 4,
+                "a\xF0\x9F\x8E\xAE"
+                "b");
+    TEST_PRINTF("the edges of each length: U+0080, U+07FF, U+0800, U+FFFF, U+10000, U+10FFFF");
+    const uint16_t edges[] = {0x0080, 0x07FF, 0x0800, 0xFFFF, 0xD800, 0xDC00, 0xDBFF, 0xDFFF};
+    const char *edges_utf8 = "\xC2\x80\xDF\xBF\xE0\xA0\x80\xEF\xBF\xBF\xF0\x90\x80\x80"
+                             "\xF4\x8F\xBF\xBF";
+    check_utf16(edges_utf8, edges, 8, edges_utf8);
+    check_utf16("", NULL, 0, "");
+}
+
+static void test_invalid_utf8_becomes_the_replacement_character(void) {
+    TEST_PRINTF("a stray continuation byte and a byte no UTF-8 uses");
+    const uint16_t stray[] = {'a', 0xFFFD, 'b', 0xFFFD, 'c'};
+    check_utf16("a\x80"
+                "b\xFF"
+                "c",
+                stray, 5,
+                "a\xEF\xBF\xBD"
+                "b\xEF\xBF\xBD"
+                "c");
+    TEST_PRINTF("a cut sequence is one replacement, and the byte that broke it is kept");
+    const uint16_t cut[] = {0xFFFD, 'x', 0xFFFD};
+    check_utf16("\xE6\x97"
+                "x\xF0\x9F\x8E",
+                cut, 3,
+                "\xEF\xBF\xBD"
+                "x\xEF\xBF\xBD");
+    TEST_PRINTF("overlong forms, an encoded surrogate and a code point above U+10FFFF");
+    const uint16_t overlong[] = {0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD,
+                                 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD};
+    /* C0 AF: two bad bytes; E0 80 AF: E0 then two stray continuations; ED A0 80 (U+D800): ED,
+     * then two strays; F4 90 80 80 (U+110000): F4, then three strays. */
+    check_utf16("\xC0\xAF\xE0\x80\xAF\xED\xA0\x80\xF4\x90\x80\x80", overlong, 12,
+                "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD"
+                "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD");
+}
+
+static void test_a_lone_surrogate_becomes_the_replacement_character(void) {
+    char utf8[UTF8_BUFFER_BYTES];
+    const uint16_t lone_high[] = {'a', 0xD83C, 'b', 0};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(lone_high, 4, utf8, sizeof utf8));
+    TEST_PRINTF("high surrogate then 'b': \"%s\"", utf8);
+    TEST_ASSERT_EQUAL_STRING("a\xEF\xBF\xBD"
+                             "b",
+                             utf8);
+    const uint16_t lone_low[] = {0xDFAE, 0xDFAE, 0};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(lone_low, 3, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("\xEF\xBF\xBD\xEF\xBF\xBD", utf8);
+    TEST_PRINTF("a high surrogate cut off by max_units is lone too, and nothing past it is read");
+    const uint16_t cut_pair[] = {'a', 0xD83C, 0xDFAE};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(cut_pair, 2, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("a\xEF\xBF\xBD", utf8);
+}
+
+static void test_utf16_stops_at_max_units_or_the_first_zero(void) {
+    char utf8[UTF8_BUFFER_BYTES];
+    const uint16_t unterminated[] = {'P', 'S', 'P'};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(unterminated, 3, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("PSP", utf8);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(unterminated, 0, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("", utf8);
+    const uint16_t early_end[] = {'G', 'o', 0, 'X'};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(early_end, 4, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("Go", utf8);
+}
+
+static void test_utf16_conversion_refuses_bad_arguments_and_small_buffers(void) {
+    uint16_t units[4] = {'x', 'x', 'x', 'x'};
+    size_t length = 99;
+    TEST_PRINTF("\"abcd\" needs 5 units with the end: 4 is too few, and out is left empty");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_ui_utf8_to_utf16("abcd", units, 4, &length));
+    TEST_ASSERT_EQUAL_HEX16(0, units[0]);
+    TEST_ASSERT_EQUAL_size_t(0, length);
+    TEST_PRINTF("a pair never goes in half: \"ab\" + U+1F3AE needs 5 units");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_ui_utf8_to_utf16("ab\xF0\x9F\x8E\xAE", units, 4, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf8_to_utf16("abc", units, 4, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf8_to_utf16(NULL, units, 4, &length));
+    TEST_ASSERT_EQUAL_HEX16(0, units[0]);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf8_to_utf16("a", NULL, 4, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf8_to_utf16("a", units, 0, NULL));
+
+    char utf8[4] = "xyz";
+    const uint16_t accented[] = {'a', 'b', 0x00E9, 0};
+    TEST_PRINTF("\"ab\" + é needs 5 bytes with the end: 4 is too few, and out is left empty");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_ui_utf16_to_utf8(accented, 4, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_STRING("", utf8);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf16_to_utf8(NULL, 0, utf8, 4));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf16_to_utf8(accented, 4, NULL, 4));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_utf16_to_utf8(accented, 4, utf8, 0));
+}
+
+static void test_the_utf8_size_bound_holds_for_the_worst_case(void) {
+    TEST_PRINTF("8 units of U+FFFF (3 bytes each) fit in 8 * 3 + 1 bytes exactly");
+    uint16_t units[8];
+    for (size_t i = 0; i < 8; i++) {
+        units[i] = 0xFFFF;
+    }
+    char utf8[8 * SKIFF_UI_UTF8_BYTES_PER_UTF16_UNIT + 1];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_ui_utf16_to_utf8(units, 8, utf8, sizeof utf8));
+    TEST_ASSERT_EQUAL_size_t(sizeof utf8 - 1, strlen(utf8));
+}
+
 /* ---- Progress ---- */
 
 static void test_percent_rounds_down_and_reaches_100_only_at_the_end(void) {
@@ -423,6 +565,12 @@ int main(void) {
     RUN_TEST(test_the_buffer_limits_the_text_too);
     RUN_TEST(test_fitting_measures_a_few_times_not_once_per_character);
     RUN_TEST(test_fitting_refuses_bad_arguments);
+    RUN_TEST(test_utf8_and_utf16_round_trip);
+    RUN_TEST(test_invalid_utf8_becomes_the_replacement_character);
+    RUN_TEST(test_a_lone_surrogate_becomes_the_replacement_character);
+    RUN_TEST(test_utf16_stops_at_max_units_or_the_first_zero);
+    RUN_TEST(test_utf16_conversion_refuses_bad_arguments_and_small_buffers);
+    RUN_TEST(test_the_utf8_size_bound_holds_for_the_worst_case);
     RUN_TEST(test_percent_rounds_down_and_reaches_100_only_at_the_end);
     RUN_TEST(test_rate_and_time_left_come_after_a_window);
     RUN_TEST(test_a_restart_starts_the_rate_again);

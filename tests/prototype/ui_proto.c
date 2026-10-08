@@ -9,7 +9,9 @@
  *   - the d-pad and L/R move the selection through skiff/ui.h's input and list models; how long a
  *     frame takes to draw and render is measured;
  *   - the on-screen keyboard (sceUtilityOsk) and the network picker (sceUtilityNetconf) open from
- *     the render loop and close cleanly, with the network modules loaded only for the picker;
+ *     the render loop through Skiff's dialog module (src/platform/psp/dialog_psp.h) and close
+ *     cleanly, with the network modules loaded only for the picker; the profile the picker's
+ *     connection uses is found by name (skiff_psp_net_connected_profile());
  *   - HOME -> Quit ends the loop through the exit callback, like START.
  *
  * It reports, through report.h: heap used by the fonts, system memory before the network modules
@@ -19,9 +21,10 @@
  * Each dialog step is logged to result.txt as it happens, so a failure names the step.
  *
  * Pass (SKIFF UI PROTO OK): both fonts render; the keyboard was shown, text was typed and
- * confirmed; the network picker was shown and connected (an IP address was obtained); the
- * connection was dropped and the network modules unloaded; no dialog call failed or timed out and
- * no controller read failed. A tester presses START or HOME -> Quit after trying both.
+ * confirmed; the network picker was shown and connected (an IP address was obtained) through a
+ * profile found by its name; the connection was dropped and the network modules unloaded; no
+ * dialog call failed or timed out and no controller read failed. A tester presses START or HOME ->
+ * Quit after trying both.
  *
  * Without a button press for HEADLESS_EXIT_US (PPSSPPHeadless in CI, which cannot press buttons)
  * it exits on its own, checking only the fonts and the frames: SKIFF UI PROTO HEADLESS OK.
@@ -39,6 +42,7 @@
 #include "skiff/selftest.h"
 #include "skiff/ui.h"
 
+#include "dialog_psp.h"
 #include "lifecycle.h"
 #include "net_psp.h"
 #include "report.h"
@@ -103,17 +107,14 @@ enum {
     US_PER_S = 1000000,
     BYTES_PER_KB = 1024,
 
+    /* UTF-16 units the keyboard takes. */
     OSK_TEXT_MAX = 64,
-    OSK_LINES = 1,
-    /* Thread priorities for the system dialogs, as pspsdk's utility samples use them. */
-    DIALOG_GRAPHICS_PRIORITY = 0x11,
-    DIALOG_ACCESS_PRIORITY = 0x13,
-    DIALOG_FONT_PRIORITY = 0x12,
-    DIALOG_SOUND_PRIORITY = 0x10,
-    DIALOG_UPDATE_SPEED = 1,
     /* pspUtilityDialogCommon.result: 0 when the player confirmed, 1 when they cancelled. */
     DIALOG_RESULT_CONFIRMED = 0,
 };
+
+#define OSK_DESCRIPTION "Type anything"
+#define OSK_INITIAL_TEXT ""
 
 /*
  * Wall-clock limits, from the system timer. Nobody touching the PSP for 10 s means no tester:
@@ -121,10 +122,9 @@ enum {
  * fast as a PSP, so 10 s of PSP time leaves room for start-up and font loading.
  */
 #define HEADLESS_EXIT_US (10LL * US_PER_S)
-/* Time to type, or to pick a network and connect, before a dialog is closed for the tester. */
+/* Time to type, or to pick a network and connect, before a dialog is closed for the tester; it then
+ * gets SKIFF_PSP_DIALOG_CLOSE_GRACE_US to go before the run gives up on it. */
 #define DIALOG_TIMEOUT_US (300LL * US_PER_S)
-/* Time a dialog gets to close once asked, before the run gives up on it. */
-#define DIALOG_CLOSE_GRACE_US (10LL * US_PER_S)
 #define DISCONNECT_TIMEOUT_US (10LL * US_PER_S)
 
 /* Buttons a tester presses on purpose; switches (HOLD, Wi-Fi) and HOME never count as input. */
@@ -146,16 +146,14 @@ typedef struct frame_stats {
     int over_budget;
 } frame_stats;
 
-/* How one system dialog went, from InitStart until the system reported it gone. */
+/* How one system dialog went, from its start until the system reported it gone. */
 typedef struct dialog_outcome {
     int started;
     int reached_visible;
     int closed;
     int timed_out;
-    /*
-     * First failing sceUtility*Update return, and the last failing *ShutdownStart return (cleared
-     * once a retry is accepted); 0 if none failed.
-     */
+    /* As skiff_psp_dialog keeps them: the first failing *Update return, and the last failing
+     * *ShutdownStart return (cleared once a retry is accepted); 0 if none failed. */
     int update_error;
     int shutdown_error;
     /* pspUtilityDialogCommon.result once closed. */
@@ -181,6 +179,8 @@ typedef struct proto_results {
     int net_attempted;
     dialog_outcome netconf;
     char net_ip[SKIFF_PSP_NET_IP_MAX];
+    int net_profile;
+    char net_profile_name[SKIFF_PSP_NET_PROFILE_NAME_MAX];
     int net_disconnect_ok;
     int net_unload_ok;
     memory_snapshot net_before_load;
@@ -198,16 +198,9 @@ typedef struct ui_state {
     /* Item labels as drawn: fitted to the list's width once the font is loaded. */
     char items[ITEM_COUNT][ITEM_LABEL_MAX];
     int frame;
-    unsigned short osk_text[OSK_TEXT_MAX + 1];
+    /* The keyboard's text once confirmed, as UTF-8. */
+    char osk_text[SKIFF_PSP_DIALOG_TEXT_UTF8_MAX];
 } ui_state;
-
-/* The calls each system dialog offers, so one loop can run either. */
-typedef struct dialog_ops {
-    const char *name;
-    int (*get_status)(void);
-    int (*update)(int speed);
-    int (*shutdown_start)(void);
-} dialog_ops;
 
 static long long now_us(void) { return (long long)sceKernelGetSystemTimeWide(); }
 
@@ -307,8 +300,8 @@ static void draw_screen(ui_state *ui, const proto_results *results, const char *
     skiff_psp_ui_text(&ui->gu, TEXT_LEFT, SAMPLE_BASELINE, SAMPLE_SIZE, SKIFF_PSP_UI_COLOUR_TEXT,
                       JAPANESE_SAMPLE);
     if (results->osk_typed_length > 0) {
-        intraFontPrintUCS2(ui->latin, (float)(SCREEN_WIDTH / 2), (float)SAMPLE_BASELINE,
-                           ui->osk_text);
+        skiff_psp_ui_text(&ui->gu, SCREEN_WIDTH / 2, SAMPLE_BASELINE, SAMPLE_SIZE,
+                          SKIFF_PSP_UI_COLOUR_TEXT, ui->osk_text);
     }
     skiff_psp_ui_list(&ui->gu, &ui->list, LIST_TOP, item_label, ui);
     skiff_psp_ui_text(&ui->gu, TEXT_LEFT, PROGRESS_BASELINE, SKIFF_PSP_UI_HINT_SIZE,
@@ -358,93 +351,78 @@ static void check_glyphs(ui_state *ui, proto_results *results) {
     skiff_psp_ui_present(&ui->gu);
 }
 
-static void fill_dialog_common(pspUtilityDialogCommon *base, unsigned int size) {
-    memset(base, 0, sizeof *base);
-    base->size = size;
-    sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_LANGUAGE, &base->language);
-    sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_BUTTON_SWAP, &base->buttonSwap);
-    base->graphicsThread = DIALOG_GRAPHICS_PRIORITY;
-    base->accessThread = DIALOG_ACCESS_PRIORITY;
-    base->fontThread = DIALOG_FONT_PRIORITY;
-    base->soundThread = DIALOG_SOUND_PRIORITY;
-}
-
-static void log_dialog_error(const ui_state *ui, const dialog_ops *ops, const char *call,
-                             int result) {
+static void log_dialog_error(const ui_state *ui, const char *name, const char *call, int result) {
     char line[SKIFF_SELFTEST_LINE_MAX];
-    snprintf(line, sizeof line, "FAIL %s: %s 0x%08X", ops->name, call, (unsigned)result);
+    snprintf(line, sizeof line, "FAIL %s: %s 0x%08X", name, call, (unsigned)result);
     log_step(ui, line);
 }
 
-/* Asks the dialog to close; returns 1 once the system accepts, so a refusal is retried. */
-static int request_close(const ui_state *ui, const dialog_ops *ops, dialog_outcome *outcome) {
-    const int result = ops->shutdown_start();
-    if (result < 0) {
-        if (outcome->shutdown_error != result) {
-            log_dialog_error(ui, ops, "ShutdownStart", result);
-        }
-        outcome->shutdown_error = result;
+/* Logs the dialog's update and close failures as they happen, keeping them in outcome. */
+static void log_new_dialog_errors(const ui_state *ui, const char *name,
+                                  const skiff_psp_dialog *dialog, dialog_outcome *outcome) {
+    if (dialog->update_error != 0 && outcome->update_error == 0) {
+        outcome->update_error = dialog->update_error;
+        log_dialog_error(ui, name, "Update", dialog->update_error);
+    }
+    if (dialog->shutdown_error != 0 && dialog->shutdown_error != outcome->shutdown_error) {
+        log_dialog_error(ui, name, "ShutdownStart", dialog->shutdown_error);
+    }
+    outcome->shutdown_error = dialog->shutdown_error;
+}
+
+/*
+ * Starts a dialog's outcome from what its start did; returns whether it is running. A start the
+ * system refused is logged with the call that refused it.
+ */
+static int dialog_started(const ui_state *ui, const char *name, skiff_err err,
+                          const skiff_psp_dialog *dialog, dialog_outcome *outcome) {
+    memset(outcome, 0, sizeof *outcome);
+    if (err != SKIFF_OK) {
+        log_dialog_error(ui, name, skiff_err_name(err), (int)err);
         return 0;
     }
-    outcome->shutdown_error = 0;
+    if (dialog->state == SKIFF_PSP_DIALOG_FAILED) {
+        log_dialog_error(ui, name, dialog->failed_call, dialog->sce_result);
+        return 0;
+    }
+    outcome->started = 1;
     return 1;
 }
 
 /*
- * Runs a started dialog over the list until the system reports it gone (NONE). It is closed for
- * the tester after DIALOG_TIMEOUT_US, or when HOME -> Quit is chosen while it is visible; if it is
- * still there DIALOG_CLOSE_GRACE_US later, the run gives up on it (closed stays 0).
+ * Runs a started dialog over the list until it ends. It is closed for the tester after
+ * DIALOG_TIMEOUT_US, or when HOME -> Quit is chosen; if it is still there
+ * SKIFF_PSP_DIALOG_CLOSE_GRACE_US later, the run gives up on it (closed stays 0).
  */
-static void run_dialog(ui_state *ui, const proto_results *results, const dialog_ops *ops,
-                       dialog_outcome *outcome) {
+static void run_dialog(ui_state *ui, const proto_results *results, const char *name,
+                       skiff_psp_dialog *dialog, dialog_outcome *outcome) {
     const long long deadline = now_us() + DIALOG_TIMEOUT_US;
-    long long give_up_at = 0; /* set once the dialog has been asked to close */
-    int shutdown_accepted = 0;
-    for (;;) {
+    skiff_psp_dialog_state state = SKIFF_PSP_DIALOG_RUNNING;
+    while (state == SKIFF_PSP_DIALOG_RUNNING) {
         skiff_psp_ui_begin_frame(&ui->gu);
         draw_screen(ui, results, NULL);
         skiff_psp_ui_backdrop(&ui->gu);
         skiff_psp_ui_end_frame(&ui->gu);
-        const int status = ops->get_status();
         const long long now = now_us();
-        if (status == PSP_UTILITY_DIALOG_NONE) {
-            outcome->closed = 1;
-            skiff_psp_ui_present(&ui->gu);
-            return;
+        if (!dialog->close_requested && (now >= deadline || skiff_psp_exit_requested())) {
+            outcome->timed_out = now >= deadline;
+            log_step(ui, outcome->timed_out ? "dialog: timed out, closing it"
+                                            : "dialog: HOME -> Quit, closing it");
+            skiff_psp_dialog_close(dialog);
         }
-        if (status == PSP_UTILITY_DIALOG_VISIBLE) {
-            outcome->reached_visible = 1;
-            if (give_up_at == 0 && (now >= deadline || skiff_psp_exit_requested())) {
-                outcome->timed_out = now >= deadline;
-                log_step(ui, outcome->timed_out ? "dialog: timed out, closing it"
-                                                : "dialog: HOME -> Quit, closing it");
-                give_up_at = now + DIALOG_CLOSE_GRACE_US;
-                shutdown_accepted = request_close(ui, ops, outcome);
-            }
-            /* Kept running while closing too: the dialog only reaches QUIT through updates. */
-            const int result = ops->update(DIALOG_UPDATE_SPEED);
-            if (result < 0 && outcome->update_error == 0) {
-                outcome->update_error = result;
-                log_dialog_error(ui, ops, "Update", result);
-            }
-        } else if (status == PSP_UTILITY_DIALOG_QUIT && !shutdown_accepted) {
-            if (give_up_at == 0) {
-                give_up_at = now + DIALOG_CLOSE_GRACE_US;
-            }
-            shutdown_accepted = request_close(ui, ops, outcome);
-        }
-        /* INIT and FINISHED: the system is still bringing it up or tearing it down. */
-        const long long limit = give_up_at != 0 ? give_up_at : deadline + DIALOG_CLOSE_GRACE_US;
-        if (now >= limit) {
-            outcome->timed_out = 1;
-            char line[SKIFF_SELFTEST_LINE_MAX];
-            snprintf(line, sizeof line, "FAIL %s: still open (status %d), giving up", ops->name,
-                     status);
-            log_step(ui, line);
-            skiff_psp_ui_present(&ui->gu);
-            return;
-        }
+        state = skiff_psp_dialog_update(dialog);
+        log_new_dialog_errors(ui, name, dialog, outcome);
         skiff_psp_ui_present(&ui->gu);
+    }
+    outcome->reached_visible = dialog->shown;
+    outcome->closed = state != SKIFF_PSP_DIALOG_STUCK;
+    outcome->result = dialog->dialog_result;
+    if (state == SKIFF_PSP_DIALOG_STUCK) {
+        outcome->timed_out = 1;
+        char line[SKIFF_SELFTEST_LINE_MAX];
+        snprintf(line, sizeof line, "FAIL %s: still open (status %d), giving up", name,
+                 dialog->status);
+        log_step(ui, line);
     }
 }
 
@@ -470,53 +448,41 @@ static void log_dialog(const ui_state *ui, const char *name, const dialog_outcom
     log_step(ui, line);
 }
 
+/* Characters in UTF-8 text: its bytes less the continuation bytes. */
+static int count_characters(const char *text) {
+    int count = 0;
+    for (const unsigned char *c = (const unsigned char *)text; *c != '\0'; c++) {
+        if ((*c & 0xC0U) != 0x80U) {
+            count++;
+        }
+    }
+    return count;
+}
+
 static void open_keyboard(ui_state *ui, proto_results *results) {
-    static const dialog_ops osk_ops = {"keyboard", sceUtilityOskGetStatus, sceUtilityOskUpdate,
-                                       sceUtilityOskShutdownStart};
-    /* "Type anything" and an empty start text, as UCS-2. */
-    static unsigned short description[] = {'T', 'y', 'p', 'e', ' ', 'a', 'n',
-                                           'y', 't', 'h', 'i', 'n', 'g', 0};
-    static unsigned short initial_text[] = {0};
-    SceUtilityOskData field;
-    SceUtilityOskParams params;
+    static skiff_psp_dialog keyboard;
     char line[SKIFF_SELFTEST_LINE_MAX];
 
-    memset(&field, 0, sizeof field);
-    field.language = PSP_UTILITY_OSK_LANGUAGE_DEFAULT;
-    field.inputtype = PSP_UTILITY_OSK_INPUTTYPE_ALL;
-    field.lines = OSK_LINES;
-    field.desc = description;
-    field.intext = initial_text;
-    field.outtextlength = OSK_TEXT_MAX;
-    field.outtextlimit = OSK_TEXT_MAX;
-    field.outtext = ui->osk_text;
-    memset(&params, 0, sizeof params);
-    fill_dialog_common(&params.base, sizeof params);
-    params.datacount = 1;
-    params.data = &field;
-
-    memset(&results->osk, 0, sizeof results->osk);
-    memset(ui->osk_text, 0, sizeof ui->osk_text);
+    ui->osk_text[0] = '\0';
+    results->osk_typed_length = 0;
     log_step(ui, "keyboard: opening");
-    const int started = sceUtilityOskInitStart(&params);
-    if (started < 0) {
-        log_dialog_error(ui, &osk_ops, "InitStart", started);
+    const skiff_err err =
+        skiff_psp_dialog_start_keyboard(&keyboard, OSK_DESCRIPTION, OSK_INITIAL_TEXT, OSK_TEXT_MAX);
+    if (!dialog_started(ui, "keyboard", err, &keyboard, &results->osk)) {
         return;
     }
-    results->osk.started = 1;
-    run_dialog(ui, results, &osk_ops, &results->osk);
-    results->osk.result = params.base.result;
-    results->osk_field_result = field.result;
-    int length = 0;
-    while (length < OSK_TEXT_MAX && ui->osk_text[length] != 0) {
-        length++;
+    run_dialog(ui, results, "keyboard", &keyboard, &results->osk);
+    results->osk_field_result = keyboard.keyboard_result;
+    if (keyboard.state == SKIFF_PSP_DIALOG_ACCEPTED &&
+        keyboard.keyboard_result == PSP_UTILITY_OSK_RESULT_CHANGED &&
+        skiff_psp_dialog_text(&keyboard, ui->osk_text, sizeof ui->osk_text) == SKIFF_OK) {
+        results->osk_typed_length = count_characters(ui->osk_text);
     }
-    results->osk_typed_length = field.result == PSP_UTILITY_OSK_RESULT_CHANGED ? length : 0;
     log_dialog(ui, "keyboard", &results->osk);
     snprintf(line, sizeof line, "keyboard: text %s, %d chars typed",
-             field.result == PSP_UTILITY_OSK_RESULT_CHANGED     ? "changed"
-             : field.result == PSP_UTILITY_OSK_RESULT_CANCELLED ? "cancelled"
-                                                                : "unchanged",
+             keyboard.keyboard_result == PSP_UTILITY_OSK_RESULT_CHANGED     ? "changed"
+             : keyboard.keyboard_result == PSP_UTILITY_OSK_RESULT_CANCELLED ? "cancelled"
+                                                                            : "unchanged",
              results->osk_typed_length);
     log_step(ui, line);
 }
@@ -527,7 +493,6 @@ static int keyboard_ok(const proto_results *results) {
            results->osk_typed_length > 0;
 }
 
-/* How far load_net_modules() got, so teardown undoes exactly that. */
 /* A failed net_psp call: the firmware call and its result, as it happens. */
 static void log_net_failure(const ui_state *ui, const skiff_psp_net *net, skiff_err err) {
     char line[SKIFF_SELFTEST_LINE_MAX];
@@ -560,14 +525,30 @@ static void leave_modules_loaded(const ui_state *ui, proto_results *results, con
     results->net_after_unload = take_memory_snapshot();
 }
 
+/* The profile the picker's connection uses, found by name as the app will remember it. */
+static void find_profile(const ui_state *ui, proto_results *results, skiff_psp_net *net) {
+    const skiff_err err = skiff_psp_net_connected_profile(net, &results->net_profile);
+    if (err != SKIFF_OK) {
+        results->net_profile = 0;
+        log_net_failure(ui, net, err);
+        return;
+    }
+    skiff_psp_net_profile_name(results->net_profile, results->net_profile_name,
+                               sizeof results->net_profile_name);
+    char line[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(line, sizeof line, "network: connection uses profile %d (%s)", results->net_profile,
+             results->net_profile_name);
+    log_step(ui, line);
+}
+
 static void open_network_picker(ui_state *ui, proto_results *results) {
-    static const dialog_ops netconf_ops = {"network picker", sceUtilityNetconfGetStatus,
-                                           sceUtilityNetconfUpdate, sceUtilityNetconfShutdownStart};
-    pspUtilityNetconfData params;
+    static skiff_psp_dialog picker;
 
     results->net_attempted = 1;
     memset(&results->netconf, 0, sizeof results->netconf);
     results->net_ip[0] = '\0';
+    results->net_profile = 0;
+    results->net_profile_name[0] = '\0';
     results->net_disconnect_ok = 0;
     results->net_before_load = take_memory_snapshot();
     skiff_psp_net net;
@@ -578,23 +559,19 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
     if (loaded != SKIFF_OK) {
         log_net_failure(ui, &net, loaded);
     } else {
-        memset(&params, 0, sizeof params);
-        fill_dialog_common(&params.base, sizeof params);
-        params.action = PSP_NETCONF_ACTION_CONNECTAP;
         log_step(ui, "network picker: opening");
-        const int started = sceUtilityNetconfInitStart(&params);
-        if (started < 0) {
-            log_dialog_error(ui, &netconf_ops, "InitStart", started);
-        } else {
-            results->netconf.started = 1;
-            run_dialog(ui, results, &netconf_ops, &results->netconf);
-            results->netconf.result = params.base.result;
+        const skiff_err err = skiff_psp_dialog_start_network(&picker);
+        if (dialog_started(ui, "network picker", err, &picker, &results->netconf)) {
+            run_dialog(ui, results, "network picker", &picker, &results->netconf);
             log_dialog(ui, "network picker", &results->netconf);
-            if (params.base.result == DIALOG_RESULT_CONFIRMED) {
+            if (picker.state == SKIFF_PSP_DIALOG_ACCEPTED) {
                 skiff_psp_net_ip(&net, results->net_ip, sizeof results->net_ip);
             }
             log_step(ui, results->net_ip[0] != '\0' ? "network: connected, IP obtained"
                                                     : "network: no IP address");
+            if (results->net_ip[0] != '\0') {
+                find_profile(ui, results, &net);
+            }
         }
         /*
          * A picker that never closed, or a connection not proven gone, still uses APCTL and the
@@ -625,7 +602,8 @@ static void open_network_picker(ui_state *ui, proto_results *results) {
 
 static int network_ok(const proto_results *results) {
     return dialog_ok(&results->netconf) && results->net_ip[0] != '\0' &&
-           results->net_disconnect_ok && results->net_unload_ok;
+           results->net_profile >= SKIFF_PSP_NET_FIRST_PROFILE && results->net_disconnect_ok &&
+           results->net_unload_ok;
 }
 
 /*
@@ -769,8 +747,8 @@ static void report_results(skiff_psp_report *report, const proto_results *result
     format_dialog(line, sizeof line, network_ok(results) ? "OK " : "FAIL ", "network picker",
                   &results->netconf);
     skiff_psp_report_line(report, line);
-    snprintf(line, sizeof line, "network: IP %s, disconnect %s, modules unloaded %s",
-             results->net_ip[0] != '\0' ? results->net_ip : "none",
+    snprintf(line, sizeof line, "network: IP %s, profile %d, disconnect %s, modules unloaded %s",
+             results->net_ip[0] != '\0' ? results->net_ip : "none", results->net_profile,
              results->net_disconnect_ok ? "ok" : "failed",
              results->net_unload_ok ? "ok" : "failed");
     skiff_psp_report_line(report, line);

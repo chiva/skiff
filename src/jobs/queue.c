@@ -437,6 +437,9 @@ void jobs_set_progress(skiff_jobs *jobs, const skiff_jobs_event *event) {
 }
 
 void jobs_push_state_event(skiff_jobs *jobs, const skiff_job *job) {
+    if (job == NULL) {
+        return;
+    }
     skiff_jobs_event event;
     memset(&event, 0, sizeof event);
     event.kind = SKIFF_JOBS_EVENT_STATE;

@@ -248,6 +248,10 @@ static int take_next(skiff_jobs *jobs, skiff_job *out) {
     }
     const uint32_t id = queued->id;
     skiff_job *job = jobs_table_find(jobs_stage(jobs), id);
+    if (job == NULL) {
+        jobs_commit_unlock(jobs);
+        return 0;
+    }
     job->state = SKIFF_JOB_ACTIVE;
     job->error = SKIFF_OK;
     /* The state stands for the session even if the file refused it (logged). */
@@ -255,14 +259,17 @@ static int take_next(skiff_jobs *jobs, skiff_job *out) {
     jobs_lock(jobs);
     /* A stop asked for during the save still starts nothing. The file may then say active, which a
      * restart reads as queued. */
-    const int started = !jobs->stop_requested;
+    int started = !jobs->stop_requested;
     if (started) {
         jobs_publish(jobs);
-        jobs->active_id = id;
-        jobs->cancel_active = 0;
         const skiff_job *active = jobs_table_find(&jobs->table, id);
-        jobs_push_state_event(jobs, active);
-        *out = *active;
+        started = active != NULL;
+        if (started) {
+            jobs->active_id = id;
+            jobs->cancel_active = 0;
+            jobs_push_state_event(jobs, active);
+            *out = *active;
+        }
     }
     jobs_unlock(jobs);
     jobs_commit_unlock(jobs);

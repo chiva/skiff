@@ -6,8 +6,8 @@ The scan is started over RomM's socket, the way its web UI does, because RomM ha
 for it. Prints one JSON object on stdout for the tests; the token in it is a secret.
 
 With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware session (A1):
-that many small numbered ROMs (several pages), a file the app cannot install (.zip) and a name too
-long for the Memory Stick. Files already in the platform's folder are scanned too: scripts/dev.sh
+that many small numbered ROMs (several pages), a file the app cannot install (.zip), a name with a
+control character and a name too long for the Memory Stick. Files already in the platform's folder are scanned too: scripts/dev.sh
 copies the launch check's disc images there first (tests/hardware/make_launch_disc.py).
 
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
@@ -40,14 +40,16 @@ EXTRA_NAME = "Skiff Extra #2 (Café & Co+).iso"
 EXTRA_BYTES = 1536
 EXTRA_SEED = b"skiff-integration-extra"
 # The A1 library (SKIFF_LIBRARY_ROMS): numbered ROMs of a few KiB each, sizes cycling so the size
-# column varies, each with its own content; a .zip, which the app lists but cannot install; and a
-# name longer than the 127 bytes a Memory Stick file name may take (src/storage/), which the app
-# shows as not downloadable.
+# column varies, each with its own content; a .zip, which the app lists but cannot install; a name
+# with a control character (BEL), which it shows with '?' and as not downloadable
+# (SKIFF_ROMM_NAME_CONTROL_CHAR); and a name longer than the 127 bytes a Memory Stick file name may
+# take, which it shortens for the file it downloads (src/storage/).
 LIBRARY_NAME_FORMAT = "Skiff Library {index:02d}.iso"
 LIBRARY_BASE_BYTES = 4096
 LIBRARY_SIZE_STEPS = 5
 LIBRARY_SEED = b"skiff-integration-library"
 UNSUPPORTED_NAME = "Skiff Not A Game.zip"
+CONTROL_NAME = "Skiff Control\aCharacter.iso"
 LONG_NAME = "Skiff " + "A Name Far Too Long For The Memory Stick " * 4 + "End.iso"
 SPECIAL_BYTES = 2048
 # ROMs per listing page when the seed looks them up after the scan.
@@ -181,7 +183,7 @@ def write_library(count):
         size = LIBRARY_BASE_BYTES * (1 + index % LIBRARY_SIZE_STEPS)
         write_payload(size, name, LIBRARY_SEED + index.to_bytes(4, "big"))
         names.append(name)
-    for name in (UNSUPPORTED_NAME, LONG_NAME):
+    for name in (UNSUPPORTED_NAME, CONTROL_NAME, LONG_NAME):
         write_payload(SPECIAL_BYTES, name, LIBRARY_SEED + name.encode())
         names.append(name)
     return names

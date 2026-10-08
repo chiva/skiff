@@ -486,8 +486,9 @@ and downloads need a real PSP (see [The app on a PSP](#the-app-on-a-psp)).
 The app itself against the [integration server](#integration-server), with a library to browse
 and games to download, pairing for real. The seed adds, with `SKIFF_LIBRARY_ROMS=<n>`
 (`tests/integration/seed.py`): that many small numbered ROMs, so the list spans several pages; a
-`.zip`, which the app lists but cannot install; and a name longer than a Memory Stick file name may
-be, which it shows as not downloadable. Beside them stay the large seeded file (for the
+`.zip`, which the app lists but cannot install; a name with a control character, which it shows
+with `?` and as not downloadable; and a name longer than a Memory Stick file name may be, which it
+shortens for the file it downloads. Beside them stay the large seeded file (for the
 interruptions) and the small one with reserved characters in its name.
 
 The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff

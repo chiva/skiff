@@ -39,6 +39,9 @@ readonly APP_MANIFEST="installed.json"
 readonly APP_FILES=("$APP_MANIFEST" "$APP_QUEUE")
 # A download in progress keeps these next to its target (include/skiff/download.h).
 readonly DOWNLOAD_SUFFIXES=(.part .resume)
+# A save cut short leaves the file's next version beside it, which the app's next load finishes
+# (include/skiff/storage.h: SKIFF_STORAGE_PENDING_SUFFIX, SKIFF_STORAGE_DRAFT_SUFFIX).
+readonly SAVE_SUFFIXES=("" .new .tmp)
 # Queue targets are on the device the app runs from (the Memory Stick, or a PSP Go's internal
 # storage), which is the one mounted: either prefix maps onto the mount.
 readonly APP_DEVICES=("ms0:/" "ef0:/")
@@ -242,8 +245,9 @@ install_probe_configs() {
 # (src/app/app_settings.c): the queue and its downloads' partial files, and installed.json's records.
 # The games stay, protected from then on as copied by hand.
 forget_server_state() {
-  local dest="$1" target path device suffix partials=0
-  if [[ -f "$dest/$APP_QUEUE" ]]; then
+  local dest="$1" target path device suffix save partials=0 removed=0
+  for save in "${SAVE_SUFFIXES[@]}"; do
+    [[ -f "$dest/$APP_QUEUE$save" ]] || continue
     while IFS= read -r target; do
       path=""
       for device in "${APP_DEVICES[@]}"; do
@@ -258,10 +262,17 @@ forget_server_state() {
           partials=$((partials + 1))
         fi
       done
-    done < <(grep -o '"target": *"[^"]*"' "$dest/$APP_QUEUE" | sed -E 's/^"target": *"(.*)"$/\1/')
-  fi
-  if [[ -f "$dest/$APP_QUEUE" || -f "$dest/$APP_MANIFEST" ]]; then
-    rm -f "$dest/$APP_QUEUE" "$dest/$APP_MANIFEST"
+    done < <(grep -o '"target": *"[^"]*"' "$dest/$APP_QUEUE$save" | sed -E 's/^"target": *"(.*)"$/\1/')
+  done
+  for suffix in "${SAVE_SUFFIXES[@]}"; do
+    for path in "$dest/$APP_QUEUE$suffix" "$dest/$APP_MANIFEST$suffix"; do
+      if [[ -f "$path" ]]; then
+        rm -f "$path"
+        removed=$((removed + 1))
+      fi
+    done
+  done
+  if [[ "$removed" -gt 0 ]]; then
     echo "$APP_FOLDER: the previous server's queue ($partials partial file(s)) and install records" \
       "removed; its games stay"
   fi

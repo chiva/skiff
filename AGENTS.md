@@ -80,6 +80,8 @@ existing ones.
   `psp-create-license-directory` looks).
 - Mbed TLS's config lives in its installed headers (`docker/toolchain/configure-mbedtls.sh`); never
   pass `MBEDTLS_*CONFIG_FILE` defines to a consumer, or Skiff and libcurl disagree on struct layouts.
+  It is built thread-safe (`MBEDTLS_THREADING_C` over pthread-embedded): the app's UI thread and its
+  download worker both use TLS. Never turn that off.
 - psp-gcc links `psputility`, `psprtc`, `pspnet_inet` and `pspnet_resolver` after everything else.
   Do not list them in `target_link_libraries`: a stub library linked twice splits its import stubs
   and psp-fixup-imports warns "stubs out of order" (the EBOOT may then not run).

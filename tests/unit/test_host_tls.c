@@ -2,19 +2,24 @@
  * The host build links the same TLS stack as the EBOOTs (docker/toolchain/build-tls.sh) with the
  * host's link-time contracts (src/platform/host/tls_hooks.c). These checks prove the pieces fit:
  * libcurl runs over Mbed TLS 4.1, PSA crypto seeds from the hook, the clocks behave, and the cipher
- * order suits the PSP.
+ * order suits the PSP, and the stack is safe for the two threads that use it (the app's UI and its
+ * download worker).
  */
 #include <curl/curl.h>
+#include <mbedtls/build_info.h>
 #include <mbedtls/platform.h>
 #include <mbedtls/platform_time.h>
 #include <mbedtls/ssl.h>
 #include <psa/crypto.h>
+#include <pthread.h>
 #include <string.h>
 #include <time.h>
 
 #include "unity.h"
 
 enum { RANDOM_BYTES = 64, ENTROPY_REQUEST_BYTES = 128, BITS_PER_BYTE = 8 };
+/* The concurrency check: threads each drawing random bytes and sealing with their own key. */
+enum { CRYPTO_THREADS = 4, CRYPTO_ROUNDS = 500, CHACHA_KEY_BYTES = 32, NONCE_BYTES = 12 };
 
 #define EXPECTED_TLS_BACKEND "mbedTLS/4.1."
 /* Allowed gap between Mbed TLS's wall clock and time(): the default must be time() itself. */
@@ -55,6 +60,61 @@ static void test_psa_random_comes_from_the_hook(void) {
     TEST_ASSERT_EQUAL_INT(PSA_SUCCESS, psa_generate_random(second, sizeof second));
     TEST_ASSERT_FALSE_MESSAGE(memcmp(first, second, sizeof first) == 0,
                               "two random draws must differ");
+    mbedtls_psa_crypto_free();
+}
+
+static void test_the_tls_stack_is_built_for_threads(void) {
+#if !defined(MBEDTLS_THREADING_C) || !defined(MBEDTLS_THREADING_PTHREAD)
+    TEST_FAIL_MESSAGE("Mbed TLS must be built with MBEDTLS_THREADING_C and _PTHREAD: the UI and "
+                      "the download worker use PSA crypto at the same time");
+#endif
+}
+
+/* One thread's share of the concurrency check: its own key, random draws, ChaCha20-Poly1305. */
+static void *crypto_worker(void *arg) {
+    int *failures = arg;
+    const psa_key_attributes_t defaults = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_attributes_t attributes = defaults;
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_CHACHA20);
+    psa_set_key_bits(&attributes, (size_t)CHACHA_KEY_BYTES * BITS_PER_BYTE);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
+    psa_set_key_algorithm(&attributes, PSA_ALG_CHACHA20_POLY1305);
+    for (int round = 0; round < CRYPTO_ROUNDS; round++) {
+        unsigned char key[CHACHA_KEY_BYTES];
+        unsigned char nonce[NONCE_BYTES];
+        unsigned char sealed[RANDOM_BYTES + 16];
+        unsigned char plain[RANDOM_BYTES];
+        size_t sealed_length = 0;
+        mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
+        int ok = psa_generate_random(key, sizeof key) == PSA_SUCCESS &&
+                 psa_generate_random(nonce, sizeof nonce) == PSA_SUCCESS &&
+                 psa_generate_random(plain, sizeof plain) == PSA_SUCCESS &&
+                 psa_import_key(&attributes, key, sizeof key, &id) == PSA_SUCCESS;
+        ok = ok &&
+             psa_aead_encrypt(id, PSA_ALG_CHACHA20_POLY1305, nonce, sizeof nonce, NULL, 0, plain,
+                              sizeof plain, sealed, sizeof sealed, &sealed_length) == PSA_SUCCESS &&
+             sealed_length == sizeof sealed;
+        (void)psa_destroy_key(id);
+        *failures += !ok;
+    }
+    return NULL;
+}
+
+static void test_crypto_runs_on_several_threads_at_once(void) {
+    TEST_ASSERT_EQUAL_INT(PSA_SUCCESS, psa_crypto_init());
+    pthread_t threads[CRYPTO_THREADS];
+    int failures[CRYPTO_THREADS] = {0};
+    for (int i = 0; i < CRYPTO_THREADS; i++) {
+        TEST_ASSERT_EQUAL_INT(0, pthread_create(&threads[i], NULL, crypto_worker, &failures[i]));
+    }
+    int total = 0;
+    for (int i = 0; i < CRYPTO_THREADS; i++) {
+        TEST_ASSERT_EQUAL_INT(0, pthread_join(threads[i], NULL));
+        total += failures[i];
+    }
+    TEST_PRINTF("%d threads x %d rounds of random draws, key import and AEAD: %d failed",
+                CRYPTO_THREADS, CRYPTO_ROUNDS, total);
+    TEST_ASSERT_EQUAL_INT(0, total);
     mbedtls_psa_crypto_free();
 }
 
@@ -133,6 +193,8 @@ int main(void) {
     RUN_TEST(test_libcurl_uses_mbedtls_4_1);
     RUN_TEST(test_curl_global_init_seeds_tls);
     RUN_TEST(test_psa_random_comes_from_the_hook);
+    RUN_TEST(test_the_tls_stack_is_built_for_threads);
+    RUN_TEST(test_crypto_runs_on_several_threads_at_once);
     RUN_TEST(test_hook_credits_full_entropy);
     RUN_TEST(test_hook_refuses_requests_it_cannot_satisfy);
     RUN_TEST(test_millisecond_clock_is_monotonic);

@@ -5,7 +5,9 @@
  * health failure, every request is refused and TLS cannot start; skiff_psp_entropy_status() says
  * which.
  *
- * Not thread-safe: Skiff makes its network calls from one thread.
+ * PSA crypto calls it with its random generator's mutex held (MBEDTLS_THREADING_C, see
+ * docker/toolchain/configure-mbedtls.sh), so one call runs at a time even though the UI and the
+ * download worker both use TLS.
  */
 #include "kirk_entropy.h"
 

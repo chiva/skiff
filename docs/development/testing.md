@@ -420,7 +420,9 @@ On a PSP (plugged in; about 5 minutes):
 1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 scripts/dev.sh romm-lan psp`.
 2. PSP in USB mode: `scripts/memstick.sh install <mount>`. It writes `jobs-probe.ini` (the network
    probe's settings, plus `wait_s=` from `SKIFF_JOBS_WAIT_S`: how long a prompt waits for the
-   player, default 60) and copies the test CA. Eject.
+   player, default 60; and `ui=` from `SKIFF_JOBS_UI`: `0` draws nothing and only waits for each
+   vertical blank, with the prompts on the debug screen, so a second run shows what drawing costs
+   the download) and copies the test CA. Eject.
 3. With the Wi-Fi switch on, run **Skiff jobs probe** and do what each `ACTION:` line asks.
 4. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK`: the file matches
    RomM's CRC-32, both interruptions recovered, the download kept at least 400 KB/s before the
@@ -428,8 +430,14 @@ On a PSP (plugged in; about 5 minutes):
    aside), and the worker kept at least 8 KB of its stack free and stopped in time. Each run appends one
    line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how soon the runner noticed
    the switch and how long until bytes came again, the same after the suspend, the recovery steps,
-   the lowest free stack, the lowest system memory (free and largest block) and the longest frame
-   gap. Skiff's own log is `skiff.log` next to it.
+   the lowest free stack, the lowest system memory (free and largest block), the longest frame
+   gap, and `ui=`, the mean and longest drawing time per frame (`draw_ms_mean`, `draw_ms_max`),
+   how many frame gaps went over 100 ms (`gaps_over`) and how many attempts the download took.
+   Skiff's own log is `skiff.log` next to it. After the run `result.txt` also lists the clock and
+   Wi-Fi state (signal, channel, power save) after joining, at the start of each later attempt and
+   at the end; each attempt's bytes, time and speed; and each frame gap over 100 ms with where the
+   main thread's time went: waiting on the queue's lock and its events, the probe's own reporting,
+   drawing, and the vertical blank.
 
 Without ARK, as in PPSSPP, TLS cannot start: the probe queues a job that fails on the worker thread
 before any network I/O (`SKIFF_ERR_NET_NEEDS_ARK`), checks that the queue file on the emulated Memory

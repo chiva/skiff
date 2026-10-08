@@ -15,6 +15,13 @@
  * queue's lock while the worker saves the queue file). The finished file is read back and checked
  * against RomM's CRC-32.
  *
+ * So that a run explains its own numbers, the probe also keeps, and prints after the run: every
+ * frame gap over the limit with where its time went (the queue's lock and events, the probe's own
+ * reporting, drawing, the vertical blank), the speed of each download attempt, and the clock and
+ * Wi-Fi state after joining, after each recovery and at the end. With "ui=0" it draws nothing and
+ * only waits for each vertical blank (prompts go to the debug screen), so two runs of one build
+ * show what drawing costs the download.
+ *
  * A job left unfinished by an earlier run (HOME > Quit, a crash) is still in the queue file and
  * resumes from its .part file, which tests the queue across launches.
  *
@@ -29,6 +36,7 @@
  */
 #include <pspctrl.h>
 #include <pspdebug.h>
+#include <pspdisplay.h>
 #include <pspkernel.h>
 #include <pspwlan.h>
 #include <stdint.h>
@@ -110,6 +118,12 @@ enum {
     LINE_ACTION = 160,
     LINE_NOTE = 190,
     BYTES_TEXT_MAX = 32,
+    /* What the run keeps for its report: frame gaps over the limit, attempts, environment lines. */
+    GAPS_MAX = 16,
+    ATTEMPTS_MAX = 16,
+    ENVIRONMENTS_MAX = ATTEMPTS_MAX + 2,
+    ENVIRONMENT_LABEL_MAX = 32,
+    US_PER_TENTH_MS = 100,
 };
 
 #define US_PER_S (1000LL * 1000)
@@ -130,6 +144,36 @@ typedef enum phase {
     PHASE_FINISH,
 } phase;
 
+/* Where one loop of the main thread spent its time. The probe's reporting (result.txt lines, the
+ * environment) happens inside events and player, and is also counted on its own. */
+typedef struct frame_parts {
+    long long events_us;
+    long long player_us;
+    long long report_us;
+    long long draw_us;
+    long long present_us;
+} frame_parts;
+
+typedef struct gap_record {
+    long long at_us;
+    phase phase;
+    long long gap_us;
+    frame_parts parts;
+} gap_record;
+
+/* One download attempt, as its progress events showed it. */
+typedef struct attempt_record {
+    long long first_us;
+    long long last_us;
+    uint64_t first_done;
+    uint64_t last_done;
+} attempt_record;
+
+typedef struct environment_record {
+    char label[ENVIRONMENT_LABEL_MAX];
+    char text[SKIFF_PROBE_ENVIRONMENT_MAX];
+} environment_record;
+
 typedef struct probe {
     skiff_psp_report report;
     const char *program_path;
@@ -148,6 +192,12 @@ typedef struct probe {
     int worker_alive;
     skiff_psp_ui ui;
     intraFont *font;
+    /* GU draws the screen; otherwise report lines go to the debug screen. */
+    int drawing;
+    /* Time the probe's own reporting took in the current loop of the main thread. */
+    long long report_us;
+    environment_record environments[ENVIRONMENTS_MAX];
+    int environment_count;
     char queue_path[PATH_MAX_LEN];
     char log_path[PATH_MAX_LEN];
     char target[PATH_MAX_LEN];
@@ -197,6 +247,16 @@ typedef struct watch {
     /* The lowest system memory seen while the worker ran. */
     SceSize system_free_min;
     SceSize system_largest_min;
+    /* For the report after the run. */
+    long long start_us;
+    gap_record gaps[GAPS_MAX];
+    int gaps_over;
+    attempt_record attempts[ATTEMPTS_MAX];
+    int attempts_seen;
+    int attempt_open;
+    long long draw_us_total;
+    long long draw_us_max;
+    long draws;
 } watch;
 
 /* The RomM client needs a transport for its own requests; the probe makes none, and the jobs open
@@ -220,9 +280,27 @@ static void report_check(probe *p, int ok, const char *text) {
     skiff_probe_report_check(&p->report, ok, text);
 }
 
-/* While GU draws, lines go to stdout and result.txt only. */
+/* While GU draws, lines go to stdout and result.txt only; with ui=0, to the debug screen too. */
 static void report_offscreen(probe *p, const char *text) {
-    skiff_psp_report_line_offscreen(&p->report, text);
+    const long long start = now_us();
+    if (p->drawing) {
+        skiff_psp_report_line_offscreen(&p->report, text);
+    } else {
+        skiff_psp_report_line(&p->report, text);
+    }
+    p->report_us += now_us() - start;
+}
+
+/* The clock and Wi-Fi state, kept for the report after the run (writing it now would add Memory
+ * Stick writes to the frame it is taken in). */
+static void note_environment(probe *p, const char *label) {
+    const long long start = now_us();
+    if (p->environment_count < ENVIRONMENTS_MAX) {
+        environment_record *record = &p->environments[p->environment_count++];
+        snprintf(record->label, sizeof record->label, "%s", label);
+        skiff_probe_describe_environment(1, record->text, sizeof record->text);
+    }
+    p->report_us += now_us() - start;
 }
 
 static int append_log(probe *p, const char *line) {
@@ -310,6 +388,7 @@ static int start_ui(probe *p) {
         return 0;
     }
     skiff_psp_ui_start(&p->ui, p->font);
+    p->drawing = 1;
     return 1;
 }
 
@@ -317,6 +396,7 @@ static void stop_ui(probe *p) {
     if (p->font == NULL) {
         return;
     }
+    p->drawing = 0;
     skiff_psp_ui_stop(&p->ui);
     skiff_psp_ui_unload_font(p->font);
     p->font = NULL;
@@ -365,6 +445,7 @@ static void watch_init(watch *w, uint32_t job_id) {
     memset(w, 0, sizeof *w);
     w->job_id = job_id;
     w->phase = PHASE_DOWNLOAD;
+    w->start_us = now_us();
     const skiff_probe_memory memory = skiff_probe_memory_now();
     w->system_free_min = memory.system_free;
     w->system_largest_min = memory.system_largest;
@@ -395,6 +476,7 @@ static const char *recovery_name(skiff_jobs_recovery step) {
 
 static void on_recovery(probe *p, watch *w, const skiff_jobs_event *event) {
     const long long now = now_us();
+    w->attempt_open = 0;
     snprintf(w->status, sizeof w->status, "%s", recovery_name(event->step));
     switch (event->step) {
     case SKIFF_JOBS_WAITING_FOR_WIFI:
@@ -421,6 +503,28 @@ static void on_recovery(probe *p, watch *w, const skiff_jobs_event *event) {
     report_offscreen(p, text);
 }
 
+/* An attempt starts with the first progress after a recovery; its environment is noted then. */
+static void track_attempt(probe *p, watch *w, uint64_t done, long long now) {
+    if (!w->attempt_open) {
+        w->attempt_open = 1;
+        if (w->attempts_seen > 0) {
+            char label[ENVIRONMENT_LABEL_MAX];
+            snprintf(label, sizeof label, "attempt %d", w->attempts_seen + 1);
+            note_environment(p, label);
+        }
+        if (w->attempts_seen < ATTEMPTS_MAX) {
+            w->attempts[w->attempts_seen] = (attempt_record){
+                .first_us = now, .last_us = now, .first_done = done, .last_done = done};
+        }
+        w->attempts_seen++;
+    }
+    if (w->attempts_seen <= ATTEMPTS_MAX) {
+        attempt_record *attempt = &w->attempts[w->attempts_seen - 1];
+        attempt->last_us = now;
+        attempt->last_done = done;
+    }
+}
+
 static void on_progress(probe *p, watch *w, const skiff_jobs_event *event) {
     const long long now = now_us();
     const uint64_t now_ms = (uint64_t)(now / US_PER_MS);
@@ -433,6 +537,7 @@ static void on_progress(probe *p, watch *w, const skiff_jobs_event *event) {
         skiff_ui_progress_update(&w->progress, event->done, now_ms);
     }
     w->last_progress_us = now;
+    track_attempt(p, w, event->done, now);
     if (event->bytes_per_s > 0) {
         w->rate_last = event->bytes_per_s;
     }
@@ -566,13 +671,20 @@ static void draw(probe *p, const watch *w) {
                       SKIFF_PSP_UI_COLOUR_DIM_TEXT,
                       "HOME > Quit stops the probe; run it again to resume");
     skiff_psp_ui_end_frame(&p->ui);
-    skiff_psp_ui_present(&p->ui);
+}
+
+static void keep_gap(watch *w, long long now, long long gap_us, const frame_parts *parts) {
+    if (w->gaps_over < GAPS_MAX) {
+        w->gaps[w->gaps_over] = (gap_record){
+            .at_us = now - w->start_us, .phase = w->phase, .gap_us = gap_us, .parts = *parts};
+    }
+    w->gaps_over++;
 }
 
 /*
  * Draws frames and follows the job until it ends, the player quits, or limit_us passes. Returns 1
  * when the job ended. A frame per vertical blank (present() waits for it) leaves the worker the
- * rest of the CPU.
+ * rest of the CPU; with ui=0 the loop only waits for the vertical blank.
  */
 static int follow(probe *p, watch *w, long long limit_us) {
     const long long start = now_us();
@@ -581,16 +693,45 @@ static int follow(probe *p, watch *w, long long limit_us) {
         /* The pad is read every frame, as the UI does; the probe needs no button. */
         SceCtrlData pad;
         sceCtrlPeekBufferPositive(&pad, 1);
+        frame_parts parts;
+        memset(&parts, 0, sizeof parts);
+        p->report_us = 0;
+        const long long events_start = now_us();
         take_events(p, w);
+        const long long player_start = now_us();
         if (p->has_ark) {
             watch_player(p, w);
         }
-        draw(p, w);
+        const long long draw_start = now_us();
+        if (p->drawing) {
+            draw(p, w);
+        }
+        const long long present_start = now_us();
+        if (p->drawing) {
+            skiff_psp_ui_present(&p->ui);
+        } else {
+            sceDisplayWaitVblankStart();
+        }
         const long long now = now_us();
+        parts.events_us = player_start - events_start;
+        parts.player_us = draw_start - player_start;
+        parts.report_us = p->report_us;
+        parts.draw_us = present_start - draw_start;
+        parts.present_us = now - present_start;
+        if (p->drawing) {
+            w->draw_us_total += parts.draw_us;
+            w->draw_us_max = parts.draw_us > w->draw_us_max ? parts.draw_us : w->draw_us_max;
+            w->draws++;
+        }
         const int suspends = skiff_psp_power_events_now().suspends;
-        if (w->last_frame_us != 0 && suspends == suspends_seen &&
-            now - w->last_frame_us > w->frame_gap_max_us) {
-            w->frame_gap_max_us = now - w->last_frame_us;
+        const long long gap_us = now - w->last_frame_us;
+        if (w->last_frame_us != 0 && suspends == suspends_seen) {
+            if (gap_us > w->frame_gap_max_us) {
+                w->frame_gap_max_us = gap_us;
+            }
+            if (gap_us > MAX_FRAME_GAP_MS * US_PER_MS) {
+                keep_gap(w, now, gap_us, &parts);
+            }
         }
         suspends_seen = suspends;
         w->last_frame_us = now;
@@ -732,6 +873,7 @@ static int join(probe *p) {
     snprintf(text, sizeof text, "Wi-Fi: profile %d joined in %lld ms, IP %s", p->config.profile,
              (now_us() - start) / US_PER_MS, ip);
     report_check(p, 1, text);
+    note_environment(p, "joined");
     return 1;
 }
 
@@ -763,6 +905,68 @@ static int file_matches(probe *p) {
     return ok;
 }
 
+static const char *phase_name(phase value) {
+    switch (value) {
+    case PHASE_DOWNLOAD:
+        return "download";
+    case PHASE_WIFI_OFF:
+        return "Wi-Fi off asked";
+    case PHASE_WIFI_ON:
+        return "Wi-Fi on asked";
+    case PHASE_BEFORE_SUSPEND:
+        return "before suspend";
+    case PHASE_SUSPEND:
+        return "suspend asked";
+    case PHASE_FINISH:
+        return "finish";
+    }
+    return "?";
+}
+
+static long long ms_of(long long us) { return us / US_PER_MS; }
+
+/* Tenths of a millisecond, for "%lld.%lld" after ms_of(). */
+static long long tenth_ms_of(long long us) { return us % US_PER_MS / US_PER_TENTH_MS; }
+
+/* The environment lines, each attempt's speed and the frame gaps over the limit, after the run. */
+static void report_details(probe *p, const watch *w) {
+    char text[LONG_LINE_MAX];
+    for (int i = 0; i < p->environment_count; i++) {
+        snprintf(text, sizeof text, "environment %s: %s", p->environments[i].label,
+                 p->environments[i].text);
+        skiff_psp_report_line(&p->report, text);
+    }
+    for (int i = 0; i < w->attempts_seen && i < ATTEMPTS_MAX; i++) {
+        const attempt_record *attempt = &w->attempts[i];
+        const long long elapsed_us = attempt->last_us - attempt->first_us;
+        snprintf(text, sizeof text,
+                 "attempt %d: from %lld ms, %llu to %llu bytes, %llu bytes in %lld ms, %llu KB/s",
+                 i + 1, ms_of(attempt->first_us - w->start_us),
+                 (unsigned long long)attempt->first_done, (unsigned long long)attempt->last_done,
+                 (unsigned long long)(attempt->last_done - attempt->first_done), ms_of(elapsed_us),
+                 skiff_probe_kb_per_s(attempt->last_done - attempt->first_done, elapsed_us));
+        skiff_psp_report_line(&p->report, text);
+    }
+    for (int i = 0; i < w->gaps_over && i < GAPS_MAX; i++) {
+        const gap_record *gap = &w->gaps[i];
+        const long long accounted = gap->parts.events_us + gap->parts.player_us +
+                                    gap->parts.draw_us + gap->parts.present_us;
+        snprintf(text, sizeof text,
+                 "frame gap %lld ms at %lld ms (%s): queue events %lld, player %lld, of them "
+                 "probe reporting %lld, draw %lld, vblank %lld, other %lld ms",
+                 ms_of(gap->gap_us), ms_of(gap->at_us), phase_name(gap->phase),
+                 ms_of(gap->parts.events_us), ms_of(gap->parts.player_us),
+                 ms_of(gap->parts.report_us), ms_of(gap->parts.draw_us),
+                 ms_of(gap->parts.present_us), ms_of(gap->gap_us - accounted));
+        skiff_psp_report_line(&p->report, text);
+    }
+    if (w->gaps_over > GAPS_MAX) {
+        snprintf(text, sizeof text, "frame gaps over %d ms: %d, the first %d listed",
+                 MAX_FRAME_GAP_MS, w->gaps_over, GAPS_MAX);
+        skiff_psp_report_line(&p->report, text);
+    }
+}
+
 static void report_memory(probe *p, const char *label) {
     const skiff_probe_memory memory = skiff_probe_memory_now();
     skiff_probe_report_memory(&p->report, label, &memory);
@@ -771,13 +975,15 @@ static void report_memory(probe *p, const char *label) {
 /* The run's summary line, on screen, in result.txt and in jobs-log.txt. */
 static int report_run(probe *p, const watch *w, int ok, int crc_ok) {
     const long long elapsed_us = w->last_progress_us - w->first_progress_us;
+    const long long draw_mean_us = w->draws > 0 ? w->draw_us_total / w->draws : 0;
     char text[LONG_LINE_MAX];
     snprintf(text, sizeof text,
              "jobs ok=%d state=%s error=%s kb_s_first=%llu kb_s_last=%llu kb_s_overall=%llu "
              "wifi=%d wifi_noticed_ms=%lld wifi_recovered_ms=%lld suspend=%d "
              "suspend_recovered_ms=%lld waits=%d rejoins=%d reloads=%d retries=%d "
              "stack_free_min=%d/%d system_free_min=%u largest_min=%u frame_gap_max_ms=%lld "
-             "frames=%ld crc=%d",
+             "frames=%ld crc=%d ui=%d draw_ms_mean=%lld.%lld draw_ms_max=%lld.%lld gaps_over=%d "
+             "attempts=%d",
              ok, w->ended ? skiff_job_state_name(w->state) : "running", skiff_err_name(w->error),
              (unsigned long long)(w->rate_before_wifi / BYTES_PER_KB),
              (unsigned long long)(w->rate_last / BYTES_PER_KB),
@@ -785,7 +991,9 @@ static int report_run(probe *p, const watch *w, int ok, int crc_ok) {
              w->wifi_noticed_ms, w->wifi_recovered_ms, w->suspend_done, w->suspend_recovered_ms,
              w->waits_for_wifi, w->rejoins, w->reloads, w->retries, p->worker.stack_free_min,
              SKIFF_PSP_WORKER_STACK_BYTES, (unsigned)w->system_free_min,
-             (unsigned)w->system_largest_min, w->frame_gap_max_us / US_PER_MS, w->frames, crc_ok);
+             (unsigned)w->system_largest_min, w->frame_gap_max_us / US_PER_MS, w->frames, crc_ok,
+             p->config.ui, ms_of(draw_mean_us), tenth_ms_of(draw_mean_us), ms_of(w->draw_us_max),
+             tenth_ms_of(w->draw_us_max), w->gaps_over, w->attempts_seen);
     report_check(p, ok, text);
     return append_log(p, text) && ok;
 }
@@ -804,8 +1012,12 @@ static int run_download(probe *p) {
     char text[TEXT_LINE_MAX];
     snprintf(text, sizeof text, "job queued: %s, id %u", skiff_err_name(err), (unsigned)job_id);
     report_check(p, err == SKIFF_OK, text);
-    if (err != SKIFF_OK || !start_ui(p)) {
+    if (err != SKIFF_OK || (p->config.ui && !start_ui(p))) {
         return 0;
+    }
+    if (!p->config.ui) {
+        skiff_psp_report_line(&p->report,
+                              "ui=0: nothing drawn, one vertical blank per loop; prompts below");
     }
     if (!start_worker(p, SKIFF_OK)) {
         stop_ui(p);
@@ -816,8 +1028,10 @@ static int run_download(probe *p) {
     watch_init(&w, job_id);
     const int ended = follow(p, &w, RUN_LIMIT_US);
     const int quit = skiff_psp_exit_requested();
+    note_environment(p, "end");
     int ok = stop_worker(p);
     stop_ui(p);
+    report_details(p, &w);
     if (quit) {
         report_check(p, 0, "HOME > Quit before the end: run the probe again to resume the job");
     }

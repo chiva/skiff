@@ -128,6 +128,16 @@ static void test_unusable_scenarios_and_timings_keep_the_defaults(void) {
     TEST_ASSERT_EQUAL_INT(7, config.invalid_values);
 }
 
+static void test_jobs_probe_ui_defaults_on_and_takes_only_0_or_1(void) {
+    TEST_ASSERT_EQUAL_INT(1, config.ui);
+    read_text("ui=0\nui=off\nui=\n");
+    NARRATE("-> ui %d after ui=0, ui=off, ui= (invalid %d)\n", config.ui, config.invalid_values);
+    TEST_ASSERT_EQUAL_INT(0, config.ui);
+    TEST_ASSERT_EQUAL_INT(2, config.invalid_values);
+    read_text("ui=1\n");
+    TEST_ASSERT_EQUAL_INT(1, config.ui);
+}
+
 static void test_plain_http_takes_only_0_or_1(void) {
     read_text("plain_http=1\nplain_http=yes\nplain_http=\n");
     TEST_ASSERT_EQUAL_INT(1, config.plain_http);
@@ -311,6 +321,7 @@ int main(void) {
     RUN_TEST(test_reads_scenarios_and_their_timings);
     RUN_TEST(test_speed_is_chosen_by_name_not_by_all);
     RUN_TEST(test_unusable_scenarios_and_timings_keep_the_defaults);
+    RUN_TEST(test_jobs_probe_ui_defaults_on_and_takes_only_0_or_1);
     RUN_TEST(test_plain_http_takes_only_0_or_1);
     RUN_TEST(test_reads_the_clock_and_its_section);
     RUN_TEST(test_a_clock_other_than_222_or_333_is_invalid);

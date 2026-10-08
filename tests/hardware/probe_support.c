@@ -45,6 +45,7 @@ void skiff_probe_config_defaults(skiff_probe_config *config) {
     config->scenarios = SKIFF_PROBE_SCENARIO_ALL;
     config->wait_s = SKIFF_PROBE_DEFAULT_WAIT_S;
     config->awake_s = SKIFF_PROBE_DEFAULT_AWAKE_S;
+    config->ui = 1;
 }
 
 static void trim_line(char *text) {
@@ -168,6 +169,12 @@ static int apply(skiff_probe_config *config, const char *key, const char *value)
         const int ok =
             parse_bounded(value, SKIFF_PROBE_AWAKE_MIN_S, SKIFF_PROBE_AWAKE_MAX_S, &number);
         config->awake_s = ok ? (int)number : config->awake_s;
+        return ok;
+    }
+    if (strcmp(key, "ui") == 0) {
+        const int on = strcmp(value, "1") == 0;
+        const int ok = on || strcmp(value, "0") == 0;
+        config->ui = ok ? on : config->ui;
         return ok;
     }
     return 1;

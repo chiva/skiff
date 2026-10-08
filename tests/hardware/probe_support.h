@@ -83,6 +83,9 @@ typedef struct skiff_probe_config {
     unsigned scenarios;
     int wait_s;
     int awake_s;
+    /* The jobs probe draws its screen with the UI renderer ("ui=1", the default) or only waits for
+     * each vertical blank ("ui=0"), to measure what drawing costs the download. */
+    int ui;
     /* Lines whose value could not be used; the default stays in place for them. */
     int invalid_values;
 } skiff_probe_config;

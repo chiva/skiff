@@ -35,7 +35,8 @@ readonly BENCH_FILES=(ca.crt)
 readonly RESUME_FOLDER="SkiffResumeProbe"
 readonly RESUME_FILES=(ca.crt)
 # The jobs probe downloads the seeded file through the download queue's worker thread (a large one
-# too). Optional SKIFF_JOBS_WAIT_S becomes wait_s= (tests/hardware/jobs_probe.c).
+# too). Optional SKIFF_JOBS_WAIT_S and SKIFF_JOBS_UI become wait_s= and ui=
+# (tests/hardware/jobs_probe.c).
 readonly JOBS_FOLDER="SkiffJobsProbe"
 readonly JOBS_FILES=(ca.crt)
 readonly INTEGRATION_ENV="$REPO_ROOT/build/integration/romm.env"
@@ -158,6 +159,9 @@ install_probe_configs() {
   local jobs_extra=""
   if [[ -n "${SKIFF_JOBS_WAIT_S:-}" ]]; then
     jobs_extra+="wait_s=$SKIFF_JOBS_WAIT_S"$'\n'
+  fi
+  if [[ -n "${SKIFF_JOBS_UI:-}" ]]; then
+    jobs_extra+="ui=$SKIFF_JOBS_UI"$'\n'
   fi
   install_probe_config "$JOBS_FOLDER" jobs-probe.ini "${jobs_extra%$'\n'}" "${JOBS_FILES[@]}"
 }

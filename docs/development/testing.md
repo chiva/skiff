@@ -479,7 +479,51 @@ must start (storage, the five mutexes, the font and renderer, `skiff.log`, the q
 tear down: it then ends with `SKIFF APP SMOKE OK`. It ends with `SKIFF APP SMOKE FAIL` when it
 cannot start, stops on an error screen, has not reached that screen within 1800 frames, or leaves
 something to the process exit. `scripts/dev.sh app-smoke` runs it, as CI does. Pairing, browsing
-and downloads need a real PSP (hardware row A1).
+and downloads need a real PSP (see [The app on a PSP](#the-app-on-a-psp)).
+
+## The app on a PSP
+
+The app itself against the [integration server](#integration-server), with a library to browse
+and games to download, pairing for real. The seed adds, with `SKIFF_LIBRARY_ROMS=<n>`
+(`tests/integration/seed.py`): that many small numbered ROMs, so the list spans several pages; a
+`.zip`, which the app lists but cannot install; and a name longer than a Memory Stick file name may
+be, which it shows as not downloadable. Beside them stay the large seeded file (for the
+interruptions) and the small one with reserved characters in its name.
+
+The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff
+downloaded can be launched from the XMB without any game file from outside the project: a tiny
+program packed as a UMD disc image, once as an `.iso` and once as a `.cso`
+(`tests/hardware/make_launch_disc.py`, which writes the CSO itself and checks it decompresses back
+to the ISO). Launched, it reads a 256 KiB pattern file back from its disc, so the whole image must
+read back through the custom firmware's ISO loader (and its CSO decompression), then shows `SKIFF
+LAUNCH CHECK OK` and writes it to `result.txt` in Skiff's folder (its disc is read-only).
+`scripts/dev.sh launch-check` boots both images in PPSSPPHeadless; CI does not, because building
+the disc needs both the PSP build and the host image.
+
+1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp
+   launch-disc romm-lan` (the disc images must exist before the seed runs).
+2. PSP in USB mode: `scripts/memstick.sh install <mount>`. Besides the EBOOTs, it writes the app's
+   `config.ini` with only the test server's address, `ca_file = test-ca-bundle.pem` (the default
+   `cacert.pem` plus the test CA, so the app parses as many certificates as it does by default), a
+   custom header `X-Skiff-Test` with a random value, and `[log] level = debug`. With no
+   `[auth]` token, the app pairs on its first launch. A `config.ini` already naming the same server
+   is kept, with its pairing and network; the CA file is rewritten either way, as each `romm-lan`
+   makes a new test CA. Eject.
+3. Run **Skiff**, pair it (approve the code in RomM's web UI, as the admin from
+   `build/integration/romm.env`), browse, and download, interrupting downloads as the session's
+   checklist asks. Launch **Skiff launch check** from Game → Memory Stick (the ISO loader lists it)
+   once the app has downloaded it.
+4. USB mode: `scripts/memstick.sh results <mount>`. For the app it prints `installed.json`,
+   `queue.json`, the launch check's `result.txt` and `skiff.log`, and ends with the secrets check:
+   neither the token pairing wrote nor the `X-Skiff-Test` value may appear in any file under
+   `PSP/GAME/Skiff*` but `config.ini` (it names the file, never the value, and exits with 1).
+
+At `[log] level = debug`, `skiff.log` also holds what the session measures: one `request:` line
+per request the UI thread makes (time, status, body bytes, new connections, TLS version and cipher,
+heap afterwards; the first one on a new connection carries the handshake and the parsing of the
+CA file), and a `stats:` line every 10 s (frames, mean and longest time between two frames, heap,
+system memory free and its largest block, the download worker's lowest free stack). Games Skiff
+installed stay in `ms0:/ISO` after `scripts/memstick.sh uninstall`.
 
 ## UI prototype
 

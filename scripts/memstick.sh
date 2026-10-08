@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Hardware tier without PSPLINK: copies the debug EBOOTs (and the app's CA bundle) to a mounted
 # Memory Stick (PSP in USB mode or a card reader), then reads back the result.txt each check EBOOT
-# writes next to itself. Plain file copies on the host; needs no Docker and no PSP tools. Build
-# first with `scripts/dev.sh psp`.
+# writes next to itself, the app's log and files, and checks that no log holds the app's secrets.
+# Plain file copies on the host; needs no Docker and no PSP tools. Build first with
+# `scripts/dev.sh psp`.
 # Usage: scripts/memstick.sh install|results|uninstall <memory-stick-mount>
 set -euo pipefail
 
@@ -18,7 +19,23 @@ readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto 
   SkiffBench SkiffResumeProbe SkiffJobsProbe)
 # The app gets the CA bundle it trusts by default next to its EBOOT, where scripts/dev.sh psp put it.
 readonly APP_TARGET="skiff"
+readonly APP_FOLDER="Skiff"
 readonly CA_BUNDLE_NAME="cacert.pem"
+# With a LAN test server, the app gets a config.ini naming only that server, the CAs it trusts, a
+# custom header and debug logging: it pairs for real on its first launch. The CA file is the
+# default bundle plus the test CA, so the app parses as many certificates as it does by default
+# (hardware row A1 measures that). The header's value is a random secret that must never reach a
+# log, like the token pairing writes; results looks for both. A config.ini already naming the same
+# server is kept, with its pairing and network.
+readonly APP_CONFIG="config.ini"
+readonly APP_CA_FILE="test-ca-bundle.pem"
+readonly APP_TEST_HEADER="X-Skiff-Test"
+readonly APP_LOG_LEVEL="debug"
+readonly TEST_SERVER_TLS_PORT=8443
+# What the app writes next to its EBOOT, printed by results. result.txt there comes from the
+# launch check (tests/hardware/launch_check.c), a game the app downloads: its disc is read-only.
+readonly APP_FILES=(installed.json queue.json)
+readonly SECRET_RANDOM_BYTES=16
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
 readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
@@ -81,6 +98,28 @@ test_server_lan_ip() {
 json_field() {
   sed -E 's/, *"extra": *\{[^}]*\}//' "$INTEGRATION_SEED" |
     sed -nE "s/.*\"$1\": *\"?([^\",}]*)\"?[,}].*/\1/p"
+}
+
+# ini_value <file> <section> <key>: a config.ini value (section and key ignore case, as the app's
+# parser does), empty when absent.
+ini_value() {
+  awk -v section="$2" -v key="$3" '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*\[/ { current = tolower($0); gsub(/[][[:space:]]/, "", current); next }
+    current == tolower(section) && index($0, "=") > 0 {
+      name = substr($0, 1, index($0, "=") - 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (tolower(name) == tolower(key)) {
+        value = substr($0, index($0, "=") + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }' "$1"
+}
+
+random_hex() {
+  od -An -tx1 -N"$SECRET_RANDOM_BYTES" /dev/urandom | tr -d ' \n'
 }
 
 # Percent-encodes a file name for a URL path.
@@ -171,6 +210,27 @@ install_probe_configs() {
   install_probe_config "$JOBS_FOLDER" jobs-probe.ini "${jobs_extra%$'\n'}" "${JOBS_FILES[@]}"
 }
 
+install_app_config() {
+  local dest="$GAME_DIR/$APP_FOLDER" host url
+  host="$(test_server_lan_ip)"
+  if [[ -z "$host" ]]; then
+    echo "note: no LAN test server; the app keeps its config.ini (run scripts/dev.sh romm-lan and" \
+      "install again to point it there)" >&2
+    return
+  fi
+  url="https://$host:$TEST_SERVER_TLS_PORT"
+  # Every romm-lan makes a new test CA, so the bundle is rewritten even for a kept config.ini.
+  cat "$dest/$CA_BUNDLE_NAME" "$INTEGRATION_CERTS/ca.crt" >"$dest/$APP_CA_FILE"
+  if [[ -f "$dest/$APP_CONFIG" && "$(ini_value "$dest/$APP_CONFIG" server url)" == "$url" ]]; then
+    echo "$APP_FOLDER: config.ini for $url kept (pairing and network too)"
+    return
+  fi
+  printf '%s\n' "# Written by scripts/memstick.sh install for the test RomM" "[server]" "url = $url" \
+    "ca_file = $APP_CA_FILE" "" "[headers]" "$APP_TEST_HEADER = $(random_hex)" "" "[log]" \
+    "level = $APP_LOG_LEVEL" >"$dest/$APP_CONFIG"
+  echo "$APP_FOLDER: new config.ini for $url; the app pairs on its first launch"
+}
+
 install_ca_bundle() {
   local source="$BUILD_PBP_DIR/$APP_TARGET/$CA_BUNDLE_NAME"
   if [[ ! -f "$source" ]]; then
@@ -198,17 +258,61 @@ install_eboots() {
     remove_macos_metadata "${FOLDERS[$i]}"
     echo "installed ${TARGETS[$i]} -> PSP/GAME/${FOLDERS[$i]}"
   done
+  install_app_config
   install_probe_configs
   sync
   echo "Eject the Memory Stick, then run each Skiff entry from Game > Memory Stick."
 }
 
+# The app's secrets (the token pairing wrote, the test header's value) must appear in no file Skiff
+# folders hold but config.ini. Names what leaked where, never the value; 1 if anything did.
+check_app_secrets() {
+  local config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG" value leaks i
+  local sections=(auth headers) keys=(token "$APP_TEST_HEADER")
+  echo "== secrets"
+  if [[ ! -f "$config" ]]; then
+    echo "(no $APP_CONFIG in PSP/GAME/$APP_FOLDER)"
+    return 0
+  fi
+  local status=0 checked=0
+  for i in "${!keys[@]}"; do
+    value="$(ini_value "$config" "${sections[$i]}" "${keys[$i]}")"
+    if [[ -z "$value" ]]; then
+      echo "[${sections[$i]}] ${keys[$i]}: not in $APP_CONFIG (not paired yet, or not written by install)"
+      continue
+    fi
+    checked=$((checked + 1))
+    leaks="$(grep -rlF --exclude="$APP_CONFIG" -e "$value" "$GAME_DIR"/Skiff* || true)"
+    if [[ -n "$leaks" ]]; then
+      echo "FAIL [${sections[$i]}] ${keys[$i]} found in:"
+      printf '%s\n' "$leaks" | sed 's/^/  /'
+      status=1
+    fi
+  done
+  if [[ "$status" == 0 ]]; then
+    echo "ok   $checked secret value(s) from $APP_CONFIG in no other file under PSP/GAME/Skiff*"
+  fi
+  return "$status"
+}
+
 print_results() {
   for i in "${!TARGETS[@]}"; do
-    [[ "${TARGETS[$i]}" == "$APP_TARGET" ]] && continue
     echo "== ${FOLDERS[$i]}"
     local result="$GAME_DIR/${FOLDERS[$i]}/$RESULT_FILE"
-    if [[ -f "$result" ]]; then
+    if [[ "${TARGETS[$i]}" == "$APP_TARGET" ]]; then
+      local file
+      for file in "${APP_FILES[@]}"; do
+        if [[ -f "$GAME_DIR/${FOLDERS[$i]}/$file" ]]; then
+          echo "-- $file"
+          cat "$GAME_DIR/${FOLDERS[$i]}/$file"
+          echo
+        fi
+      done
+      if [[ -f "$result" ]]; then
+        echo "-- $RESULT_FILE (the launch check, a game Skiff downloaded)"
+        cat "$result"
+      fi
+    elif [[ -f "$result" ]]; then
       cat "$result"
     else
       echo "(no $RESULT_FILE: not run yet, or it crashed before opening the file)"
@@ -234,7 +338,10 @@ uninstall_eboots() {
 
 case "$COMMAND" in
 install) install_eboots ;;
-results) print_results ;;
+results)
+  print_results
+  check_app_secrets
+  ;;
 uninstall) uninstall_eboots ;;
 *)
   echo "$USAGE" >&2

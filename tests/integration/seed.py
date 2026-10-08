@@ -1,11 +1,17 @@
-"""Seed the integration RomM: admin user, one synthetic PSP file, a library scan, a client token.
+"""Seed the integration RomM: admin user, synthetic PSP files, a library scan, a client token.
 
 Runs inside the RomM container with RomM's own Python (`scripts/dev.sh romm-up` does this), so it
 needs nothing installed elsewhere: the standard library plus the python-socketio client RomM ships.
 The scan is started over RomM's socket, the way its web UI does, because RomM has no REST endpoint
 for it. Prints one JSON object on stdout for the tests; the token in it is a secret.
 
-Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional).
+With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware session (A1):
+that many small numbered ROMs (several pages), a file the app cannot install (.zip) and a name too
+long for the Memory Stick. Files already in the platform's folder are scanned too: scripts/dev.sh
+copies the launch check's disc images there first (tests/hardware/make_launch_disc.py).
+
+Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
+SKIFF_LIBRARY_ROMS (optional).
 """
 
 import asyncio
@@ -33,6 +39,19 @@ DEFAULT_PAYLOAD_BYTES = 1024 * 1024
 EXTRA_NAME = "Skiff Extra #2 (Café & Co+).iso"
 EXTRA_BYTES = 1536
 EXTRA_SEED = b"skiff-integration-extra"
+# The A1 library (SKIFF_LIBRARY_ROMS): numbered ROMs of a few KiB each, sizes cycling so the size
+# column varies, each with its own content; a .zip, which the app lists but cannot install; and a
+# name longer than the 127 bytes a Memory Stick file name may take (src/storage/), which the app
+# shows as not downloadable.
+LIBRARY_NAME_FORMAT = "Skiff Library {index:02d}.iso"
+LIBRARY_BASE_BYTES = 4096
+LIBRARY_SIZE_STEPS = 5
+LIBRARY_SEED = b"skiff-integration-library"
+UNSUPPORTED_NAME = "Skiff Not A Game.zip"
+LONG_NAME = "Skiff " + "A Name Far Too Long For The Memory Stick " * 4 + "End.iso"
+SPECIAL_BYTES = 2048
+# Room for every ROM on one listing page when the seed looks them up after the scan.
+LIST_LIMIT = 500
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
 # same hashes on every run and every machine.
 PAYLOAD_SEED = b"skiff-integration-payload"
@@ -154,14 +173,40 @@ async def scan(cookie):
         await client.disconnect()
 
 
+def write_library(count):
+    """The A1 library's files; returns their names."""
+    names = []
+    for index in range(1, count + 1):
+        name = LIBRARY_NAME_FORMAT.format(index=index)
+        size = LIBRARY_BASE_BYTES * (1 + index % LIBRARY_SIZE_STEPS)
+        write_payload(size, name, LIBRARY_SEED + index.to_bytes(4, "big"))
+        names.append(name)
+    for name in (UNSUPPORTED_NAME, LONG_NAME):
+        write_payload(SPECIAL_BYTES, name, LIBRARY_SEED + name.encode())
+        names.append(name)
+    return names
+
+
 def find_roms(auth, names):
-    """The platform's id and the ROM id of each file name, in order."""
+    """The platform's id and the ROM id of each file name, in order; every file in the platform's
+    folder must have been scanned."""
     status, platforms = request("GET", "/api/platforms", auth)
     platform = next((p for p in platforms or [] if p["fs_slug"] == PLATFORM_SLUG), None)
     if status != HTTP_OK or platform is None:
         raise SystemExit(f"seed: platform {PLATFORM_SLUG} missing after the scan (HTTP {status})")
-    status, page = request("GET", f"/api/roms?platform_ids={platform['id']}", auth)
+    status, page = request(
+        "GET",
+        f"/api/roms?platform_ids={platform['id']}&limit={LIST_LIMIT}&with_char_index=false"
+        "&with_filter_values=false&with_rom_id_index=false",
+        auth,
+    )
     items = (page or {}).get("items", [])
+    on_disk = sorted(path.name for path in LIBRARY_DIR.iterdir() if path.is_file())
+    scanned = sorted(rom["fs_name"] for rom in items)
+    if status != HTTP_OK or scanned != on_disk:
+        missing = sorted(set(on_disk) - set(scanned))
+        raise SystemExit(f"seed: {len(scanned)} of {len(on_disk)} files scanned (HTTP {status}), "
+                         f"missing: {missing}")
     ids = []
     for name in names:
         rom = next((r for r in items if r["fs_name"] == name), None)
@@ -184,15 +229,19 @@ def main():
     user = os.environ["SKIFF_ADMIN_USER"]
     password = os.environ["SKIFF_ADMIN_PASSWORD"]
     size = int(os.environ.get("SKIFF_PAYLOAD_BYTES", DEFAULT_PAYLOAD_BYTES))
+    library_roms = int(os.environ.get("SKIFF_LIBRARY_ROMS", "0"))
     auth = basic_auth(user, password)
 
     payload = write_payload(size)
     extra = write_payload(EXTRA_BYTES, EXTRA_NAME, EXTRA_SEED)
+    library = write_library(library_roms) if library_roms > 0 else []
     create_admin(user, password, auth)
     started = time.monotonic()
     asyncio.run(scan(session_cookie(auth)))
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
     log(f"roms {rom_id}, {extra_rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")
+    if library:
+        log(f"library: {len(library)} more files, and every other file in {LIBRARY_DIR}")
     extra["rom_id"] = extra_rom_id
     print(
         json.dumps(

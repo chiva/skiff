@@ -1,8 +1,10 @@
 #include "app_psp.h"
 
+#include <malloc.h>
 #include <psa/crypto.h>
 #include <pspctrl.h>
 #include <pspkernel.h>
+#include <pspsysmem.h>
 #include <pspwlan.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +16,7 @@
 #include "storage_psp.h"
 
 #define US_PER_MS 1000LL
+#define BYTES_PER_KB 1024U
 /* sceWlanGetSwitchState() with the switch off (pspwlan.h names no value). */
 #define WLAN_SWITCH_OFF 0
 /* The pairing code, drawn large. */
@@ -27,6 +30,56 @@ enum {
     BLOCK_GAP = 4,
     PROGRESS_HEIGHT = 8,
 };
+
+/* ---- Measurements (hardware row A1, debug level) ---- */
+
+static unsigned heap_used_kb(void) {
+    const struct mallinfo heap = mallinfo();
+    return (unsigned)((size_t)heap.uordblks / BYTES_PER_KB);
+}
+
+/* One line per request on the UI thread: the first one on a new connection carries the TLS
+ * handshake and the parsing of the trusted CAs, and the heap after it what they keep. */
+static void log_request(skiff_psp_app *platform, long long started_us,
+                        const skiff_http_response *response, skiff_err err) {
+    skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                    "request: %lld ms, HTTP %ld, %llu body bytes, %ld new connection(s), %s %s, "
+                    "heap %u KB: %s (%d)",
+                    (sceKernelGetSystemTimeWide() - started_us) / US_PER_MS, response->status,
+                    (unsigned long long)response->body_bytes, response->new_connections,
+                    response->tls_version, response->tls_cipher, heap_used_kb(),
+                    skiff_err_name(err), (int)err);
+}
+
+static void count_frame(skiff_psp_app *platform) {
+    skiff_psp_app_stats *stats = &platform->stats;
+    const long long now = sceKernelGetSystemTimeWide();
+    if (stats->last_frame_us != 0) {
+        const long long gap = now - stats->last_frame_us;
+        stats->gap_total_us += gap;
+        stats->gap_max_us = gap > stats->gap_max_us ? gap : stats->gap_max_us;
+        stats->frames++;
+    } else {
+        stats->period_start_us = now;
+    }
+    stats->last_frame_us = now;
+    if (now - stats->period_start_us < SKIFF_PSP_APP_STATS_PERIOD_US || stats->frames == 0) {
+        return;
+    }
+    skiff_log_write(
+        skiff_app_log(platform->app), SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+        "stats: %d frames, mean %lld ms, longest %lld ms; heap %u KB; system free %u KB "
+        "(largest %u KB); worker stack lowest free %d bytes",
+        stats->frames, stats->gap_total_us / stats->frames / US_PER_MS,
+        stats->gap_max_us / US_PER_MS, heap_used_kb(),
+        (unsigned)(sceKernelTotalFreeMemSize() / BYTES_PER_KB),
+        (unsigned)(sceKernelMaxFreeMemSize() / BYTES_PER_KB),
+        skiff_psp_worker_stack_free(&platform->worker));
+    stats->period_start_us = now;
+    stats->gap_total_us = 0;
+    stats->gap_max_us = 0;
+    stats->frames = 0;
+}
 
 /* ---- skiff_app_env ---- */
 
@@ -186,10 +239,12 @@ static skiff_err guarded_perform(skiff_transport *transport, const skiff_http_re
     if (!try_take_network(platform)) {
         return SKIFF_ERR_NET_CONNECTION_LOST;
     }
+    const long long started_us = sceKernelGetSystemTimeWide();
     const skiff_err err = guarded->inner->ops->perform(guarded->inner, request, response);
     if (!already_held) {
         give_network(platform);
     }
+    log_request(platform, started_us, response, err);
     return err;
 }
 
@@ -482,6 +537,7 @@ void skiff_psp_app_frame(skiff_psp_app *platform, const skiff_app_view *view) {
         }
     }
     skiff_psp_ui_present(&platform->ui);
+    count_frame(platform);
 }
 
 void skiff_psp_app_close_dialog(skiff_psp_app *platform) {

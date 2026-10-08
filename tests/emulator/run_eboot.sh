@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Boots a check EBOOT in PPSSPPHeadless and passes only if it reports "SKIFF <NAME> OK". Used for
-# the self-test (NAME=SELFTEST, markers in include/skiff/selftest.h) and the TLS toolchain probe
-# (NAME="TLS PROBE", markers in tests/security/tls_probe.c).
-# Usage: tests/emulator/run_eboot.sh <path/to/EBOOT.PBP> <NAME> [timeout seconds]
+# Boots a check EBOOT (or the launch check's disc image) in PPSSPPHeadless and passes only if it
+# reports "SKIFF <NAME> OK". Used for the self-test (NAME=SELFTEST, markers in
+# include/skiff/selftest.h) and the TLS toolchain probe (NAME="TLS PROBE", markers in
+# tests/security/tls_probe.c).
+# Usage: tests/emulator/run_eboot.sh <path/to/EBOOT.PBP or .iso/.cso> <NAME> [timeout seconds]
 #
 # The timeout is real time, while an EBOOT paces itself in emulated time, and the software renderer
 # draws every frame on the host's CPU: an EBOOT that draws for a fixed emulated time takes longer on

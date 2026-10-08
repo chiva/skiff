@@ -36,6 +36,18 @@
  * then fails is shown with Retry. Quitting waits as long as the worker would. */
 #define SKIFF_PSP_APP_DROP_TIMEOUT_US (1000LL * 1000)
 #define SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US SKIFF_PSP_WORKER_DISCONNECT_TIMEOUT_US
+/* How often skiff.log gets the frame, memory and worker stack figures, at [log] level = debug. */
+#define SKIFF_PSP_APP_STATS_PERIOD_US (10LL * 1000 * 1000)
+
+/* Measurements for the hardware tier (row A1): logged at debug level, so a player's skiff.log at
+ * the default level never has them. Frames are timed from one present to the next. */
+typedef struct skiff_psp_app_stats {
+    long long period_start_us;
+    long long last_frame_us;
+    long long gap_total_us;
+    long long gap_max_us;
+    int frames;
+} skiff_psp_app_stats;
 
 typedef struct skiff_psp_app {
     skiff_storage *storage;
@@ -78,6 +90,8 @@ typedef struct skiff_psp_app {
     skiff_psp_dialog *dialog;
     /* A dialog would not close: end without tearing anything down. */
     int dialog_stuck;
+
+    skiff_psp_app_stats stats;
 } skiff_psp_app;
 
 /*
@@ -94,7 +108,9 @@ skiff_app_env skiff_psp_app_env(skiff_psp_app *platform);
 /* The actions of this frame from the buttons. */
 unsigned skiff_psp_app_read_input(skiff_psp_app *platform);
 
-/* Draws view, runs the dialog it asks for, and presents the frame. */
+/* Draws view, runs the dialog it asks for, and presents the frame; every
+ * SKIFF_PSP_APP_STATS_PERIOD_US also logs the frame times, memory and the worker's stack at debug
+ * level. */
 void skiff_psp_app_frame(skiff_psp_app *platform, const skiff_app_view *view);
 
 /* Asks an open dialog to close and runs frames until it has (or is given up on). */

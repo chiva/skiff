@@ -189,7 +189,13 @@ static void find_platform(skiff_app *app) {
     /* No PSP platform in RomM: the library is empty, which is not an error. */
     app->has_platform = err == SKIFF_OK;
     app->connect = CONNECT_DONE;
-    app_start_worker(app);
+    err = app_start_worker(app);
+    if (err != SKIFF_OK) {
+        /* Downloads would wait for ever: say so instead of browsing as if they ran. */
+        app_show_error(app, err, NULL, MESSAGE_RETRY_WORKER, MESSAGE_QUIT, SKIFF_TEXT_QUIT,
+                       SKIFF_APP_SCREEN_LIBRARY);
+        return;
+    }
     app_library_open(app);
 }
 

@@ -135,6 +135,9 @@ typedef enum skiff_language {
       "The download list is full. Clear finished downloads to add more.",                          \
       "La lista de descargas está llena. Borra las descargas terminadas para añadir más.")         \
     X(SKIFF_TEXT_QUEUE_COUNT, 1, "{1} downloads", "{1} descargas")                                 \
+    X(SKIFF_TEXT_CONFIRM_SERVER_CHANGE, 0,                                                         \
+      "Downloads from the current server will be cancelled. Change the server?",                   \
+      "Se cancelarán las descargas del servidor actual. ¿Cambiar de servidor?")                    \
     X(SKIFF_TEXT_CONFIRM_CANCEL, 0, "Cancel this download? What it has downloaded is deleted.",    \
       "¿Cancelar esta descarga? Se borrará lo que haya descargado.")                               \
     /* Settings. */                                                                                \

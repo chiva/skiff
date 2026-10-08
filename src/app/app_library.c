@@ -52,12 +52,31 @@ static const skiff_romm_rom_summary *rom_at(skiff_app *app, size_t index, const 
     return &page->page.items[at];
 }
 
-void app_library_open(skiff_app *app) {
-    app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
-    if (app->has_platform && !app->total_known) {
+/* The first page, or the page of a row on screen that is not loaded; 0 when every row is. */
+static int request_missing_page(skiff_app *app) {
+    if (!app->has_platform) {
+        return 0;
+    }
+    if (!app->total_known) {
         app->request = REQUEST_PAGE;
         app->request_page = 0;
+        return 1;
     }
+    for (size_t i = 0; i < app->library.rows && app->library.first + i < app->library.count; i++) {
+        const size_t index = app->library.first + i;
+        if (cached_page(app, index / SKIFF_ROMM_PAGE_SIZE) == NULL) {
+            app->request = REQUEST_PAGE;
+            app->request_page = index / SKIFF_ROMM_PAGE_SIZE;
+            app->dirty = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void app_library_open(skiff_app *app) {
+    app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
+    (void)request_missing_page(app);
 }
 
 void app_library_refresh_markers(skiff_app *app) { app->dirty = 1; }
@@ -78,7 +97,9 @@ static void load_page(skiff_app *app) {
     if (err != SKIFF_OK) {
         memset(page, 0, sizeof *page);
         app_network_failed(app, err);
-        app_show_error(app, err, NULL, MESSAGE_BACK, MESSAGE_NONE, SKIFF_TEXT_OK,
+        app->failed_request = REQUEST_PAGE;
+        app->failed_page = app->request_page;
+        app_show_error(app, err, NULL, MESSAGE_RETRY_REQUEST, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
@@ -108,7 +129,8 @@ static void load_rom(skiff_app *app) {
     if (err != SKIFF_OK) {
         app->has_rom = 0;
         app_network_failed(app, err);
-        app_show_error(app, err, NULL, MESSAGE_BACK, MESSAGE_NONE, SKIFF_TEXT_OK,
+        app->failed_request = REQUEST_ROM;
+        app_show_error(app, err, NULL, MESSAGE_RETRY_REQUEST, MESSAGE_BACK, SKIFF_TEXT_BACK,
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
@@ -207,14 +229,8 @@ void app_library_update(skiff_app *app, unsigned actions) {
         app->dirty = 1;
     }
     /* The selected row's page, and the rest of the screen's, load as they come into view. */
-    for (size_t i = 0; i < app->library.rows && app->library.first + i < app->library.count; i++) {
-        const size_t index = app->library.first + i;
-        if (cached_page(app, index / SKIFF_ROMM_PAGE_SIZE) == NULL) {
-            app->request = REQUEST_PAGE;
-            app->request_page = index / SKIFF_ROMM_PAGE_SIZE;
-            app->dirty = 1;
-            return;
-        }
+    if (request_missing_page(app)) {
+        return;
     }
     if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->library.count > 0) {
         const skiff_romm_rom_summary *rom = rom_at(app, app->library.selected, NULL);
@@ -342,6 +358,12 @@ static void download(skiff_app *app) {
     if (app_queue_job_for(app, app->rom.summary.id) != NULL) {
         app_queue_refresh(app);
         app_set_screen(app, SKIFF_APP_SCREEN_QUEUE);
+        return;
+    }
+    const skiff_err worker = app_start_worker(app);
+    if (worker != SKIFF_OK) {
+        app_show_error(app, worker, NULL, MESSAGE_RETRY_WORKER, MESSAGE_BACK, SKIFF_TEXT_BACK,
+                       SKIFF_APP_SCREEN_DETAILS);
         return;
     }
     if (app_queue_unfinished(app) >= SKIFF_JOBS_MAX) {

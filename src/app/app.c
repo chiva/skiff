@@ -192,7 +192,7 @@ static void on_downloaded(void *ctx, const skiff_job *job) {
         record.has_crc32 = job->has_crc32;
         record.crc32 = job->crc32;
         if (app->config.clock == NULL ||
-            app->config.clock(app->config.clock_ctx, &record.installed_ms) != 0) {
+            app->config.clock(app->config.clock_ctx, &record.installed_ms) == 0) {
             record.installed_ms = 0;
         }
         app_lock_manifest(app);
@@ -315,9 +315,12 @@ static void start(skiff_app *app) {
 
 /* ---- The worker ---- */
 
-void app_start_worker(skiff_app *app) {
-    if (app->worker_running || app->jobs == NULL) {
-        return;
+skiff_err app_start_worker(skiff_app *app) {
+    if (app->worker_running) {
+        return SKIFF_OK;
+    }
+    if (app->jobs == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
     }
     app->worker_settings = app->settings;
     skiff_err err = skiff_app_transport_settings_from(&app->worker_settings, &app->config.roots,
@@ -334,6 +337,7 @@ void app_start_worker(skiff_app *app) {
     app->worker_running = err == SKIFF_OK;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "worker start: %s (%d)", skiff_err_name(err), (int)err);
+    return err;
 }
 
 int app_stop_worker(skiff_app *app) {
@@ -454,7 +458,8 @@ static void message_update(skiff_app *app, unsigned actions) {
         action = app->message.ok;
     } else if ((actions & SKIFF_UI_ACTION_MENU) && app->message.other != MESSAGE_NONE) {
         action = app->message.other;
-    } else if ((actions & SKIFF_UI_ACTION_BACK) && app->message.ok == MESSAGE_BACK) {
+    } else if ((actions & SKIFF_UI_ACTION_BACK) &&
+               (app->message.ok == MESSAGE_BACK || app->message.other == MESSAGE_BACK)) {
         action = MESSAGE_BACK;
     }
     switch (action) {
@@ -464,6 +469,28 @@ static void message_update(skiff_app *app, unsigned actions) {
     case MESSAGE_RETRY_CONNECT:
         app_connect_begin(app, app->connect);
         break;
+    case MESSAGE_RETRY_REQUEST:
+        if (!app->net_joined) {
+            app_connect_begin(app, CONNECT_NETWORK);
+        } else if (app->failed_request == REQUEST_ROM) {
+            app_set_screen(app, SKIFF_APP_SCREEN_DETAILS);
+            app->request = REQUEST_ROM;
+        } else {
+            app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
+            app->request = REQUEST_PAGE;
+            app->request_page = app->failed_page;
+        }
+        break;
+    case MESSAGE_RETRY_WORKER: {
+        const skiff_err err = app_start_worker(app);
+        if (err != SKIFF_OK) {
+            app_show_error(app, err, NULL, MESSAGE_RETRY_WORKER, MESSAGE_QUIT, SKIFF_TEXT_QUIT,
+                           SKIFF_APP_SCREEN_LIBRARY);
+        } else {
+            app_library_open(app);
+        }
+        break;
+    }
     case MESSAGE_PICK_NETWORK:
         app->profile = 0;
         app_connect_begin(app, CONNECT_NETWORK);
@@ -498,17 +525,24 @@ static void message_update(skiff_app *app, unsigned actions) {
 
 static void confirm_update(skiff_app *app, unsigned actions) {
     if (actions & SKIFF_UI_ACTION_BACK) {
-        app_set_screen(app, app->confirm == CONFIRM_REPLACE ? SKIFF_APP_SCREEN_DETAILS
-                                                            : SKIFF_APP_SCREEN_QUEUE);
+        app_set_screen(app, app->confirm == CONFIRM_REPLACE      ? SKIFF_APP_SCREEN_DETAILS
+                            : app->confirm == CONFIRM_CANCEL_JOB ? SKIFF_APP_SCREEN_QUEUE
+                                                                 : app->keyboard_from);
         return;
     }
     if (!(actions & SKIFF_UI_ACTION_CONFIRM)) {
         return;
     }
-    if (app->confirm == CONFIRM_REPLACE) {
+    switch (app->confirm) {
+    case CONFIRM_REPLACE:
         app_download_confirmed(app);
-    } else {
+        break;
+    case CONFIRM_CANCEL_JOB:
         app_cancel_confirmed(app, app->confirm_job);
+        break;
+    case CONFIRM_SERVER_CHANGE:
+        app_server_change_confirmed(app);
+        break;
     }
 }
 

@@ -30,6 +30,9 @@ typedef enum app_connect_step {
 typedef enum app_message_action {
     MESSAGE_BACK,
     MESSAGE_RETRY_CONNECT,
+    /* The page or ROM that failed to load, joining the Wi-Fi first when it was lost. */
+    MESSAGE_RETRY_REQUEST,
+    MESSAGE_RETRY_WORKER,
     MESSAGE_PICK_NETWORK,
     MESSAGE_NOTICE_SEEN,
     MESSAGE_NEW_PAIRING,
@@ -42,6 +45,7 @@ typedef enum app_message_action {
 typedef enum app_confirm_action {
     CONFIRM_REPLACE,
     CONFIRM_CANCEL_JOB,
+    CONFIRM_SERVER_CHANGE,
 } app_confirm_action;
 
 /* A request to RomM, made on the frame after the one that said it was coming. */
@@ -129,6 +133,8 @@ struct skiff_app {
     uint64_t total;
     uint64_t page_clock;
     uint64_t request_page;
+    /* What to load again when the player retries. */
+    uint64_t failed_page;
     int64_t note_until_ms;
     skiff_ui_list library;
     app_page pages[SKIFF_APP_CACHED_PAGES];
@@ -164,12 +170,15 @@ struct skiff_app {
     int has_platform;
     int total_known;
     app_request request;
+    app_request failed_request;
     int has_rom;
     int free_known;
 
     skiff_romm_server server;
     char profile_name[SKIFF_APP_TITLE_MAX];
     char note[SKIFF_TEXT_MAX];
+    /* An address waiting for the player to confirm that downloads will be cancelled. */
+    char pending_url[SKIFF_CONFIG_URL_MAX];
     char config_text[SKIFF_CONFIG_TEXT_MAX + 1];
     char edit_text[SKIFF_CONFIG_TEXT_MAX + 1];
 };
@@ -194,7 +203,7 @@ void app_lock_manifest(skiff_app *app);
 void app_unlock_manifest(skiff_app *app);
 /* Stops the worker for a change of server or token; 0 when it would not stop. */
 int app_stop_worker(skiff_app *app);
-void app_start_worker(skiff_app *app);
+skiff_err app_start_worker(skiff_app *app);
 /* Drops what was loaded from the old server, and the queue, so they are made again. */
 skiff_err app_reset_server(skiff_app *app);
 
@@ -238,6 +247,7 @@ const skiff_job *app_queue_job_for(const skiff_app *app, uint64_t rom_id);
 
 void app_settings_update(skiff_app *app, unsigned actions);
 void app_server_entered(skiff_app *app, const char *url);
+void app_server_change_confirmed(skiff_app *app);
 
 /* ---- app_view.c ---- */
 

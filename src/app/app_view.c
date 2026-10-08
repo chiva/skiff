@@ -476,6 +476,8 @@ static void settings_view(skiff_app *app) {
 static skiff_text_id action_label(app_message_action action) {
     switch (action) {
     case MESSAGE_RETRY_CONNECT:
+    case MESSAGE_RETRY_REQUEST:
+    case MESSAGE_RETRY_WORKER:
         return SKIFF_TEXT_RETRY;
     case MESSAGE_PICK_NETWORK:
         return SKIFF_TEXT_CHOOSE_NETWORK;
@@ -503,7 +505,8 @@ static void message_view(skiff_app *app) {
     view->line_count = message->line_count;
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, action_label(message->ok));
     if (message->other != MESSAGE_NONE) {
-        add_hint(app, SKIFF_UI_ACTION_MENU, message->other_label);
+        add_hint(app, message->other == MESSAGE_BACK ? SKIFF_UI_ACTION_BACK : SKIFF_UI_ACTION_MENU,
+                 message->other_label);
     }
 }
 

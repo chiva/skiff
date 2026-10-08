@@ -60,6 +60,7 @@ typedef struct fake_env {
     int worker_starts;
     int worker_stops;
     skiff_err stop_error;
+    skiff_err start_error;
     skiff_app_worker_spec spec;
 } fake_env;
 
@@ -147,6 +148,9 @@ static skiff_err env_random(void *ctx, unsigned char *out, size_t size) {
 static skiff_err env_start_worker(void *ctx, const skiff_app_worker_spec *spec) {
     fake_env *e = ctx;
     e->worker_starts++;
+    if (e->start_error != SKIFF_OK) {
+        return e->start_error;
+    }
     e->spec = *spec;
     return SKIFF_OK;
 }
@@ -293,8 +297,17 @@ static void serve_library(unsigned total) {
 
 /* ---- Driving the app ---- */
 
+/* 2026-09-21 21:46:40 UTC, plus the fake's monotonic clock. */
+#define UTC_BASE_MS 1790000000000LL
+
+static int fake_utc(void *ctx, int64_t *unix_ms) {
+    (void)ctx;
+    *unix_ms = UTC_BASE_MS + env_state.now_ms;
+    return 1;
+}
+
 static void create_app(void) {
-    const skiff_app_config config = {.storage = &storage.base, .roots = roots};
+    const skiff_app_config config = {.storage = &storage.base, .roots = roots, .clock = fake_utc};
     const skiff_app_env env = make_env();
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_create(&config, &env, &app));
 }
@@ -777,6 +790,8 @@ static void test_a_finished_download_shows_as_installed(void) {
     read_app_file(SKIFF_INSTALL_MANIFEST_NAME, manifest, sizeof manifest);
     TEST_PRINTF("installed.json: %s", manifest);
     TEST_ASSERT_NOT_NULL(strstr(manifest, "\"path\":\"games:/Game 1.iso\""));
+    TEST_PRINTF("the install time comes from the real-time clock");
+    TEST_ASSERT_NOT_NULL(strstr(manifest, "\"installed_ms\":179000"));
     frame(0);
     print_view();
     TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_INSTALLED), view()->rows[0].detail);
@@ -1001,6 +1016,134 @@ static void test_an_address_without_a_scheme_is_refused(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SERVER, view()->screen);
 }
 
+static void test_a_new_server_cancels_the_old_downloads(void) {
+    open_paired_library(1);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    print_view();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    TEST_ASSERT_TRUE(shows("Downloads from the current server will be cancelled."));
+    TEST_PRINTF("back keeps the server and the download");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(0, env_state.worker_stops);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_ASSERT_EQUAL_INT(1, env_state.worker_stops);
+    TEST_PRINTF("the old server's job is gone, so it never runs against the new one");
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+}
+
+static void test_a_failed_page_can_be_retried(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    serve_platforms();
+    char path[256];
+    snprintf(path, sizeof path, "/api/roms?platform_ids=1&limit=%d&offset=0" LIST_QUERY,
+             SKIFF_ROMM_PAGE_SIZE);
+    fake_route *broken = serve_raw(path, "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    broken->max_uses = 1;
+    serve_page(0, 2, 2);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[203]"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RETRY)));
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(2, view()->row_count);
+    TEST_PRINTF("a RomM error needs no new join");
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+}
+
+static void test_a_lost_network_is_joined_again_before_retrying(void) {
+    open_paired_library(30);
+    char path[256];
+    snprintf(path, sizeof path, "/api/roms?platform_ids=1&limit=%d&offset=25" LIST_QUERY,
+             SKIFF_ROMM_PAGE_SIZE);
+    fake_route *lost = serve_raw(path, JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    lost->max_uses = 1;
+    serve_page(25, 5, 30);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[111]"));
+    const int joins = env_state.net_starts;
+    const int opens = env_state.opens;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("joins %d -> %d, transports %d -> %d", joins, env_state.net_starts, opens,
+                env_state.opens);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_GREATER_THAN_INT(opens, env_state.opens);
+    TEST_ASSERT_TRUE(shows("Game 30"));
+}
+
+static void test_cancelling_pair_again_returns_to_the_library(void) {
+    open_paired_library(1);
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "token = " TOKEN));
+    TEST_ASSERT_EQUAL_INT(0, env_state.worker_stops);
+}
+
+static void test_a_server_change_that_cannot_be_saved_changes_nothing(void) {
+    open_paired_library(1);
+    storage.fail_suffix = SKIFF_STORAGE_DRAFT_SUFFIX;
+    storage.rename_error = SKIFF_ERR_STORAGE_IO;
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    print_view();
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_PRINTF("the worker still runs with the old server");
+    TEST_ASSERT_EQUAL_INT(0, env_state.worker_stops);
+    TEST_ASSERT_EQUAL_STRING(SERVER, app->settings.server_url);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+}
+
+static void test_a_worker_that_cannot_start_is_shown(void) {
+    env_state.start_error = SKIFF_ERR_NO_MEMORY;
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(1);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[2]"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RETRY)));
+    env_state.start_error = SKIFF_OK;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(2, env_state.worker_starts);
+}
+
 /* ---- The log ---- */
 
 static void test_secrets_and_the_log_level(void) {
@@ -1142,6 +1285,12 @@ int main(void) {
     RUN_TEST(test_a_new_server_stops_the_worker_and_asks_to_pair);
     RUN_TEST(test_a_worker_that_will_not_stop_asks_for_a_restart);
     RUN_TEST(test_an_address_without_a_scheme_is_refused);
+    RUN_TEST(test_a_new_server_cancels_the_old_downloads);
+    RUN_TEST(test_a_failed_page_can_be_retried);
+    RUN_TEST(test_a_lost_network_is_joined_again_before_retrying);
+    RUN_TEST(test_cancelling_pair_again_returns_to_the_library);
+    RUN_TEST(test_a_server_change_that_cannot_be_saved_changes_nothing);
+    RUN_TEST(test_a_worker_that_cannot_start_is_shown);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);
     RUN_TEST(test_wrapping_breaks_between_words_and_inside_long_ones);

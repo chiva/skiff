@@ -43,12 +43,17 @@ text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms
 `storage/` (the storage seam, logical roots, free space, safe names), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
 policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
-network stack, TLS hooks, the GU renderer) exist. The other layers arrive with the
+network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other layers arrive with the
 [roadmap](roadmap.md) phases that need them.
 
 ## Threads, power and suspend
 
 - **UI thread**: input, drawing, system dialogs. Never blocks on the network or the Memory Stick.
+  A Wi-Fi join takes 7 to 13 s on a PSP, so the UI thread starts it and looks at it once per frame
+  (`skiff_psp_net_connect_start()` and `skiff_psp_net_connect_poll()`, `src/platform/psp/net_psp.h`)
+  while it keeps drawing; the worker's blocking `skiff_psp_net_connect()` is a loop over the same
+  two calls. The profile to join is the one the network picker last connected through, found by
+  its name (`skiff_psp_net_connected_profile()`; with two profiles of the same name, the first).
 - **Worker thread**: runs one job at a time (download, save sync) from a persistent queue
   (`include/skiff/jobs.h`, `skiff_jobs_run_one()`), and posts progress and results to the UI as
   events: a small ring of state and recovery events, oldest dropped if the UI falls behind, and
@@ -138,6 +143,14 @@ The UI is split along the platform line:
   bar, and the dim backdrop under a system dialog. It disables the depth test before every
   rectangle and writes vertices back from the data cache (AGENTS.md). The UI prototype is drawn by
   it, so the headless run in CI exercises the renderer.
+- `src/platform/psp/dialog_psp.h` runs the on-screen keyboard and the network picker one step per
+  frame: the caller draws its screen and the backdrop, then the dialog's update lets the system draw
+  over them. It keeps what the prototype learnt on hardware: a refused close is asked again every
+  frame, and a dialog still there 10 s after being asked to close is given up on (it may own the
+  screen and buttons, so the app ends there); the network modules stay loaded under an open or
+  stuck picker. The keyboard works in UTF-16; `skiff/ui.h` converts to and from UTF-8, with invalid
+  input replaced by U+FFFD, so the conversion is host-tested and checked by the self-test on
+  the PSP's signed `char`. The UI prototype runs its dialogs through this module.
 
 ## Errors and languages
 

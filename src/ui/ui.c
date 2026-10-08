@@ -232,6 +232,190 @@ skiff_err skiff_ui_fit_text(const char *text, float max_width, skiff_ui_measure_
     return SKIFF_OK;
 }
 
+/* ---- UTF-16, the system dialogs' text ---- */
+
+#define UTF8_CONTINUATION 0x80U
+#define UTF8_CONTINUATION_LAST 0xBFU
+#define UTF8_PAYLOAD_MASK 0x3FU
+#define UTF8_PAYLOAD_BITS 6U
+#define UTF8_LEAD_TWO 0xC0U
+#define UTF8_LEAD_THREE 0xE0U
+#define UTF8_LEAD_FOUR 0xF0U
+#define CODE_POINT_LAST_ONE_BYTE 0x7FU
+#define CODE_POINT_LAST_TWO_BYTES 0x7FFU
+#define CODE_POINT_LAST_BMP 0xFFFFU
+#define SURROGATE_HIGH_FIRST 0xD800U
+#define SURROGATE_LOW_FIRST 0xDC00U
+#define SURROGATE_LAST 0xDFFFU
+#define SURROGATE_PAYLOAD_MASK 0x3FFU
+#define SURROGATE_PAYLOAD_BITS 10U
+#define SUPPLEMENTARY_FIRST 0x10000U
+#define UTF8_MAX_BYTES 4U
+
+/*
+ * The well-formed UTF-8 lead bytes and the range their first continuation byte must fall in
+ * (Unicode, table 3-7): the narrower ranges rule out overlong forms, surrogates and code points
+ * above U+10FFFF. Later continuation bytes are always 0x80 to 0xBF.
+ */
+typedef struct utf8_lead {
+    unsigned char first;
+    unsigned char last;
+    unsigned char payload_mask;
+    unsigned char continuations;
+    unsigned char second_low;
+    unsigned char second_high;
+} utf8_lead;
+
+static const utf8_lead UTF8_LEADS[] = {
+    {0xC2, 0xDF, 0x1F, 1, 0x80, 0xBF}, {0xE0, 0xE0, 0x0F, 2, 0xA0, 0xBF},
+    {0xE1, 0xEC, 0x0F, 2, 0x80, 0xBF}, {0xED, 0xED, 0x0F, 2, 0x80, 0x9F},
+    {0xEE, 0xEF, 0x0F, 2, 0x80, 0xBF}, {0xF0, 0xF0, 0x07, 3, 0x90, 0xBF},
+    {0xF1, 0xF3, 0x07, 3, 0x80, 0xBF}, {0xF4, 0xF4, 0x07, 3, 0x80, 0x8F},
+};
+
+static const utf8_lead *find_utf8_lead(unsigned lead) {
+    for (size_t i = 0; i < sizeof UTF8_LEADS / sizeof UTF8_LEADS[0]; i++) {
+        if (lead >= UTF8_LEADS[i].first && lead <= UTF8_LEADS[i].last) {
+            return &UTF8_LEADS[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * The character starting at bytes[*position], moving *position past it. An invalid part decodes as
+ * the replacement character and is left after its longest valid prefix, so the byte that broke it
+ * starts the next character (the terminating NUL included).
+ */
+static uint32_t decode_utf8(const unsigned char *bytes, size_t *position) {
+    const unsigned lead = bytes[*position];
+    (*position)++;
+    if (lead <= CODE_POINT_LAST_ONE_BYTE) {
+        return lead;
+    }
+    const utf8_lead *form = find_utf8_lead(lead);
+    if (form == NULL) {
+        return SKIFF_UI_REPLACEMENT_CHARACTER;
+    }
+    uint32_t code = lead & form->payload_mask;
+    unsigned low = form->second_low;
+    unsigned high = form->second_high;
+    for (unsigned i = 0; i < form->continuations; i++) {
+        const unsigned byte = bytes[*position];
+        if (byte < low || byte > high) {
+            return SKIFF_UI_REPLACEMENT_CHARACTER;
+        }
+        code = (code << UTF8_PAYLOAD_BITS) | (byte & UTF8_PAYLOAD_MASK);
+        (*position)++;
+        low = UTF8_CONTINUATION;
+        high = UTF8_CONTINUATION_LAST;
+    }
+    return code;
+}
+
+skiff_err skiff_ui_utf8_to_utf16(const char *text, uint16_t *out, size_t out_units,
+                                 size_t *length) {
+    if (length != NULL) {
+        *length = 0;
+    }
+    if (out != NULL && out_units > 0) {
+        out[0] = 0;
+    }
+    if (text == NULL || out == NULL || out_units == 0) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const unsigned char *bytes = (const unsigned char *)text;
+    size_t position = 0;
+    size_t used = 0;
+    while (bytes[position] != '\0') {
+        const uint32_t code = decode_utf8(bytes, &position);
+        const size_t units = code > CODE_POINT_LAST_BMP ? 2 : 1;
+        if (used + units >= out_units) {
+            out[0] = 0;
+            return SKIFF_ERR_BUFFER_TOO_SMALL;
+        }
+        if (units == 1) {
+            out[used++] = (uint16_t)code;
+        } else {
+            const uint32_t offset = code - SUPPLEMENTARY_FIRST;
+            out[used++] = (uint16_t)(SURROGATE_HIGH_FIRST | (offset >> SURROGATE_PAYLOAD_BITS));
+            out[used++] = (uint16_t)(SURROGATE_LOW_FIRST | (offset & SURROGATE_PAYLOAD_MASK));
+        }
+    }
+    out[used] = 0;
+    if (length != NULL) {
+        *length = used;
+    }
+    return SKIFF_OK;
+}
+
+static int is_surrogate(uint32_t unit) {
+    return unit >= SURROGATE_HIGH_FIRST && unit <= SURROGATE_LAST;
+}
+
+static int is_low_surrogate(uint32_t unit) {
+    return unit >= SURROGATE_LOW_FIRST && unit <= SURROGATE_LAST;
+}
+
+/* The character starting at text[*index], moving *index past it (a pair is one character). */
+static uint32_t decode_utf16(const uint16_t *text, size_t max_units, size_t *index) {
+    const uint32_t unit = text[*index];
+    (*index)++;
+    if (!is_surrogate(unit)) {
+        return unit;
+    }
+    if (is_low_surrogate(unit) || *index >= max_units || !is_low_surrogate(text[*index])) {
+        return SKIFF_UI_REPLACEMENT_CHARACTER;
+    }
+    const uint32_t low = text[*index];
+    (*index)++;
+    return SUPPLEMENTARY_FIRST + ((unit - SURROGATE_HIGH_FIRST) << SURROGATE_PAYLOAD_BITS) +
+           (low - SURROGATE_LOW_FIRST);
+}
+
+/* code as UTF-8 into bytes; returns how many it took. */
+static size_t encode_utf8(uint32_t code, unsigned char bytes[UTF8_MAX_BYTES]) {
+    if (code <= CODE_POINT_LAST_ONE_BYTE) {
+        bytes[0] = (unsigned char)code;
+        return 1;
+    }
+    size_t count = code <= CODE_POINT_LAST_TWO_BYTES ? 2 : code <= CODE_POINT_LAST_BMP ? 3 : 4;
+    const unsigned lead = count == 2   ? UTF8_LEAD_TWO
+                          : count == 3 ? UTF8_LEAD_THREE
+                                       : UTF8_LEAD_FOUR;
+    for (size_t i = count - 1; i > 0; i--) {
+        bytes[i] = (unsigned char)(UTF8_CONTINUATION | (code & UTF8_PAYLOAD_MASK));
+        code >>= UTF8_PAYLOAD_BITS;
+    }
+    bytes[0] = (unsigned char)(lead | code);
+    return count;
+}
+
+skiff_err skiff_ui_utf16_to_utf8(const uint16_t *text, size_t max_units, char *out,
+                                 size_t out_size) {
+    if (out != NULL && out_size > 0) {
+        out[0] = '\0';
+    }
+    if (text == NULL || out == NULL || out_size == 0) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    size_t index = 0;
+    size_t used = 0;
+    while (index < max_units && text[index] != 0) {
+        unsigned char bytes[UTF8_MAX_BYTES];
+        const size_t count = encode_utf8(decode_utf16(text, max_units, &index), bytes);
+        if (used + count >= out_size) {
+            out[0] = '\0';
+            return SKIFF_ERR_BUFFER_TOO_SMALL;
+        }
+        for (size_t i = 0; i < count; i++) {
+            out[used++] = (char)bytes[i];
+        }
+    }
+    out[used] = '\0';
+    return SKIFF_OK;
+}
+
 /* ---- Progress ---- */
 
 void skiff_ui_progress_start(skiff_ui_progress *progress, uint64_t done, uint64_t total,

@@ -173,10 +173,21 @@ target_link_libraries(skiff_psp_ui PUBLIC skiff_core intrafont pspgu)
 target_include_directories(skiff_psp_ui PUBLIC src/platform/psp)
 skiff_set_warnings(skiff_psp_ui)
 
-# UI stack prototype (Phase 1 hardware spike, now drawn by skiff_psp_ui): the renderer with the
-# firmware fonts, the on-screen keyboard and the network picker (see tests/prototype/ui_proto.c).
+# The system dialogs (src/platform/psp/dialog_psp.h): the on-screen keyboard and the network picker,
+# one step per frame of the UI's GU loop, with text converted by skiff_core (skiff/ui.h). psputility
+# is left out for the reason given for skiff_psp_net.
+add_library(skiff_psp_dialog OBJECT src/platform/psp/dialog_psp.c)
+target_compile_options(skiff_psp_dialog PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_dialog PUBLIC skiff_core)
+target_include_directories(skiff_psp_dialog PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_dialog)
+
+# UI stack prototype (Phase 1 hardware spike, now drawn by skiff_psp_ui and run by skiff_psp_dialog):
+# the renderer with the firmware fonts, the on-screen keyboard and the network picker (see
+# tests/prototype/ui_proto.c).
 skiff_add_psp_app(skiff_ui_proto "${SKIFF_PBP_TITLE} UI prototype" tests/prototype/ui_proto.c)
-target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ui)
+target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net skiff_psp_ui
+                                             skiff_psp_dialog)
 
 # The download queue's worker on the PSP (src/platform/psp/jobs_psp.h): the thread running
 # skiff_jobs_run_one(), and the hooks the runner asks for (curl transport, Wi-Fi switch, rejoining

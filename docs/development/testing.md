@@ -468,7 +468,8 @@ Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PR
 [Architecture](architecture.md#ui-gu--intrafont). Skiff's renderer (`src/platform/psp/ui_psp.h`)
 draws a scrolling 20-item list (14 rows on screen, one title cut to fit), a progress bar, and the
 header and footer with button symbols. It uses intraFont with the firmware's Latin font and its
-Japanese font as fallback. The on-screen keyboard and the network picker open from the render loop.
+Japanese font as fallback. The on-screen keyboard and the network picker open from the render loop,
+run by the app's dialog module (`src/platform/psp/dialog_psp.h`).
 It links the app's module info, so its memory figures are the app's.
 
 On a PSP:
@@ -482,8 +483,9 @@ On a PSP:
    run). The text appears top right.
 3. Square loads the network modules and opens the network picker: pick a connection that works
    and let it connect (cancelling or a failed connection fails the run). The IP address appears top
-   right. When the picker closes, the prototype drops the connection, waits until it is gone, and
-   unloads the modules.
+   right. Once the picker has closed, the prototype finds the Network Settings profile the
+   connection uses by its name (logged as `network: connection uses profile N (name)`), as the app
+   will remember it, then drops the connection, waits until it is gone, and unloads the modules.
 4. HOME → Quit (or START) ends the run.
 
 Each step is written to `result.txt` as it happens (dialog opened, shown, closed; any failing
@@ -496,8 +498,8 @@ before the network modules load, after they load and after they unload, with how
 unloading gave back (reported, not judged).
 
 It ends with `SKIFF UI PROTO OK` only if: both fonts rendered; the keyboard was shown, and text
-was typed and confirmed; the picker was shown and connected (an IP address was obtained); the
-connection was dropped and the modules unloaded; and no dialog call failed or timed out (a dialog
+was typed and confirmed; the picker was shown and connected (an IP address was obtained) through a
+profile found by its name; the connection was dropped and the modules unloaded; and no dialog call failed or timed out (a dialog
 left open for 5 minutes is closed and fails) and no controller read failed. Otherwise it ends with
 `SKIFF UI PROTO FAIL`.
 

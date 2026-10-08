@@ -80,6 +80,10 @@ typedef struct selftest_check {
 /* 1.5 GiB, with the Spanish decimal comma: 64-bit arithmetic and %llu on newlib. */
 #define SKIFF_SELFTEST_UI_BYTES 1610612736ULL
 #define SKIFF_SELFTEST_UI_BYTES_TEXT "1,5 GB"
+/* Keyboard text in each UTF-8 length: "Café 日本" and U+1F3AE, a surrogate pair in UTF-16. */
+#define SKIFF_SELFTEST_UTF16_TEXT "Caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x8E\xAE"
+#define SKIFF_SELFTEST_UTF16_UNITS 10U
+#define SKIFF_SELFTEST_UTF16_HIGH_SURROGATE 0xD83CU
 #define SKIFF_SELFTEST_TEXT_MAX 96
 /* A queue file of one job, and a ROM id of 15 digits: past 32 bits, and the most the file keeps
  * exactly. */
@@ -300,6 +304,24 @@ static const char *check_ui_text_fitting(void) {
                : "a title was not cut between characters";
 }
 
+/* The system dialogs' text: UTF-8 to UTF-16 and back, which on the PSP's signed char must still
+ * tell lead, continuation and four-byte bytes apart. */
+static const char *check_ui_utf16(void) {
+    uint16_t units[SKIFF_SELFTEST_TEXT_MAX];
+    size_t length = 0;
+    char back[SKIFF_SELFTEST_TEXT_MAX];
+    if (skiff_ui_utf8_to_utf16(SKIFF_SELFTEST_UTF16_TEXT, units, SKIFF_SELFTEST_TEXT_MAX,
+                               &length) != SKIFF_OK ||
+        length != SKIFF_SELFTEST_UTF16_UNITS ||
+        units[length - 2] != SKIFF_SELFTEST_UTF16_HIGH_SURROGATE) {
+        return "UTF-8 came out wrong as UTF-16";
+    }
+    return skiff_ui_utf16_to_utf8(units, length, back, sizeof back) == SKIFF_OK &&
+                   strcmp(back, SKIFF_SELFTEST_UTF16_TEXT) == 0
+               ? NULL
+               : "UTF-16 came back as other UTF-8";
+}
+
 /* The download queue's file is written with cJSON's number printing (newlib's snprintf on the
  * PSP) and read back with strtod: a size just under 4 GiB and a 15-digit ROM id must survive. */
 static const char *check_jobs_queue(void) {
@@ -384,6 +406,7 @@ static const selftest_check CHECKS[] = {
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},
+    {"ui-utf16", check_ui_utf16},
     {"jobs-queue", check_jobs_queue},
     {"install-manifest", check_install_manifest},
 };

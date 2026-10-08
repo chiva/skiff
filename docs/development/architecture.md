@@ -63,10 +63,10 @@ network stack, TLS hooks, the GU renderer) exist. The other layers arrive with t
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
   at a lower priority than the UI (`SKIFF_PSP_WORKER_PRIORITY` 0x30 against the main thread's 0x20,
   `src/platform/psp/jobs_psp.h`): the UI waits for every vertical blank and draws first, and the
-  worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 64 KB to
-  start) comes from the same memory as the network modules, about 148 KB once joined in blocks of
-  at most 80 KB, so its high-water mark (`sceKernelGetThreadStackFreeSize()`) is measured on
-  hardware (the [jobs probe](testing.md#jobs-probe)). The queue's two locks and the log each
+  worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 64 KB) comes
+  from the same memory as the network modules, about 148 KB once joined in blocks of at most
+  80 KB; on a PSP a download used 12 KB of it and left 84 KB free
+  ([hardware findings](hardware-findings.md#worker-thread)). The queue's two locks and the log each
   have their own semaphore-backed mutex (the queue logs while it holds its commit lock); rejoining or reloading the
   network can take a further lock other threads share. Quitting asks the runner to stop and waits
   up to 5 s for the thread; a join still in progress is left to the process exit.

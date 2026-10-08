@@ -17,7 +17,7 @@ as orders of magnitude.
 | Memory Stick | 64 GB, 84% full during the resume and speed runs |
 | Wi-Fi | open access point on channel 6, signal 95–100%, WLAN Power Save off unless stated (the W7 resume runs did not record it) |
 | Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy) on a Mac on the same LAN; TCP connect ≈10 ms |
-| Dates | 2026-10-04 to 2026-10-06 |
+| Dates | 2026-10-04 to 2026-10-08 |
 
 ## Decisions at a glance
 
@@ -37,6 +37,8 @@ as orders of magnitude.
 | Checkpoint interval | syncs cost 0.24 s per 64 MiB | every 4 MiB |
 | Auto Sleep during a download | no suspend in 270 s with `scePowerTick()` every 5 s | keep-awake on during jobs |
 | Date for certificate checks | the C library's `time()` has no date on a PSP | Mbed TLS reads the real-time clock (`sceRtc`) |
+| Worker thread stack | 11,952 of 65,536 bytes used in every run, a module reload included; it leaves 84 KB of system memory once joined | 64 KB until the app gives the worker more to do ([worker thread](#worker-thread)) |
+| Queue and the UI | the UI waited 113 ms on the queue's lock while the worker saved the queue file | two locks: the UI's reads never wait for a save |
 
 ## Entropy
 
@@ -158,6 +160,7 @@ The emulator tier runs every probe in CI, but these differences only showed on h
 - intraFont turns depth testing back on after printing. Without a depth buffer the PSP then
   discards rectangles drawn afterwards; PPSSPP draws them.
 - A suspend cannot be tested in PPSSPP; on the PSP it invalidates open files.
+- The worker thread used 4 KB of stack in PPSSPP, where TLS cannot start, and 12 KB on the PSP.
 
 ## Resume and power
 
@@ -217,11 +220,49 @@ Decision: downloads write 1 MiB at a time, on their own thread
 (`SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES`). A writer thread is not worth its complexity. At 410 KB/s a
 1 GB game takes about 43 minutes.
 
+## Worker thread
+
+[Jobs probe](testing.md#jobs-probe), 2026-10-07 and 2026-10-08: the download queue on its worker
+thread (priority 0x30, the UI 0x20, stack 64 KB) fetching a 64 MiB file over TLS 1.3 at 333 MHz,
+while the main thread draws a frame every vertical blank. Six runs turned the Wi-Fi switch off and
+on, five of them also suspended the PSP, and one was quit with HOME and relaunched. Design:
+[Threads, power and suspend](architecture.md#threads-power-and-suspend).
+
+| Item | Value |
+|---|---|
+| Worker stack used | 11,952 of 65,536 bytes, the same in every run, including one that reloaded the network modules (PPSSPP, without TLS: 4,076) |
+| System memory once joined / with the worker started | 148 KB (largest block 80 KB) / 84 KB (80 KB), unchanged while downloading |
+| Heap in use once the worker started | 405 KB with the UI (its font included), 248 KB without |
+| Drawing a frame (text, progress bar) | mean 1.4–1.5 ms, longest 26 ms |
+| Download speed, per attempt | 345–445 KB/s while drawing (once 218 KB/s after a suspend, not seen again), 431–489 KB/s without; on 2026-10-08 a download without drawing ran at 359 KB/s, and two hours later at 480 KB/s |
+| Longest wait for the queue's lock | 113 ms at the end of a job (the save) with one lock; 0 ms with two |
+| Stopping the worker | 210–247 ms |
+| Wi-Fi switch off: noticed / bytes again after switching on | 150–684 ms / 6.4–12.8 s |
+| Suspend: bytes again after waking | 11.7–16.8 s |
+| HOME → Quit at 65%, then relaunch | the job resumed from its `.part` file and finished; CRC-32 matches |
+
+Drawing costs about 1.4 ms of each 16.7 ms frame. Speed between runs varied more than that (the
+signal moved between 75% and 100% within single runs), so a comparison of two runs cannot show
+it, and the download stays limited by the radio, not the CPU.
+
+Rejoining the access point failed in about a third of recoveries, after either interruption: 2 of
+5 suspends and 2 of 6 Wi-Fi switch tests, with `sceNetApctlConnect` returning 0x80410106 or
+0x80410D16; once a module reload failed too. The queue's recovery (rejoin, then reload, then retry
+after a pause) brought every download back.
+
+Before `skiff.log` kept refused lines, the line written just after waking was lost in all three
+runs that suspended; it is kept now.
+
+The power callback reaches the program about 2.2 s after the frame that spans a sleep, so a
+check that something "happened during a suspend" has to wait that long for it.
+
 ## Open questions
 
-- **Memory for threads.** Once joined, about 148 KB of system memory is free, in blocks of at most
-  80 KB. Size the worker thread's stack, and `PSP_HEAP_SIZE_KB` if needed, when `jobs/` adds the
-  thread.
+- **Worker stack in the app.** The 12 KB measured covers downloads only. If the app runs RomM
+  requests (JSON parsing) on the worker, measure again before shrinking the 64 KB stack.
+- **Rejoin failures.** About a third of rejoins failed (0x80410106, 0x80410D16), after a suspend
+  or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
+  costs. Watch the app's logs.
 - **Slow first request.** The 3.3 s first request after joining was seen once and not reproduced;
   watch for it in the app's logs.
 - **Other consoles.** No numbers yet for the PSP-2000, 3000 or Go (64 MB), or for other access

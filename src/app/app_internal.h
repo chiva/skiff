@@ -33,6 +33,8 @@ typedef enum app_message_action {
     /* The page or ROM that failed to load, joining the Wi-Fi first when it was lost. */
     MESSAGE_RETRY_REQUEST,
     MESSAGE_RETRY_WORKER,
+    /* Carry on connecting from where it stopped (after a change that was undone). */
+    MESSAGE_RESUME,
     MESSAGE_PICK_NETWORK,
     MESSAGE_NOTICE_SEEN,
     MESSAGE_NEW_PAIRING,
@@ -216,6 +218,8 @@ void app_pair_begin(skiff_app *app);
 void app_network_picked(skiff_app *app, skiff_app_dialog_result result);
 /* A request failed with err: the network may be gone, so the next connect joins first. */
 void app_network_failed(skiff_app *app, skiff_err err);
+/* Connected again: the library, or the details request that failed before. */
+void app_resume_after_connect(skiff_app *app);
 /* The browse transport and RomM client, made when missing; SKIFF_OK or why not. */
 skiff_err app_ensure_client(skiff_app *app);
 

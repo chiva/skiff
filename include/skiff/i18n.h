@@ -143,6 +143,9 @@ typedef enum skiff_language {
     /* Settings. */                                                                                \
     X(SKIFF_TEXT_SETTINGS_VERSION, 1, "Skiff {1}", "Skiff {1}")                                    \
     X(SKIFF_TEXT_SETTINGS_ROMM, 1, "RomM {1}", "RomM {1}")                                         \
+    X(SKIFF_TEXT_STOP_FAILED, 0,                                                                   \
+      "Skiff could not stop the downloads in time. Try again in a moment.",                        \
+      "Skiff no ha podido detener las descargas a tiempo. Vuelve a intentarlo en un momento.")     \
     X(SKIFF_TEXT_RESTART_TO_APPLY, 0, "Saved. Quit Skiff and open it again to use it.",            \
       "Guardado. Sal de Skiff y vuelve a abrirlo para usarlo.")                                    \
     /* Notices. */                                                                                 \

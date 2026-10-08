@@ -297,7 +297,7 @@ static void serve_library(unsigned total) {
 
 /* ---- Driving the app ---- */
 
-/* 2026-09-21 21:46:40 UTC, plus the fake's monotonic clock. */
+/* 2026-09-21 14:13:20 UTC, plus the fake's monotonic clock. */
 #define UTC_BASE_MS 1790000000000LL
 
 static int fake_utc(void *ctx, int64_t *unix_ms) {
@@ -402,6 +402,12 @@ static void open_details(unsigned id) {
     serve_rom(id);
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_DETAILS);
+}
+
+/* Opens the selected ROM's details where the request fails. */
+static void open_details_failing(void) {
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
 }
 
 static void record_installed(unsigned id, uint32_t crc) {
@@ -988,19 +994,27 @@ static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
     TEST_ASSERT_TRUE(shows("https://other.test/pair/device"));
 }
 
-static void test_a_worker_that_will_not_stop_asks_for_a_restart(void) {
+static void test_a_worker_that_will_not_stop_changes_nothing(void) {
     open_paired_library(1);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
     env_state.stop_error = SKIFF_ERR_NET_TIMEOUT;
     frame(SKIFF_UI_ACTION_MENU);
     frame(SKIFF_UI_ACTION_CONFIRM);
     skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
     frame(0);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
     print_view();
-    TEST_ASSERT_TRUE(shows("Quit Skiff and open it again"));
+    TEST_ASSERT_TRUE(shows("could not stop the downloads in time"));
+    TEST_PRINTF("the address, the token and the download all stay");
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
-    TEST_ASSERT_NOT_NULL(strstr(config, "url = https://other.test"));
-    TEST_PRINTF("the worker keeps what it was started with");
+    TEST_ASSERT_NOT_NULL(strstr(config, "url = " SERVER));
+    TEST_ASSERT_NOT_NULL(strstr(config, "token = " TOKEN));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
     TEST_ASSERT_EQUAL_STRING("Bearer " TOKEN, env_state.spec.romm->authorization);
 }
 
@@ -1113,7 +1127,7 @@ static void test_cancelling_pair_again_returns_to_the_library(void) {
     TEST_ASSERT_EQUAL_INT(0, env_state.worker_stops);
 }
 
-static void test_a_server_change_that_cannot_be_saved_changes_nothing(void) {
+static void test_a_server_change_that_cannot_be_saved_keeps_the_old_server(void) {
     open_paired_library(1);
     storage.fail_suffix = SKIFF_STORAGE_DRAFT_SUFFIX;
     storage.rename_error = SKIFF_ERR_STORAGE_IO;
@@ -1123,11 +1137,43 @@ static void test_a_server_change_that_cannot_be_saved_changes_nothing(void) {
     frame(0);
     print_view();
     TEST_ASSERT_TRUE(shows("[302]"));
-    TEST_PRINTF("the worker still runs with the old server");
-    TEST_ASSERT_EQUAL_INT(0, env_state.worker_stops);
     TEST_ASSERT_EQUAL_STRING(SERVER, app->settings.server_url);
+    TEST_PRINTF("OK connects to the old server again, with a new worker");
+    storage.rename_error = SKIFF_OK;
     frame(SKIFF_UI_ACTION_CONFIRM);
-    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(1, env_state.worker_stops);
+    TEST_ASSERT_EQUAL_INT(2, env_state.worker_starts);
+    TEST_ASSERT_EQUAL_STRING("Bearer " TOKEN, env_state.spec.romm->authorization);
+}
+
+static void test_a_failed_details_request_is_retried_for_the_same_rom(void) {
+    open_paired_library(2);
+    fake_route *broken = serve_raw("/api/roms/1", "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    broken->max_uses = 1;
+    open_details_failing();
+    TEST_ASSERT_TRUE(shows("[203]"));
+    serve_rom(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_TRUE(app->has_rom);
+    TEST_ASSERT_TRUE(shows("Game 1.iso"));
+}
+
+static void test_a_lost_connection_joins_again_then_opens_the_same_rom(void) {
+    open_paired_library(2);
+    fake_route *lost = serve_raw("/api/roms/1", JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    lost->max_uses = 1;
+    serve_rom(1);
+    const int joins = env_state.net_starts;
+    open_details_failing();
+    TEST_ASSERT_TRUE(shows("[111]"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_TRUE(app->has_rom);
+    TEST_ASSERT_TRUE(shows("Game 1.iso"));
 }
 
 static void test_a_worker_that_cannot_start_is_shown(void) {
@@ -1283,13 +1329,15 @@ int main(void) {
     RUN_TEST(test_the_downloads_screen_follows_the_worker);
     RUN_TEST(test_cancel_retry_and_clear_from_the_downloads_screen);
     RUN_TEST(test_a_new_server_stops_the_worker_and_asks_to_pair);
-    RUN_TEST(test_a_worker_that_will_not_stop_asks_for_a_restart);
+    RUN_TEST(test_a_worker_that_will_not_stop_changes_nothing);
     RUN_TEST(test_an_address_without_a_scheme_is_refused);
     RUN_TEST(test_a_new_server_cancels_the_old_downloads);
     RUN_TEST(test_a_failed_page_can_be_retried);
     RUN_TEST(test_a_lost_network_is_joined_again_before_retrying);
     RUN_TEST(test_cancelling_pair_again_returns_to_the_library);
-    RUN_TEST(test_a_server_change_that_cannot_be_saved_changes_nothing);
+    RUN_TEST(test_a_server_change_that_cannot_be_saved_keeps_the_old_server);
+    RUN_TEST(test_a_failed_details_request_is_retried_for_the_same_rom);
+    RUN_TEST(test_a_lost_connection_joins_again_then_opens_the_same_rom);
     RUN_TEST(test_a_worker_that_cannot_start_is_shown);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);

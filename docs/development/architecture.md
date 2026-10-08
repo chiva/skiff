@@ -133,9 +133,12 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   ones), `installed.json` has room (512 records), and a game already installed asks "Replace your
   installed copy?". `games:` is created first.
 - **Settings**: a new server address clears the token and RomM's device id (they belong to the old
-  server), stops the worker, rebuilds the queue and the client, and pairs again; "Pair again"
-  replaces the token the same way. When the worker will not stop in time, the change is saved for
-  the next launch.
+  server) and pairs again. The old server's downloads cannot run against the new one (other ROM
+  ids, other files), so the player confirms that they are cancelled, and the change goes in an
+  order that never lets them: stop the worker, cancel them, save `config.ini`, then rebuild the
+  queue and the client. A worker that will not stop in time changes nothing; a failed cancel or
+  save keeps the old server and starts a new worker for it. "Pair again" keeps the address and
+  the downloads and replaces the token, restarting the worker with it.
 - **Secrets**: the token and every custom header value of at least 8 characters are registered
   with the log; a shorter value cannot be found reliably and registering it would withhold every
   line.

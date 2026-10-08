@@ -487,10 +487,13 @@ static void message_update(skiff_app *app, unsigned actions) {
             app_show_error(app, err, NULL, MESSAGE_RETRY_WORKER, MESSAGE_QUIT, SKIFF_TEXT_QUIT,
                            SKIFF_APP_SCREEN_LIBRARY);
         } else {
-            app_library_open(app);
+            app_resume_after_connect(app);
         }
         break;
     }
+    case MESSAGE_RESUME:
+        app_connect_begin(app, app->connect);
+        break;
     case MESSAGE_PICK_NETWORK:
         app->profile = 0;
         app_connect_begin(app, CONNECT_NETWORK);

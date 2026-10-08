@@ -488,6 +488,7 @@ static skiff_text_id action_label(app_message_action action) {
     case MESSAGE_QUIT:
         return SKIFF_TEXT_QUIT;
     case MESSAGE_BACK:
+    case MESSAGE_RESUME:
     case MESSAGE_NOTICE_SEEN:
     case MESSAGE_NONE:
         break;

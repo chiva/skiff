@@ -21,6 +21,17 @@ void app_network_failed(skiff_app *app, skiff_err err) {
     app->transport = NULL;
 }
 
+void app_resume_after_connect(skiff_app *app) {
+    if (app->failed_request == REQUEST_ROM) {
+        app->failed_request = REQUEST_NONE;
+        app_set_screen(app, SKIFF_APP_SCREEN_DETAILS);
+        app->request = REQUEST_ROM;
+        return;
+    }
+    app->failed_request = REQUEST_NONE;
+    app_library_open(app);
+}
+
 void app_connect_begin(skiff_app *app, app_connect_step from) {
     app->connect = from;
     app->waiting_switch = 0;
@@ -196,7 +207,7 @@ static void find_platform(skiff_app *app) {
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
-    app_library_open(app);
+    app_resume_after_connect(app);
 }
 
 void app_connect_update(skiff_app *app, unsigned actions) {
@@ -253,7 +264,7 @@ void app_connect_update(skiff_app *app, unsigned actions) {
         }
         return;
     case CONNECT_DONE:
-        app_library_open(app);
+        app_resume_after_connect(app);
         return;
     }
 }

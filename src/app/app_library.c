@@ -118,14 +118,16 @@ static void load_page(skiff_app *app) {
 }
 
 static void load_rom(skiff_app *app) {
+    /* Into a copy: a failed request empties it, and a retry still needs the ROM's id. */
+    skiff_romm_rom fetched;
     skiff_err err = app_ensure_client(app);
     if (err == SKIFF_OK) {
-        err = skiff_romm_get_rom(&app->romm, app->rom.summary.id, &app->rom);
+        err = skiff_romm_get_rom(&app->romm, app->rom.summary.id, &fetched);
     }
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
                     SKIFF_APP_LOG_TAG, "ROM %llu: %zu file(s): %s (%d)",
-                    (unsigned long long)app->rom.summary.id, app->rom.file_count,
-                    skiff_err_name(err), (int)err);
+                    (unsigned long long)app->rom.summary.id,
+                    err == SKIFF_OK ? fetched.file_count : 0, skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
         app->has_rom = 0;
         app_network_failed(app, err);
@@ -134,6 +136,7 @@ static void load_rom(skiff_app *app) {
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
+    app->rom = fetched;
     app->has_rom = 1;
 }
 

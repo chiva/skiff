@@ -9,7 +9,8 @@
  * Threads: the UI thread runs the app and every hook here; the worker thread
  * (src/platform/psp/jobs_psp.h) runs the download queue. The network stack is used by one thread
  * at a time: the worker takes net_lock to rejoin or reload, and the UI holds it from the start of a
- * join to its end (several frames) and while the network picker is open.
+ * join to its end (several frames) and while the network picker is open. The UI never waits for it:
+ * while the worker rejoins (up to 30 s) it keeps drawing and tries again on the next frame.
  *
  * Teardown follows the worker: when it would not stop, nothing it may still use is freed or
  * unloaded (the queue, the log, the RomM client, TLS, the network, the mutexes); the process exit
@@ -58,8 +59,9 @@ typedef struct skiff_psp_app {
     int net_loaded;
     /* The UI holds net_lock: a join is pending, or the network picker is open. */
     int holds_net;
-    /* net_start found the access point already joined: net_poll reports it at once. */
-    int already_joined;
+    /* net_start asked to join join_profile: net_poll begins it once it has the network lock. */
+    int join_wanted;
+    int join_profile;
     int tls_started;
 
     skiff_psp_worker worker;

@@ -59,11 +59,13 @@ static skiff_err load_network(skiff_psp_app *platform) {
     return SKIFF_OK;
 }
 
-static void take_network(skiff_psp_app *platform) {
+/* The network lock without waiting: the worker may hold it for a whole rejoin (up to 30 s), and the
+ * UI keeps drawing meanwhile and tries again on the next frame. */
+static int try_take_network(skiff_psp_app *platform) {
     if (!platform->holds_net) {
-        skiff_psp_mutex_lock(&platform->net_lock);
-        platform->holds_net = 1;
+        platform->holds_net = skiff_psp_mutex_try_lock(&platform->net_lock);
     }
+    return platform->holds_net;
 }
 
 static void give_network(skiff_psp_app *platform) {
@@ -73,35 +75,41 @@ static void give_network(skiff_psp_app *platform) {
     }
 }
 
-static skiff_err net_start(void *ctx, int profile) {
-    skiff_psp_app *platform = ctx;
-    platform->already_joined = 0;
-    skiff_err err = load_network(platform);
-    if (err != SKIFF_OK) {
-        return err;
-    }
-    /* The worker may have rejoined already (after a suspend, say). */
+/* The join net_start asked for begins once the UI has the network lock: whether the access point is
+ * still joined is read under it too, since the worker may be tearing the connection down. */
+static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
+    platform->join_wanted = 0;
     if (skiff_psp_net_online(&platform->net) == SKIFF_OK) {
-        platform->already_joined = 1;
+        give_network(platform);
+        *joined = 1;
         return SKIFF_OK;
     }
-    take_network(platform);
     /* A connection half gone (out of range, after a suspend) is dropped before joining again. */
     (void)skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US);
-    err = skiff_psp_net_connect_start(&platform->net, profile, SKIFF_PSP_APP_JOIN_TIMEOUT_US);
+    const skiff_err err = skiff_psp_net_connect_start(&platform->net, platform->join_profile,
+                                                      SKIFF_PSP_APP_JOIN_TIMEOUT_US);
     if (err != SKIFF_OK) {
         give_network(platform);
     }
     return err;
 }
 
+static skiff_err net_start(void *ctx, int profile) {
+    skiff_psp_app *platform = ctx;
+    const skiff_err err = load_network(platform);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    platform->join_profile = profile;
+    platform->join_wanted = 1;
+    return SKIFF_OK;
+}
+
 static skiff_err net_poll(void *ctx, int *joined) {
     skiff_psp_app *platform = ctx;
     *joined = 0;
-    if (platform->already_joined) {
-        platform->already_joined = 0;
-        *joined = 1;
-        return SKIFF_OK;
+    if (platform->join_wanted) {
+        return try_take_network(platform) ? begin_join(platform, joined) : SKIFF_OK;
     }
     skiff_err result = SKIFF_OK;
     if (!skiff_psp_net_connect_poll(&platform->net, &result)) {
@@ -326,7 +334,8 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
 
 static void dialog_ended(skiff_psp_app *platform, skiff_psp_dialog_state state) {
     skiff_psp_dialog *dialog = platform->dialog;
-    if (dialog->kind == SKIFF_PSP_DIALOG_NETWORK) {
+    /* A stuck picker may still use the network: the lock stays held until the process exits. */
+    if (dialog->kind == SKIFF_PSP_DIALOG_NETWORK && state != SKIFF_PSP_DIALOG_STUCK) {
         give_network(platform);
     }
     if (state == SKIFF_PSP_DIALOG_STUCK) {
@@ -374,8 +383,11 @@ static int open_dialog(skiff_psp_app *platform, const skiff_app_view *view) {
     } else {
         err = load_network(platform);
         if (err == SKIFF_OK) {
-            /* The picker joins with the network modules: the worker must not rejoin meanwhile. */
-            take_network(platform);
+            /* The picker joins with the network modules: the worker must not rejoin meanwhile.
+             * While it does, the picker waits for the next frame. */
+            if (!try_take_network(platform)) {
+                return 0;
+            }
             err = skiff_psp_dialog_start_network(dialog);
             if (err != SKIFF_OK) {
                 give_network(platform);

@@ -528,6 +528,8 @@ skiff_err skiff_jobs_create(const skiff_jobs_config *config, skiff_jobs **out) {
     jobs->unlock = config->unlock;
     jobs->lock_ctx = config->lock_ctx;
     jobs->save_lock_ctx = config->save_lock_ctx;
+    jobs->downloaded = config->downloaded;
+    jobs->downloaded_ctx = config->downloaded_ctx;
     jobs->table.next_id = 1;
     const skiff_err err = load(jobs);
     if (err != SKIFF_OK) {

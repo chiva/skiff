@@ -403,6 +403,12 @@ network is back.
   is queued again on the next launch and resumes from its `.part` file; a damaged queue file is not
   used (the queue starts empty, and the log says so), and an unusable job in it is dropped alone.
   The same file of the same ROM is never queued twice. At most 64 jobs: finished ones make room.
+  When a download finishes, the runner hands the job to the app (`skiff_jobs_config.downloaded`,
+  on the worker thread, with neither queue lock held) before it saves the job as done, so the
+  installer records the file in `installed.json` before the UI can show the job finished; the
+  record takes the logical path (`games:/Game.iso`) back from the job's real one
+  (`skiff_storage_logical_path()`). A record that cannot be saved leaves the file counted as copied
+  by hand, which is never overwritten.
 - **Small files replaced whole** (`config.ini`, the download queue, `installed.json`):
   `skiff_storage_replace_whole()`. FAT cannot replace a file in one step, so Skiff writes and syncs
   `<file>.tmp`, renames it `<file>.new` (so a `.new` file is always complete), syncs the device so

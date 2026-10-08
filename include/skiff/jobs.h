@@ -108,6 +108,15 @@ typedef struct skiff_job_request {
 
 typedef void (*skiff_jobs_lock_fn)(void *ctx);
 
+/*
+ * A job's file is complete at its target. Called on the runner's thread once per download that
+ * finished, with the job as it was taken (its rom_id, file_name, target, size and CRC-32), before
+ * the job is saved as done, so the UI's done event comes after it; neither queue lock is held, so
+ * it may call skiff_jobs_list() and the like. The installer records the file here
+ * (skiff/install.h): what it cannot record counts as copied by hand, which is never overwritten.
+ */
+typedef void (*skiff_jobs_downloaded_fn)(void *ctx, const skiff_job *job);
+
 typedef struct skiff_jobs_config {
     /* Not owned; must outlive the queue. */
     skiff_storage *storage;
@@ -123,6 +132,9 @@ typedef struct skiff_jobs_config {
     /* The commit lock, passed to the same hooks: required with them, and not lock_ctx (the hooks
      * are not expected to nest one lock). */
     void *save_lock_ctx;
+    /* NULL for none. */
+    skiff_jobs_downloaded_fn downloaded;
+    void *downloaded_ctx;
 } skiff_jobs_config;
 
 typedef struct skiff_jobs skiff_jobs;

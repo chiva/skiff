@@ -44,6 +44,9 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_TITLE_SETTINGS, 0, "Settings", "Ajustes")                                         \
     X(SKIFF_TEXT_TITLE_PAIR, 0, "Pair with RomM", "Vincular con RomM")                             \
     X(SKIFF_TEXT_TITLE_ERROR, 0, "Something went wrong", "Algo ha fallado")                        \
+    X(SKIFF_TEXT_TITLE_SERVER, 0, "RomM server", "Servidor de RomM")                               \
+    X(SKIFF_TEXT_TITLE_NOTICE, 0, "Notice", "Aviso")                                               \
+    X(SKIFF_TEXT_TITLE_CONFIRM, 0, "Are you sure?", "¿Seguro?")                                    \
     /* Button hints. */                                                                            \
     X(SKIFF_TEXT_OK, 0, "OK", "Aceptar")                                                           \
     X(SKIFF_TEXT_CANCEL, 0, "Cancel", "Cancelar")                                                  \
@@ -52,10 +55,18 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_SELECT, 0, "Select", "Elegir")                                                    \
     X(SKIFF_TEXT_DOWNLOAD, 0, "Download", "Descargar")                                             \
     X(SKIFF_TEXT_QUIT, 0, "Quit", "Salir")                                                         \
+    X(SKIFF_TEXT_SETTINGS, 0, "Settings", "Ajustes")                                               \
+    X(SKIFF_TEXT_DOWNLOADS, 0, "Downloads", "Descargas")                                           \
+    X(SKIFF_TEXT_EDIT, 0, "Edit", "Editar")                                                        \
+    X(SKIFF_TEXT_NEW_CODE, 0, "New code", "Código nuevo")                                          \
+    X(SKIFF_TEXT_CHOOSE_NETWORK, 0, "Choose network", "Elegir red")                                \
+    X(SKIFF_TEXT_CANCEL_DOWNLOAD, 0, "Cancel download", "Cancelar descarga")                       \
+    X(SKIFF_TEXT_CLEAR_FINISHED, 0, "Clear finished", "Borrar terminadas")                         \
     /* Connecting. */                                                                              \
     X(SKIFF_TEXT_NET_JOINING, 1, "Connecting to Wi-Fi ({1})...",                                   \
       "Conectando a la red wifi ({1})...")                                                         \
     X(SKIFF_TEXT_NET_CONTACTING, 0, "Contacting RomM...", "Contactando con RomM...")               \
+    X(SKIFF_TEXT_NET_STARTING, 0, "Starting the network...", "Iniciando la red...")                \
     X(SKIFF_TEXT_NET_WAITING_SWITCH, 0, "Turn on the Wi-Fi switch to continue",                    \
       "Activa el interruptor del wifi para continuar")                                             \
     /* Pairing. */                                                                                 \
@@ -67,6 +78,18 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_PAIR_DENIED, 0, "The request was denied in RomM.",                                \
       "Se ha rechazado la solicitud en RomM.")                                                     \
     X(SKIFF_TEXT_PAIR_DONE, 1, "Paired with {1}", "PSP vinculada con {1}")                         \
+    X(SKIFF_TEXT_PAIR_EXPIRES, 1, "The code expires in {1}", "El código caduca en {1}")            \
+    X(SKIFF_TEXT_PAIR_AGAIN, 0, "Pair again", "Volver a vincular")                                 \
+    /* The server address. */                                                                      \
+    X(SKIFF_TEXT_SERVER_PROMPT, 0,                                                                 \
+      "Enter the address of your RomM server, starting with https://",                             \
+      "Escribe la dirección de tu servidor de RomM, empezando por https://")                       \
+    X(SKIFF_TEXT_SERVER_NONE, 0, "No server address yet", "Aún no hay dirección del servidor")     \
+    X(SKIFF_TEXT_SERVER_CURRENT, 1, "Server: {1}", "Servidor: {1}")                                \
+    X(SKIFF_TEXT_SERVER_KEYBOARD, 0, "RomM server address", "Dirección del servidor de RomM")      \
+    X(SKIFF_TEXT_CONFIG_ISSUE, 3, "config.ini, line {1}: [{2}] {3}",                               \
+      "config.ini, línea {1}: [{2}] {3}")                                                          \
+    X(SKIFF_TEXT_CONFIG_MISSING, 2, "config.ini: [{1}] {2}", "config.ini: [{1}] {2}")              \
     /* Library and details. */                                                                     \
     X(SKIFF_TEXT_LIBRARY_LOADING, 0, "Loading...", "Cargando...")                                  \
     X(SKIFF_TEXT_LIBRARY_EMPTY, 0, "There are no PSP games in this RomM library",                  \
@@ -78,6 +101,24 @@ typedef enum skiff_language {
       "Skiff can't download this file: RomM names it in a way the PSP can't use",                  \
       "Skiff no puede descargar este archivo: RomM le da un nombre que la PSP no admite")          \
     X(SKIFF_TEXT_FREE_SPACE, 1, "Free space: {1}", "Espacio libre: {1}")                           \
+    X(SKIFF_TEXT_INSTALL_CHANGED, 0, "Changed in RomM", "Cambiado en RomM")                        \
+    X(SKIFF_TEXT_INSTALL_MULTIPLE_FILES, 0,                                                        \
+      "Skiff can't download this game: it is a folder of several files",                           \
+      "Skiff no puede descargar este juego: es una carpeta con varios archivos")                   \
+    X(SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION, 0,                                                     \
+      "Skiff can't install this file: PSP games must be .iso, .cso or .zso files",                 \
+      "Skiff no puede instalar este archivo: los juegos de PSP deben ser archivos .iso, .cso o "   \
+      ".zso")                                                                                      \
+    X(SKIFF_TEXT_CONFIRM_REPLACE, 0,                                                               \
+      "This game is already installed. Replace your installed copy?",                              \
+      "Este juego ya está instalado. ¿Quieres sustituir la copia instalada?")                      \
+    X(SKIFF_TEXT_CONFIRM_REPLACE_CHANGED, 0,                                                       \
+      "RomM has a different version of this game. Replace your installed copy?",                   \
+      "RomM tiene otra versión de este juego. ¿Quieres sustituir la copia instalada?")             \
+    X(SKIFF_TEXT_INSTALLED_FULL, 0,                                                                \
+      "Skiff can't keep track of more installed games. Delete some games, then open Skiff again.", \
+      "Skiff no puede llevar la cuenta de más juegos instalados. Borra algunos juegos y vuelve a " \
+      "abrir Skiff.")                                                                              \
     /* Downloads. */                                                                               \
     X(SKIFF_TEXT_QUEUE_EMPTY, 0, "No downloads", "No hay descargas")                               \
     X(SKIFF_TEXT_QUEUE_WAITING, 0, "Waiting", "En espera")                                         \
@@ -87,6 +128,20 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_QUEUE_FAILED, 1, "Failed: {1}", "Error: {1}")                                     \
     X(SKIFF_TEXT_PROGRESS, 3, "{1} of {2} ({3}%)", "{1} de {2} ({3} %)")                           \
     X(SKIFF_TEXT_PROGRESS_RATE, 2, "{1}/s, about {2} left", "{1}/s, quedan unos {2}")              \
+    X(SKIFF_TEXT_QUEUE_REJOINING, 0, "Reconnecting to Wi-Fi...", "Reconectando al wifi...")        \
+    X(SKIFF_TEXT_QUEUE_RETRYING, 1, "Trying again in {1}", "Se reintentará en {1}")                \
+    X(SKIFF_TEXT_QUEUE_ADDED, 1, "Added to downloads: {1}", "Añadido a las descargas: {1}")        \
+    X(SKIFF_TEXT_QUEUE_FULL, 0,                                                                    \
+      "The download list is full. Clear finished downloads to add more.",                          \
+      "La lista de descargas está llena. Borra las descargas terminadas para añadir más.")         \
+    X(SKIFF_TEXT_QUEUE_COUNT, 1, "{1} downloads", "{1} descargas")                                 \
+    X(SKIFF_TEXT_CONFIRM_CANCEL, 0, "Cancel this download? What it has downloaded is deleted.",    \
+      "¿Cancelar esta descarga? Se borrará lo que haya descargado.")                               \
+    /* Settings. */                                                                                \
+    X(SKIFF_TEXT_SETTINGS_VERSION, 1, "Skiff {1}", "Skiff {1}")                                    \
+    X(SKIFF_TEXT_SETTINGS_ROMM, 1, "RomM {1}", "RomM {1}")                                         \
+    X(SKIFF_TEXT_RESTART_TO_APPLY, 0, "Saved. Quit Skiff and open it again to use it.",            \
+      "Guardado. Sal de Skiff y vuelve a abrirlo para usarlo.")                                    \
     /* Notices. */                                                                                 \
     X(SKIFF_TEXT_NEWER_ROMM, 2,                                                                    \
       "RomM {1} is newer than the versions Skiff was tested with ({2}). If something doesn't "     \

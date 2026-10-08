@@ -104,18 +104,26 @@ static void test_crypto_runs_on_several_threads_at_once(void) {
     TEST_ASSERT_EQUAL_INT(PSA_SUCCESS, psa_crypto_init());
     pthread_t threads[CRYPTO_THREADS];
     int failures[CRYPTO_THREADS] = {0};
-    for (int i = 0; i < CRYPTO_THREADS; i++) {
-        TEST_ASSERT_EQUAL_INT(0, pthread_create(&threads[i], NULL, crypto_worker, &failures[i]));
+    /* Every thread started is joined before anything is asserted: an assertion ends the test, and
+     * a thread still running would write into this frame after it is gone. */
+    int started = 0;
+    int thread_errors = 0;
+    while (started < CRYPTO_THREADS &&
+           pthread_create(&threads[started], NULL, crypto_worker, &failures[started]) == 0) {
+        started++;
     }
     int total = 0;
-    for (int i = 0; i < CRYPTO_THREADS; i++) {
-        TEST_ASSERT_EQUAL_INT(0, pthread_join(threads[i], NULL));
+    for (int i = 0; i < started; i++) {
+        thread_errors += pthread_join(threads[i], NULL) != 0;
         total += failures[i];
     }
-    TEST_PRINTF("%d threads x %d rounds of random draws, key import and AEAD: %d failed",
-                CRYPTO_THREADS, CRYPTO_ROUNDS, total);
-    TEST_ASSERT_EQUAL_INT(0, total);
     mbedtls_psa_crypto_free();
+    TEST_PRINTF("%d of %d threads x %d rounds of random draws, key import and AEAD: %d failed, "
+                "%d join error(s)",
+                started, CRYPTO_THREADS, CRYPTO_ROUNDS, total, thread_errors);
+    TEST_ASSERT_EQUAL_INT(CRYPTO_THREADS, started);
+    TEST_ASSERT_EQUAL_INT(0, thread_errors);
+    TEST_ASSERT_EQUAL_INT(0, total);
 }
 
 static void test_hook_credits_full_entropy(void) {

@@ -4,14 +4,14 @@
 #include "app_internal.h"
 
 /* Errors that say the network, not RomM, failed: the next try joins the Wi-Fi again. */
-static int is_network_error(skiff_err err) {
+int app_is_network_error(skiff_err err) {
     return err == SKIFF_ERR_NET_UNAVAILABLE || err == SKIFF_ERR_NET_DNS ||
            err == SKIFF_ERR_NET_CONNECT || err == SKIFF_ERR_NET_TIMEOUT ||
            err == SKIFF_ERR_NET_WIFI_JOIN || err == SKIFF_ERR_NET_CONNECTION_LOST;
 }
 
 void app_network_failed(skiff_app *app, skiff_err err) {
-    if (!is_network_error(err)) {
+    if (!app_is_network_error(err)) {
         return;
     }
     /* A connection kept from before is likely dead too. */
@@ -40,7 +40,7 @@ void app_connect_begin(skiff_app *app, app_connect_step from) {
 
 static void connect_failed(skiff_app *app, skiff_err err) {
     app_network_failed(app, err);
-    if (is_network_error(err)) {
+    if (app_is_network_error(err)) {
         app->connect = CONNECT_NETWORK;
         app_show_error(app, err, NULL, MESSAGE_RETRY_CONNECT, MESSAGE_PICK_NETWORK,
                        SKIFF_TEXT_CHOOSE_NETWORK, SKIFF_APP_SCREEN_CONNECTING);
@@ -139,6 +139,20 @@ void app_network_picked(skiff_app *app, skiff_app_dialog_result result) {
                     "network picker joined connection %d, saved: %s (%d)", profile,
                     skiff_err_name(err), (int)err);
     app->net_joined = 1;
+    /* The worker rejoins the connection it was started with: a new one means a new worker. */
+    if (app->worker_running && app->worker_profile != app->profile) {
+        if (!app_stop_worker(app)) {
+            app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, app_text(app, SKIFF_TEXT_RESTART_TO_APPLY),
+                          MESSAGE_QUIT, SKIFF_APP_SCREEN_CONNECTING);
+            return;
+        }
+        const skiff_err reset = app_reset_server(app);
+        if (reset != SKIFF_OK) {
+            app_show_error(app, reset, NULL, MESSAGE_QUIT, MESSAGE_NONE, SKIFF_TEXT_OK,
+                           SKIFF_APP_SCREEN_CONNECTING);
+            return;
+        }
+    }
     app_connect_begin(app, CONNECT_TLS);
 }
 

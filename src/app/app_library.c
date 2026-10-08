@@ -99,7 +99,10 @@ static void load_page(skiff_app *app) {
         app_network_failed(app, err);
         app->failed_request = REQUEST_PAGE;
         app->failed_page = app->request_page;
-        app_show_error(app, err, NULL, MESSAGE_RETRY_REQUEST, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
+        const int network = app_is_network_error(err);
+        app_show_error(app, err, NULL, MESSAGE_RETRY_REQUEST,
+                       network ? MESSAGE_PICK_NETWORK : MESSAGE_SETTINGS,
+                       network ? SKIFF_TEXT_CHOOSE_NETWORK : SKIFF_TEXT_SETTINGS,
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }

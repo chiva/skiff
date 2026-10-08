@@ -159,6 +159,8 @@ struct skiff_app {
     /* Waiting for the Wi-Fi switch before joining. */
     int waiting_switch;
     int worker_running;
+    /* The connection the running worker rejoins. */
+    int worker_profile;
     skiff_app_screen screen;
     /* A frame has shown what the next step waits for: the step may now block. */
     int announced;
@@ -220,6 +222,8 @@ void app_pair_begin(skiff_app *app);
 void app_network_picked(skiff_app *app, skiff_app_dialog_result result);
 /* A request failed with err: the network may be gone, so the next connect joins first. */
 void app_network_failed(skiff_app *app, skiff_err err);
+/* An error of the Wi-Fi or the connection, not of RomM. */
+int app_is_network_error(skiff_err err);
 /* Connected again: the library, or the details request that failed before. */
 void app_resume_after_connect(skiff_app *app);
 /* The browse transport and RomM client, made when missing; SKIFF_OK or why not. */

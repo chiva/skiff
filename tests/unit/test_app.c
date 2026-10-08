@@ -1298,6 +1298,33 @@ static void test_a_cancelled_retry_needs_room_in_the_installed_list(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, jobs[0].state);
 }
 
+static void test_another_network_restarts_the_worker_on_it(void) {
+    open_paired_library(30);
+    TEST_ASSERT_EQUAL_INT(1, env_state.spec.profile);
+    char path[256];
+    snprintf(path, sizeof path, "/api/roms?platform_ids=1&limit=%d&offset=25" LIST_QUERY,
+             SKIFF_ROMM_PAGE_SIZE);
+    fake_route *lost = serve_raw(path, JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_DNS;
+    lost->max_uses = 1;
+    serve_page(25, 5, 30);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[101]"));
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_DIALOG_NETWORK, view()->dialog);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, NULL);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("worker stops %d, starts %d, profile %d", env_state.worker_stops,
+                env_state.worker_starts, env_state.spec.profile);
+    TEST_ASSERT_EQUAL_INT(1, env_state.worker_stops);
+    TEST_ASSERT_EQUAL_INT(2, env_state.worker_starts);
+    TEST_ASSERT_EQUAL_INT(PICKED_PROFILE, env_state.spec.profile);
+}
+
 static int lock_held[4];
 static int manifest_saves_under_lock;
 static int manifest_saves;
@@ -1496,6 +1523,7 @@ int main(void) {
     RUN_TEST(test_a_new_code_after_a_lost_connection_joins_first);
     RUN_TEST(test_queued_downloads_hold_their_installed_records);
     RUN_TEST(test_a_cancelled_retry_needs_room_in_the_installed_list);
+    RUN_TEST(test_another_network_restarts_the_worker_on_it);
     RUN_TEST(test_installed_json_is_saved_without_the_lock_the_ui_reads);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);

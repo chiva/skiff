@@ -362,6 +362,7 @@ skiff_err app_start_worker(skiff_app *app) {
         err = app->env.start_worker(app->env.ctx, &spec);
     }
     app->worker_running = err == SKIFF_OK;
+    app->worker_profile = app->profile;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "worker start: %s (%d)", skiff_err_name(err), (int)err);
     return err;

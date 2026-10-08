@@ -275,7 +275,6 @@ typedef struct watch {
     /* Gaps over the limit waiting to see whether a suspend's power events follow. */
     gap_record pending[PENDING_GAPS_MAX];
     int pending_count;
-    long long pending_since_us;
     /* When the last suspend or resume event was seen; 0 for none. */
     long long last_power_us;
     attempt_record attempts[ATTEMPTS_MAX];
@@ -747,19 +746,25 @@ static void exclude_pending(watch *w) {
     w->pending_count = 0;
 }
 
+/* Counts the oldest waiting gap and drops it from the wait. */
+static void accept_oldest_pending(watch *w) {
+    keep_gap(w, &w->pending[0], 0);
+    w->pending_count--;
+    memmove(&w->pending[0], &w->pending[1], (size_t)w->pending_count * sizeof w->pending[0]);
+}
+
 static void hold_gap(watch *w, const gap_record *gap) {
     if (w->pending_count == PENDING_GAPS_MAX) {
-        accept_pending(w);
-    }
-    if (w->pending_count == 0) {
-        w->pending_since_us = w->start_us + gap->at_us;
+        accept_oldest_pending(w);
     }
     w->pending[w->pending_count++] = *gap;
 }
 
+/* Each waiting gap counts once its own SUSPEND_SETTLE_US has passed with no power event; the
+ * gaps wait in the order they came, so only the oldest can be due. */
 static void settle_pending(watch *w, long long now) {
-    if (w->pending_count > 0 && now - w->pending_since_us >= SUSPEND_SETTLE_US) {
-        accept_pending(w);
+    while (w->pending_count > 0 && now - (w->start_us + w->pending[0].at_us) >= SUSPEND_SETTLE_US) {
+        accept_oldest_pending(w);
     }
 }
 

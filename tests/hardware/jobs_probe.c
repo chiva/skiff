@@ -22,6 +22,13 @@
  * only waits for each vertical blank (prompts go to the debug screen), so two runs of one build
  * show what drawing costs the download.
  *
+ * Speed is judged against the conditions of the day, not a fixed number: a ui=1 run passes if its
+ * download, over all its attempts, keeps at least MIN_SPEED_PERCENT of the speed of a ui=0 run of
+ * the last BASELINE_MAX_AGE_S (read back from jobs-log.txt), so a session is one ui=0 run, then
+ * one ui=1 run. A frame gap is held for a few frames before it counts: the power callback that
+ * says a suspend happened can arrive after the frame that spans it, and such a gap is listed as
+ * excluded instead.
+ *
  * A job left unfinished by an earlier run (HOME > Quit, a crash) is still in the queue file and
  * resumes from its .part file, which tests the queue across launches.
  *
@@ -97,12 +104,19 @@ enum {
     /* The player is asked to turn the Wi-Fi switch off here, and to suspend here. */
     WIFI_AT_PERCENT = 20,
     SUSPEND_AT_PERCENT = 50,
-    /* The speed the download should keep with the UI drawing (J1's pass criterion). */
-    MIN_KB_PER_S = 400,
+    /* A ui=1 run keeps this share of the speed of a ui=0 run at most BASELINE_MAX_AGE_S old. */
+    MIN_SPEED_PERCENT = 90,
+    BASELINE_MAX_AGE_S = 2 * 60 * 60,
+    S_PER_MIN = 60,
+    MS_PER_S = 1000,
     /* The worker should keep this much of its stack unused. */
     MIN_STACK_FREE_BYTES = 8 * 1024,
     /* The longest the UI may go between two frames (a suspend excepted): six frames. */
     MAX_FRAME_GAP_MS = 100,
+    /* A gap over the limit waits this many frames for a suspend's power events; at most this many
+     * wait at once. */
+    SUSPEND_SETTLE_FRAMES = 10,
+    PENDING_GAPS_MAX = 4,
     /* Memory and the stack are sampled this often, in frames. */
     SAMPLE_EVERY_FRAMES = 60,
     /* CRC-32 read-back of the finished file. */
@@ -159,6 +173,8 @@ typedef struct gap_record {
     phase phase;
     long long gap_us;
     frame_parts parts;
+    /* The frame spanned a suspend: listed, not counted. */
+    int excluded;
 } gap_record;
 
 /* One download attempt, as its progress events showed it. */
@@ -250,7 +266,13 @@ typedef struct watch {
     /* For the report after the run. */
     long long start_us;
     gap_record gaps[GAPS_MAX];
+    int gaps_kept;
     int gaps_over;
+    int gaps_excluded;
+    /* Gaps over the limit waiting to see whether a suspend's power events follow. */
+    gap_record pending[PENDING_GAPS_MAX];
+    int pending_count;
+    int frames_since_pending;
     attempt_record attempts[ATTEMPTS_MAX];
     int attempts_seen;
     int attempt_open;
@@ -673,12 +695,80 @@ static void draw(probe *p, const watch *w) {
     skiff_psp_ui_end_frame(&p->ui);
 }
 
-static void keep_gap(watch *w, long long now, long long gap_us, const frame_parts *parts) {
-    if (w->gaps_over < GAPS_MAX) {
-        w->gaps[w->gaps_over] = (gap_record){
-            .at_us = now - w->start_us, .phase = w->phase, .gap_us = gap_us, .parts = *parts};
+/* Lists a gap over the limit; one that spanned a suspend is listed but not counted. */
+static void keep_gap(watch *w, const gap_record *gap, int excluded) {
+    if (w->gaps_kept < GAPS_MAX) {
+        w->gaps[w->gaps_kept] = *gap;
+        w->gaps[w->gaps_kept].excluded = excluded;
+    }
+    w->gaps_kept++;
+    if (excluded) {
+        w->gaps_excluded++;
+        return;
     }
     w->gaps_over++;
+    if (gap->gap_us > w->frame_gap_max_us) {
+        w->frame_gap_max_us = gap->gap_us;
+    }
+}
+
+/* The waiting gaps count: no suspend followed them. */
+static void accept_pending(watch *w) {
+    for (int i = 0; i < w->pending_count; i++) {
+        keep_gap(w, &w->pending[i], 0);
+    }
+    w->pending_count = 0;
+}
+
+/* A suspend's power events came: the waiting gaps were the suspend. */
+static void exclude_pending(watch *w) {
+    for (int i = 0; i < w->pending_count; i++) {
+        keep_gap(w, &w->pending[i], 1);
+    }
+    w->pending_count = 0;
+}
+
+static void hold_gap(watch *w, const gap_record *gap) {
+    if (w->pending_count == PENDING_GAPS_MAX) {
+        accept_pending(w);
+    }
+    w->pending[w->pending_count++] = *gap;
+    w->frames_since_pending = 0;
+}
+
+static void settle_pending(watch *w) {
+    if (w->pending_count > 0 && ++w->frames_since_pending >= SUSPEND_SETTLE_FRAMES) {
+        accept_pending(w);
+    }
+}
+
+/* Suspends and resumes so far: a change means the PSP slept since the count was last taken. */
+static int power_events(void) {
+    const skiff_psp_power_events power = skiff_psp_power_events_now();
+    return power.suspends + power.resumes;
+}
+
+/* One frame's gap: a suspend's frame is not counted, nor one whose power events come a few frames
+ * later; any other over the limit counts once that wait is over. */
+static void judge_gap(watch *w, long long now, const frame_parts *parts, int slept) {
+    if (slept) {
+        exclude_pending(w);
+    }
+    if (w->last_frame_us != 0) {
+        const gap_record gap = {.at_us = now - w->start_us,
+                                .phase = w->phase,
+                                .gap_us = now - w->last_frame_us,
+                                .parts = *parts};
+        const int over = gap.gap_us > MAX_FRAME_GAP_MS * US_PER_MS;
+        if (over && slept) {
+            keep_gap(w, &gap, 1);
+        } else if (over) {
+            hold_gap(w, &gap);
+        } else if (!slept && gap.gap_us > w->frame_gap_max_us) {
+            w->frame_gap_max_us = gap.gap_us;
+        }
+    }
+    settle_pending(w);
 }
 
 /*
@@ -688,7 +778,7 @@ static void keep_gap(watch *w, long long now, long long gap_us, const frame_part
  */
 static int follow(probe *p, watch *w, long long limit_us) {
     const long long start = now_us();
-    int suspends_seen = skiff_psp_power_events_now().suspends;
+    int power_seen = power_events();
     while (!w->ended && !skiff_psp_exit_requested() && now_us() - start < limit_us) {
         /* The pad is read every frame, as the UI does; the probe needs no button. */
         SceCtrlData pad;
@@ -723,22 +813,16 @@ static int follow(probe *p, watch *w, long long limit_us) {
             w->draw_us_max = parts.draw_us > w->draw_us_max ? parts.draw_us : w->draw_us_max;
             w->draws++;
         }
-        const int suspends = skiff_psp_power_events_now().suspends;
-        const long long gap_us = now - w->last_frame_us;
-        if (w->last_frame_us != 0 && suspends == suspends_seen) {
-            if (gap_us > w->frame_gap_max_us) {
-                w->frame_gap_max_us = gap_us;
-            }
-            if (gap_us > MAX_FRAME_GAP_MS * US_PER_MS) {
-                keep_gap(w, now, gap_us, &parts);
-            }
-        }
-        suspends_seen = suspends;
+        const int power = power_events();
+        judge_gap(w, now, &parts, power != power_seen);
+        power_seen = power;
         w->last_frame_us = now;
         w->frames++;
         sample(p, w);
     }
     take_events(p, w);
+    /* Nothing came after them: the last gaps waiting count. */
+    accept_pending(w);
     return w->ended;
 }
 
@@ -947,22 +1031,24 @@ static void report_details(probe *p, const watch *w) {
                  skiff_probe_kb_per_s(attempt->last_done - attempt->first_done, elapsed_us));
         skiff_psp_report_line(&p->report, text);
     }
-    for (int i = 0; i < w->gaps_over && i < GAPS_MAX; i++) {
+    for (int i = 0; i < w->gaps_kept && i < GAPS_MAX; i++) {
         const gap_record *gap = &w->gaps[i];
         const long long accounted = gap->parts.events_us + gap->parts.player_us +
                                     gap->parts.draw_us + gap->parts.present_us;
         snprintf(text, sizeof text,
-                 "frame gap %lld ms at %lld ms (%s): queue events %lld, player %lld, of them "
+                 "frame gap %lld ms at %lld ms (%s)%s: queue events %lld, player %lld, of them "
                  "probe reporting %lld, draw %lld, vblank %lld, other %lld ms",
                  ms_of(gap->gap_us), ms_of(gap->at_us), phase_name(gap->phase),
-                 ms_of(gap->parts.events_us), ms_of(gap->parts.player_us),
-                 ms_of(gap->parts.report_us), ms_of(gap->parts.draw_us),
-                 ms_of(gap->parts.present_us), ms_of(gap->gap_us - accounted));
+                 gap->excluded ? " excluded (suspend)" : "", ms_of(gap->parts.events_us),
+                 ms_of(gap->parts.player_us), ms_of(gap->parts.report_us),
+                 ms_of(gap->parts.draw_us), ms_of(gap->parts.present_us),
+                 ms_of(gap->gap_us - accounted));
         skiff_psp_report_line(&p->report, text);
     }
-    if (w->gaps_over > GAPS_MAX) {
-        snprintf(text, sizeof text, "frame gaps over %d ms: %d, the first %d listed",
-                 MAX_FRAME_GAP_MS, w->gaps_over, GAPS_MAX);
+    if (w->gaps_kept > GAPS_MAX) {
+        snprintf(text, sizeof text,
+                 "frame gaps over %d ms: %d counted, %d excluded (suspend), the first %d listed",
+                 MAX_FRAME_GAP_MS, w->gaps_over, w->gaps_excluded, GAPS_MAX);
         skiff_psp_report_line(&p->report, text);
     }
 }
@@ -972,8 +1058,74 @@ static void report_memory(probe *p, const char *label) {
     skiff_probe_report_memory(&p->report, label, &memory);
 }
 
+/* The download's speed while it ran: every attempt's bytes over every attempt's time, so waiting
+ * for Wi-Fi and rejoining do not count. */
+static unsigned long long attempts_kb_per_s(const watch *w) {
+    unsigned long long bytes = 0;
+    long long elapsed_us = 0;
+    for (int i = 0; i < w->attempts_seen && i < ATTEMPTS_MAX; i++) {
+        bytes += w->attempts[i].last_done - w->attempts[i].first_done;
+        elapsed_us += w->attempts[i].last_us - w->attempts[i].first_us;
+    }
+    return skiff_probe_kb_per_s(bytes, elapsed_us);
+}
+
+/* Seconds since 1970 from the real-time clock; 0 if it cannot say. */
+static unsigned long long utc_now_s(void) {
+    int64_t unix_ms = 0;
+    return skiff_psp_utc_ms(NULL, &unix_ms) ? (unsigned long long)(unix_ms / MS_PER_S) : 0;
+}
+
+/*
+ * A ui=0 run sets the session's baseline and is not judged; a ui=1 run keeps MIN_SPEED_PERCENT of
+ * the latest ui=0 run's speed from jobs-log.txt, no older than BASELINE_MAX_AGE_S.
+ */
+static int judge_speed(probe *p, const watch *w, unsigned long long kb_s,
+                       unsigned long long now_s) {
+    char text[LONG_LINE_MAX];
+    char sampled[TEXT_LINE_MAX];
+    snprintf(sampled, sizeof sampled, "%llu KB/s before the Wi-Fi test, %llu at the end",
+             (unsigned long long)(w->rate_before_wifi / BYTES_PER_KB),
+             (unsigned long long)(w->rate_last / BYTES_PER_KB));
+    if (!p->config.ui) {
+        snprintf(text, sizeof text,
+                 "speed with nothing drawn: %llu KB/s over %d attempt(s), the baseline for a ui=1 "
+                 "run in the next %d min (%s)",
+                 kb_s, w->attempts_seen, BASELINE_MAX_AGE_S / S_PER_MIN, sampled);
+        report_check(p, 1, text);
+        return 1;
+    }
+    char path[PATH_MAX_LEN];
+    FILE *log =
+        skiff_probe_sibling(p->program_path, PROBE_LOG_FILE, path) ? fopen(path, "r") : NULL;
+    unsigned long long baseline = 0;
+    unsigned long long age_s = 0;
+    const int found =
+        now_s != 0 && skiff_probe_jobs_baseline(log, now_s, BASELINE_MAX_AGE_S, &baseline, &age_s);
+    if (log != NULL) {
+        fclose(log);
+    }
+    if (!found) {
+        snprintf(text, sizeof text,
+                 "speed with the UI drawing: %llu KB/s over %d attempt(s) (%s); no ui=0 run in the "
+                 "last %d h: install with SKIFF_JOBS_UI=0 and run first",
+                 kb_s, w->attempts_seen, sampled, BASELINE_MAX_AGE_S / S_PER_MIN / S_PER_MIN);
+        report_check(p, 0, text);
+        return 0;
+    }
+    const int ok = kb_s * PERCENT >= baseline * MIN_SPEED_PERCENT;
+    snprintf(text, sizeof text,
+             "speed with the UI drawing: %llu KB/s over %d attempt(s), %llu%% of the ui=0 run %llu "
+             "min ago (%llu KB/s; at least %d%%) (%s)",
+             kb_s, w->attempts_seen, kb_s * PERCENT / baseline, age_s / S_PER_MIN, baseline,
+             MIN_SPEED_PERCENT, sampled);
+    report_check(p, ok, text);
+    return ok;
+}
+
 /* The run's summary line, on screen, in result.txt and in jobs-log.txt. */
-static int report_run(probe *p, const watch *w, int ok, int crc_ok) {
+static int report_run(probe *p, const watch *w, int ok, int crc_ok, unsigned long long kb_s,
+                      unsigned long long now_s) {
     const long long elapsed_us = w->last_progress_us - w->first_progress_us;
     const long long draw_mean_us = w->draws > 0 ? w->draw_us_total / w->draws : 0;
     char text[LONG_LINE_MAX];
@@ -983,7 +1135,7 @@ static int report_run(probe *p, const watch *w, int ok, int crc_ok) {
              "suspend_recovered_ms=%lld waits=%d rejoins=%d reloads=%d retries=%d "
              "stack_free_min=%d/%d system_free_min=%u largest_min=%u frame_gap_max_ms=%lld "
              "frames=%ld crc=%d ui=%d draw_ms_mean=%lld.%lld draw_ms_max=%lld.%lld gaps_over=%d "
-             "attempts=%d",
+             "attempts=%d kb_s_attempts=%llu gaps_excluded=%d utc=%llu",
              ok, w->ended ? skiff_job_state_name(w->state) : "running", skiff_err_name(w->error),
              (unsigned long long)(w->rate_before_wifi / BYTES_PER_KB),
              (unsigned long long)(w->rate_last / BYTES_PER_KB),
@@ -993,7 +1145,8 @@ static int report_run(probe *p, const watch *w, int ok, int crc_ok) {
              SKIFF_PSP_WORKER_STACK_BYTES, (unsigned)w->system_free_min,
              (unsigned)w->system_largest_min, w->frame_gap_max_us / US_PER_MS, w->frames, crc_ok,
              p->config.ui, ms_of(draw_mean_us), tenth_ms_of(draw_mean_us), ms_of(w->draw_us_max),
-             tenth_ms_of(w->draw_us_max), w->gaps_over, w->attempts_seen);
+             tenth_ms_of(w->draw_us_max), w->gaps_over, w->attempts_seen, kb_s, w->gaps_excluded,
+             now_s);
     report_check(p, ok, text);
     return append_log(p, text) && ok;
 }
@@ -1040,15 +1193,9 @@ static int run_download(probe *p) {
     }
     const int done = ended && w.state == SKIFF_JOB_DONE;
     const int crc_ok = done && file_matches(p);
-    snprintf(text, sizeof text,
-             "speed with the UI drawing: %llu KB/s before the Wi-Fi test, %llu "
-             "KB/s at the end (at least %d)",
-             (unsigned long long)(w.rate_before_wifi / BYTES_PER_KB),
-             (unsigned long long)(w.rate_last / BYTES_PER_KB), MIN_KB_PER_S);
-    /* Both: the first attempt's speed, and the last one's after the interruptions. */
-    const int fast_enough = w.rate_before_wifi / BYTES_PER_KB >= MIN_KB_PER_S &&
-                            w.rate_last / BYTES_PER_KB >= MIN_KB_PER_S;
-    report_check(p, fast_enough, text);
+    const unsigned long long kb_s = attempts_kb_per_s(&w);
+    const unsigned long long now_s = utc_now_s();
+    const int fast_enough = judge_speed(p, &w, kb_s, now_s);
     snprintf(text, sizeof text,
              "UI: longest gap between frames %lld ms over %ld frames (at most %d)",
              w.frame_gap_max_us / US_PER_MS, w.frames, MAX_FRAME_GAP_MS);
@@ -1058,7 +1205,7 @@ static int run_download(probe *p) {
              w.wifi_done ? "recovered" : "not done", w.suspend_done ? "recovered" : "not done");
     report_check(p, w.wifi_done && w.suspend_done, text);
     ok = ok && done && crc_ok && fast_enough && smooth && w.wifi_done && w.suspend_done;
-    ok = report_run(p, &w, ok, crc_ok);
+    ok = report_run(p, &w, ok, crc_ok, kb_s, now_s);
     if (done) {
         skiff_storage_remove(p->storage, p->target);
         skiff_jobs_clear_finished(p->jobs);

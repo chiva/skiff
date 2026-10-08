@@ -415,29 +415,46 @@ frames (the UI waits for the queue's lock while the worker saves the queue file)
 is read back and checked against RomM's CRC-32. A job an earlier run left unfinished (HOME → Quit) is
 still in the queue file and resumes first, which tests the queue across launches.
 
-On a PSP (plugged in; about 5 minutes):
+Speed depends on the day's Wi-Fi as much as on Skiff (the same download has taken 359 and 410
+KB/s on two days with nothing drawn), so the probe does not judge it against a fixed number. A
+session is two runs of one build: the first with `ui=0`, which draws nothing and sets the
+baseline, then one with the UI drawing, which must keep at least 90% of that run's speed. The
+second run finds the first in `jobs-log.txt`: the latest `ui=0` run that finished its download in
+the last 2 hours.
+
+On a PSP (plugged in; about 5 minutes per run):
 
 1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 scripts/dev.sh romm-lan psp`.
-2. PSP in USB mode: `scripts/memstick.sh install <mount>`. It writes `jobs-probe.ini` (the network
-   probe's settings, plus `wait_s=` from `SKIFF_JOBS_WAIT_S`: how long a prompt waits for the
-   player, default 60; and `ui=` from `SKIFF_JOBS_UI`: `0` draws nothing and only waits for each
-   vertical blank, with the prompts on the debug screen, so a second run shows what drawing costs
-   the download) and copies the test CA. Eject.
+2. PSP in USB mode: `SKIFF_JOBS_UI=0 scripts/memstick.sh install <mount>`. It writes
+   `jobs-probe.ini` (the network probe's settings, plus `wait_s=` from `SKIFF_JOBS_WAIT_S`: how
+   long a prompt waits for the player, default 60; and `ui=` from `SKIFF_JOBS_UI`: `0` draws
+   nothing and only waits for each vertical blank, with the prompts on the debug screen) and copies
+   the test CA. Eject.
 3. With the Wi-Fi switch on, run **Skiff jobs probe** and do what each `ACTION:` line asks.
-4. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK`: the file matches
-   RomM's CRC-32, both interruptions recovered, the download kept at least 400 KB/s before the
-   Wi-Fi test and after the suspend, the UI never went more than 100 ms between frames (a suspend
-   aside), and the worker kept at least 8 KB of its stack free and stopped in time. Each run appends one
-   line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how soon the runner noticed
-   the switch and how long until bytes came again, the same after the suspend, the recovery steps,
-   the lowest free stack, the lowest system memory (free and largest block), the longest frame
-   gap, and `ui=`, the mean and longest drawing time per frame (`draw_ms_mean`, `draw_ms_max`),
-   how many frame gaps went over 100 ms (`gaps_over`) and how many attempts the download took.
-   Skiff's own log is `skiff.log` next to it. After the run `result.txt` also lists the clock and
-   Wi-Fi state (signal, channel, power save) after joining, at the start of each later attempt and
-   at the end; each attempt's bytes, time and speed; and each frame gap over 100 ms with where the
-   main thread's time went: waiting on the queue's lock and its events, the probe's own reporting,
-   drawing, and the vertical blank.
+4. USB mode: `SKIFF_JOBS_UI=1 scripts/memstick.sh install <mount>` (the run log stays), eject, and
+   run the probe again the same way.
+5. USB mode: `scripts/memstick.sh results <mount>` → `SKIFF JOBS PROBE OK` for both runs: the file
+   matches RomM's CRC-32, both interruptions recovered, the UI never went more than 100 ms between
+   frames, the worker kept at least 8 KB of its stack free and stopped in time, and (second run
+   only) the download kept at least 90% of the first run's speed. Speed here is the download's
+   bytes over the time its attempts ran, without the time spent waiting for Wi-Fi or rejoining
+   (`kb_s_attempts`).
+
+   A frame gap only counts once a few more frames have passed with no suspend: the power callback
+   that tells the probe the PSP slept can arrive after the frame that spans the sleep, so such a
+   gap is listed as "excluded (suspend)" instead (`gaps_excluded`).
+
+   Each run appends one line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how
+   soon the runner noticed the switch and how long until bytes came again, the same after the
+   suspend, the recovery steps, the lowest free stack, the lowest system memory (free and largest
+   block), the longest frame gap, and `ui=`, the mean and longest drawing time per frame
+   (`draw_ms_mean`, `draw_ms_max`), how many frame gaps went over 100 ms (`gaps_over`), how many
+   attempts the download took, `kb_s_attempts`, `gaps_excluded` and the time of the run (`utc=`,
+   seconds). Skiff's own log is `skiff.log` next to it. After the run `result.txt` also lists the
+   clock and Wi-Fi state (signal, channel, power save) after joining, at the start of each later
+   attempt and at the end; each attempt's bytes, time and speed; and each frame gap over 100 ms
+   with where the main thread's time went: waiting on the queue's lock and its events, the probe's
+   own reporting, drawing, and the vertical blank.
 
 Without ARK, as in PPSSPP, TLS cannot start: the probe queues a job that fails on the worker thread
 before any network I/O (`SKIFF_ERR_NET_NEEDS_ARK`), checks that the queue file on the emulated Memory

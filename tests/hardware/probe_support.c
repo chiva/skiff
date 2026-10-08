@@ -1,5 +1,6 @@
 #include "probe_support.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -263,6 +264,88 @@ unsigned long long skiff_probe_kb_per_s(unsigned long long bytes, long long elap
         return 0;
     }
     return bytes * US_PER_S / (unsigned long long)elapsed_us / BYTES_PER_KB;
+}
+
+static int word_end(char c) { return c == '\0' || c == ' ' || c == '\n' || c == '\r'; }
+
+/* Where the value of the word key=value starts in line, or NULL. */
+static const char *word_value(const char *line, const char *key) {
+    const size_t key_length = strlen(key);
+    if (line == NULL || key_length == 0) {
+        return NULL;
+    }
+    for (const char *at = strstr(line, key); at != NULL; at = strstr(at + 1, key)) {
+        if ((at == line || at[-1] == ' ') && at[key_length] == '=') {
+            return at + key_length + 1;
+        }
+    }
+    return NULL;
+}
+
+int skiff_probe_line_has(const char *line, const char *key, const char *value) {
+    const char *found = word_value(line, key);
+    if (found == NULL || value == NULL) {
+        return 0;
+    }
+    const size_t length = strlen(value);
+    return strncmp(found, value, length) == 0 && word_end(found[length]);
+}
+
+int skiff_probe_line_number(const char *line, const char *key, unsigned long long *out) {
+    const char *found = word_value(line, key);
+    if (found == NULL || out == NULL) {
+        return 0;
+    }
+    unsigned long long number = 0;
+    const char *digit = found;
+    for (; *digit >= '0' && *digit <= '9'; digit++) {
+        const unsigned value = (unsigned)(*digit - '0');
+        if (number > (ULLONG_MAX - value) / DECIMAL) {
+            return 0;
+        }
+        number = number * DECIMAL + value;
+    }
+    if (digit == found || !word_end(*digit)) {
+        return 0;
+    }
+    *out = number;
+    return 1;
+}
+
+/* A ui=0 run's speed from one summary line, if it finished its download in time. */
+static int baseline_line(const char *line, unsigned long long now_s, unsigned long long max_age_s,
+                         unsigned long long *kb_s, unsigned long long *age_s) {
+    unsigned long long speed = 0;
+    unsigned long long utc = 0;
+    if (!skiff_probe_line_has(line, "ui", "0") || !skiff_probe_line_has(line, "state", "done") ||
+        !skiff_probe_line_has(line, "crc", "1") ||
+        !skiff_probe_line_number(line, "kb_s_attempts", &speed) || speed == 0 ||
+        !skiff_probe_line_number(line, "utc", &utc) || utc > now_s || now_s - utc > max_age_s) {
+        return 0;
+    }
+    *kb_s = speed;
+    *age_s = now_s - utc;
+    return 1;
+}
+
+int skiff_probe_jobs_baseline(FILE *log, unsigned long long now_s, unsigned long long max_age_s,
+                              unsigned long long *kb_s, unsigned long long *age_s) {
+    if (log == NULL || kb_s == NULL || age_s == NULL) {
+        return 0;
+    }
+    static char line[SKIFF_PROBE_LOG_LINE_MAX];
+    int found = 0;
+    int whole = 1;
+    while (fgets(line, sizeof line, log) != NULL) {
+        const size_t length = strlen(line);
+        const int ends = length > 0 && line[length - 1] == '\n';
+        /* A line longer than the buffer comes in pieces: none of them is read as a line. */
+        if (whole && (ends || feof(log)) && baseline_line(line, now_s, max_age_s, kb_s, age_s)) {
+            found = 1;
+        }
+        whole = ends;
+    }
+    return found;
 }
 
 uint32_t skiff_probe_crc32_bitwise(uint32_t crc, const unsigned char *data, size_t size) {

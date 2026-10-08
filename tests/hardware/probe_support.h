@@ -18,6 +18,8 @@ enum {
     /* URL-encoded */
     SKIFF_PROBE_FILE_NAME_MAX = 128,
     SKIFF_PROBE_LINE_MAX = 160,
+    /* A summary line in a probe's run log (jobs-log.txt); longer ones are skipped when read. */
+    SKIFF_PROBE_LOG_LINE_MAX = 1024,
     SKIFF_PROBE_DEFAULT_PROFILE = 1,
     SKIFF_PROBE_DEFAULT_RUNS = 3,
     SKIFF_PROBE_RUNS_MAX = 9,
@@ -115,6 +117,23 @@ long long skiff_probe_median(long long *values, size_t count);
 
 /* KB/s (1 KB = 1024 bytes) for bytes over elapsed_us; 0 when no time elapsed. */
 unsigned long long skiff_probe_kb_per_s(unsigned long long bytes, long long elapsed_us);
+
+/*
+ * Summary lines: blank-separated "key=value" words, as the jobs probe appends to jobs-log.txt.
+ * skiff_probe_line_has() is 1 if line holds the word key=value; skiff_probe_line_number() reads
+ * the whole decimal number after key= (0 when the word is missing or holds anything else).
+ */
+int skiff_probe_line_has(const char *line, const char *key, const char *value);
+int skiff_probe_line_number(const char *line, const char *key, unsigned long long *out);
+
+/*
+ * The jobs probe's speed baseline in jobs-log.txt: the last line of a run that drew nothing
+ * ("ui=0") and finished its download ("state=done", "crc=1"), with its "kb_s_attempts=" and a
+ * "utc=" (seconds) no more than max_age_s before now_s. Lines without those words (runs of older
+ * builds) and lines too long to read whole are skipped. 1 with *kb_s and *age_s set when found.
+ */
+int skiff_probe_jobs_baseline(FILE *log, unsigned long long now_s, unsigned long long max_age_s,
+                              unsigned long long *kb_s, unsigned long long *age_s);
 
 /*
  * CRC-32 (IEEE 802.3, reflected), what RomM records as crc_hash. Both continue a previous result

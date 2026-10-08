@@ -45,18 +45,19 @@ static int switch_on(void *ctx) {
     return sceWlanGetSwitchState() != WLAN_SWITCH_OFF;
 }
 
+/* Loads the network modules unless they all are, with net_lock held: the worker's reload may have
+ * left them unloaded or half loaded. */
 static skiff_err load_network(skiff_psp_app *platform) {
-    if (platform->net_loaded) {
+    if (platform->net.stage == SKIFF_PSP_NET_APCTL) {
         return SKIFF_OK;
     }
+    /* Whatever is up from a failed load goes down first, so this one starts clean. */
+    (void)skiff_psp_net_unload(&platform->net);
     const skiff_err err = skiff_psp_net_load(&platform->net, SKIFF_PSP_NET_CPU_MHZ);
     if (err != SKIFF_OK) {
-        /* Whatever came up goes down again, so the next try starts clean. */
         (void)skiff_psp_net_unload(&platform->net);
-        return err;
     }
-    platform->net_loaded = 1;
-    return SKIFF_OK;
+    return err;
 }
 
 /* The network lock without waiting: the worker may hold it for a whole rejoin (up to 30 s), and the
@@ -79,15 +80,20 @@ static void give_network(skiff_psp_app *platform) {
  * still joined is read under it too, since the worker may be tearing the connection down. */
 static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
     platform->join_wanted = 0;
+    skiff_err err = load_network(platform);
+    if (err != SKIFF_OK) {
+        give_network(platform);
+        return err;
+    }
     if (skiff_psp_net_online(&platform->net) == SKIFF_OK) {
         give_network(platform);
         *joined = 1;
         return SKIFF_OK;
     }
     /* A connection half gone (out of range, after a suspend) is dropped before joining again. */
-    (void)skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US);
-    const skiff_err err = skiff_psp_net_connect_start(&platform->net, platform->join_profile,
-                                                      SKIFF_PSP_APP_JOIN_TIMEOUT_US);
+    (void)skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DROP_TIMEOUT_US);
+    err = skiff_psp_net_connect_start(&platform->net, platform->join_profile,
+                                      SKIFF_PSP_APP_JOIN_TIMEOUT_US);
     if (err != SKIFF_OK) {
         give_network(platform);
     }
@@ -96,10 +102,6 @@ static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
 
 static skiff_err net_start(void *ctx, int profile) {
     skiff_psp_app *platform = ctx;
-    const skiff_err err = load_network(platform);
-    if (err != SKIFF_OK) {
-        return err;
-    }
     platform->join_profile = profile;
     platform->join_wanted = 1;
     return SKIFF_OK;
@@ -121,8 +123,11 @@ static skiff_err net_poll(void *ctx, int *joined) {
 }
 
 static skiff_err net_profile(void *ctx, int *profile) {
-    skiff_psp_app *platform = ctx;
-    return skiff_psp_net_connected_profile(&platform->net, profile);
+    const skiff_psp_app *platform = ctx;
+    if (platform->picked_error == SKIFF_OK) {
+        *profile = platform->picked_profile;
+    }
+    return platform->picked_error;
 }
 
 static skiff_err net_profile_name(void *ctx, int profile, char *out, size_t size) {
@@ -334,8 +339,13 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
 
 static void dialog_ended(skiff_psp_app *platform, skiff_psp_dialog_state state) {
     skiff_psp_dialog *dialog = platform->dialog;
-    /* A stuck picker may still use the network: the lock stays held until the process exits. */
+    /* The connection the picker joined is read while the worker cannot touch the network. A stuck
+     * picker may still use the network: the lock then stays held until the process exits. */
     if (dialog->kind == SKIFF_PSP_DIALOG_NETWORK && state != SKIFF_PSP_DIALOG_STUCK) {
+        platform->picked_error =
+            state == SKIFF_PSP_DIALOG_ACCEPTED
+                ? skiff_psp_net_connected_profile(&platform->net, &platform->picked_profile)
+                : SKIFF_ERR_NET_UNAVAILABLE;
         give_network(platform);
     }
     if (state == SKIFF_PSP_DIALOG_STUCK) {
@@ -381,17 +391,17 @@ static int open_dialog(skiff_psp_app *platform, const skiff_app_view *view) {
         err = skiff_psp_dialog_start_keyboard(dialog, view->dialog_title, view->dialog_text,
                                               SKIFF_PSP_DIALOG_TEXT_MAX);
     } else {
+        /* The picker joins with the network modules: the worker must not rejoin meanwhile.
+         * While it does, the picker waits for the next frame. */
+        if (!try_take_network(platform)) {
+            return 0;
+        }
         err = load_network(platform);
         if (err == SKIFF_OK) {
-            /* The picker joins with the network modules: the worker must not rejoin meanwhile.
-             * While it does, the picker waits for the next frame. */
-            if (!try_take_network(platform)) {
-                return 0;
-            }
             err = skiff_psp_dialog_start_network(dialog);
-            if (err != SKIFF_OK) {
-                give_network(platform);
-            }
+        }
+        if (err != SKIFF_OK) {
+            give_network(platform);
         }
     }
     if (err != SKIFF_OK) {
@@ -459,7 +469,7 @@ int skiff_psp_app_finish(skiff_psp_app *platform) {
     skiff_app_destroy(platform->app);
     platform->app = NULL;
     int released = 1;
-    if (platform->net_loaded) {
+    if (platform->net.stage != SKIFF_PSP_NET_NONE) {
         /* Tearing the modules down under a live connection can hang the PSP: only after a
          * disconnect that succeeded (which also abandons a pending join). */
         released = skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US) ==

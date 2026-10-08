@@ -30,8 +30,11 @@
 #include "net_psp.h"
 #include "ui_psp.h"
 
-/* How long the UI gives a join and a disconnect, as the worker does. */
+/* How long a join may take, as for the worker. */
 #define SKIFF_PSP_APP_JOIN_TIMEOUT_US SKIFF_PSP_WORKER_JOIN_TIMEOUT_US
+/* Dropping a half-gone connection before joining blocks the UI, so it gets a second; a join that
+ * then fails is shown with Retry. Quitting waits as long as the worker would. */
+#define SKIFF_PSP_APP_DROP_TIMEOUT_US (1000LL * 1000)
 #define SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US SKIFF_PSP_WORKER_DISCONNECT_TIMEOUT_US
 
 typedef struct skiff_psp_app {
@@ -54,14 +57,17 @@ typedef struct skiff_psp_app {
     skiff_psp_mutex net_lock;
     int mutexes_created;
 
-    /* The network: loaded on first need, joined through net_start/net_poll. */
+    /* The network: loaded on first need (and again after the worker's reload failed), always
+     * under net_lock, and joined through net_start/net_poll. */
     skiff_psp_net net;
-    int net_loaded;
     /* The UI holds net_lock: a join is pending, or the network picker is open. */
     int holds_net;
     /* net_start asked to join join_profile: net_poll begins it once it has the network lock. */
     int join_wanted;
     int join_profile;
+    /* The connection the network picker joined, read before net_lock is given back. */
+    int picked_profile;
+    skiff_err picked_error;
     int tls_started;
 
     skiff_psp_worker worker;

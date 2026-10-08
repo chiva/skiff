@@ -514,19 +514,28 @@ static int fits(const skiff_log *log, size_t length) {
     return log->report_length + log->pending_bytes + length <= log->buffer_bytes;
 }
 
-/* Room for a line of length bytes next to the report: a full buffer is written, or, while the
- * Memory Stick refuses, gives up its oldest lines. 0 when the line cannot fit even alone. */
-static int make_room(skiff_log *log, size_t length) {
+/*
+ * Room for a line of length bytes next to the report: a full buffer is written, or, while the
+ * Memory Stick refuses, gives up its oldest lines. A warning or error (urgent) is written right
+ * after anyway, so it tries first. 0 when the line cannot fit even alone.
+ */
+static int make_room(skiff_log *log, size_t length, int urgent) {
     if (fits(log, length)) {
         return 1;
     }
-    /* Retried once a buffer's worth of lines has been lost, as often as a full buffer was written
-     * before the failure; a refusing Memory Stick gets no extra try per line. */
-    if (!log->failing || log->dropped_bytes_since_try >= log->buffer_bytes) {
+    /* Otherwise retried once a buffer's worth of lines has been lost, as often as a full buffer was
+     * written before the failure; a refusing Memory Stick gets no extra try per line. */
+    int tried = 0;
+    if (!log->failing || urgent || log->dropped_bytes_since_try >= log->buffer_bytes) {
         (void)flush_locked(log);
+        tried = 1;
     }
     while (!fits(log, length) && log->pending_bytes > 0) {
         drop_oldest(log);
+    }
+    /* Only the report is in the way (a buffer too small for it and a long line): it goes alone. */
+    if (!fits(log, length) && !tried) {
+        (void)flush_locked(log);
     }
     return fits(log, length);
 }
@@ -537,7 +546,7 @@ static void log_message(skiff_log *log, skiff_log_level level, const char *tag, 
     take_lock(log);
     const size_t length = compose_line(log, level, tag, message, cut, line);
     if (length > 0) {
-        if (make_room(log, length)) {
+        if (make_room(log, length, level <= SKIFF_LOG_WARN)) {
             buffer_line(log, line, length);
         } else {
             count_dropped(log, length);

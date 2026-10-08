@@ -662,6 +662,54 @@ static void test_the_line_break_after_a_part_counts_against_the_cap(void) {
     TEST_ASSERT_EQUAL_UINT64(report_bytes + second_bytes, file_size(path));
 }
 
+/* A warning of the longest kind, "W jobs: " and fill, into line (SKIFF_LOG_LINE_MAX + 1 bytes). */
+static void longest_warning(char *line) {
+    char text[SKIFF_LOG_LINE_MAX];
+    const size_t fill_length = SKIFF_LOG_LINE_MAX - strlen("W jobs: ") - 1;
+    memset(text, 'w', fill_length);
+    text[fill_length] = '\0';
+    skiff_log_write(logger, SKIFF_LOG_WARN, "jobs", "%s", text);
+    const size_t prefix_length = strlen("W jobs: ");
+    memcpy(line, "W jobs: ", prefix_length);
+    memcpy(line + prefix_length, text, fill_length);
+    line[SKIFF_LOG_LINE_MAX - 1] = '\n';
+    line[SKIFF_LOG_LINE_MAX] = '\0';
+}
+
+static void test_a_warning_tries_the_memory_stick_before_giving_up_older_lines(void) {
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
+    create();
+    char first[SKIFF_LOG_LINE_MAX + 1];
+    char warning[SKIFF_LOG_LINE_MAX + 1];
+    info_line_of(200, 'a', first);
+    refuse_writes_after(0);
+    skiff_log_flush(logger);
+    accept_writes();
+    TEST_PRINTF("the Memory Stick works again; a warning too long to sit next to the kept line");
+    longest_warning(warning);
+    char expected[3 * SKIFF_LOG_LINE_MAX];
+    snprintf(expected, sizeof expected, "%s%s", first, warning);
+    TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
+}
+
+static void test_a_report_in_the_way_of_a_long_line_goes_out_alone(void) {
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
+    create();
+    info_line_of(200, 'a', NULL);
+    refuse_writes_after(0);
+    skiff_log_flush(logger);
+    /* No room next to the first: it goes, and a report waits in front of this one. */
+    info_line_of(100, 'b', NULL);
+    accept_writes();
+    char longest[SKIFF_LOG_LINE_MAX + 1];
+    info_line_of(SKIFF_LOG_LINE_MAX, 'c', longest);
+    TEST_PRINTF("report and longest line cannot share the buffer: the report is written first");
+    skiff_log_flush(logger);
+    char expected[3 * SKIFF_LOG_LINE_MAX];
+    snprintf(expected, sizeof expected, "W log: 2 earlier lines could not be written\n%s", longest);
+    TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
+}
+
 static void test_kept_lines_stay_redacted(void) {
     create();
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_log_add_secret(logger, TOKEN));
@@ -913,6 +961,8 @@ int main(void) {
     RUN_TEST(test_a_report_cut_short_is_written_over_not_repeated);
     RUN_TEST(test_a_part_whose_first_lines_were_given_up_gets_a_line_of_its_own);
     RUN_TEST(test_the_line_break_after_a_part_counts_against_the_cap);
+    RUN_TEST(test_a_warning_tries_the_memory_stick_before_giving_up_older_lines);
+    RUN_TEST(test_a_report_in_the_way_of_a_long_line_goes_out_alone);
     RUN_TEST(test_kept_lines_stay_redacted);
     RUN_TEST(test_registered_secrets_never_reach_the_file);
     RUN_TEST(test_twelve_secrets_of_up_to_255_bytes_are_redacted);

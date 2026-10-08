@@ -29,6 +29,8 @@ struct skiff_jobs {
     skiff_jobs_lock_fn unlock;
     void *lock_ctx;
     void *save_lock_ctx;
+    skiff_jobs_downloaded_fn downloaded;
+    void *downloaded_ctx;
     jobs_table table;
     /* The commit-lock holder's copy of table, changed and saved before it is published. */
     jobs_table staged;

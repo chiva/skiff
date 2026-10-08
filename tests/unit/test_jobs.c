@@ -270,8 +270,39 @@ static void serve(void) {
     TEST_ASSERT_NOT_NULL(route);
 }
 
+/* What the downloaded hook saw: how often it ran, the last job, that job's state in the queue
+ * then (the UI's view), and the queue locks held. */
+typedef struct downloaded_hook {
+    int calls;
+    skiff_job job;
+    skiff_job_state listed_state;
+    int state_held;
+    int commit_held;
+} downloaded_hook;
+
+static downloaded_hook handed_over;
+
+static void on_downloaded(void *ctx, const skiff_job *job) {
+    downloaded_hook *seen = ctx;
+    seen->calls++;
+    seen->job = *job;
+    seen->state_held = locks.state.held;
+    seen->commit_held = locks.commit.held;
+    skiff_job listed[SKIFF_JOBS_MAX];
+    const size_t count = skiff_jobs_list(jobs, listed, SKIFF_JOBS_MAX);
+    for (size_t i = 0; i < count; i++) {
+        if (listed[i].id == job->id) {
+            seen->listed_state = listed[i].state;
+        }
+    }
+}
+
 static void create_jobs(void) {
-    const skiff_jobs_config config = {&storage.base, queue_path, logger, NULL, NULL, NULL, NULL};
+    const skiff_jobs_config config = {.storage = &storage.base,
+                                      .path = queue_path,
+                                      .log = logger,
+                                      .downloaded = on_downloaded,
+                                      .downloaded_ctx = &handed_over};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_create(&config, &jobs));
 }
 
@@ -304,6 +335,7 @@ void setUp(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_log_create(&log_config, &logger));
     memset(&env_state, 0, sizeof env_state);
     memset(&locks, 0, sizeof locks);
+    memset(&handed_over, 0, sizeof handed_over);
     env_state.switch_on = 1;
     env_state.online = 1;
     const skiff_jobs_env base_env = {env_open,   env_switch_on, env_online,     env_rejoin,
@@ -846,6 +878,8 @@ static void test_an_error_a_retry_cannot_fix_fails_the_job(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_NOT_FOUND, job_with(id).error);
     TEST_ASSERT_EQUAL_UINT32(1, job_with(id).attempts);
     TEST_ASSERT_EQUAL_UINT64(0, env_state.slept_ms);
+    TEST_PRINTF("a failed job has no file to hand over");
+    TEST_ASSERT_EQUAL_INT(0, handed_over.calls);
 }
 
 static void test_a_file_found_at_the_target_fails_the_job_and_keeps_it(void) {
@@ -1036,6 +1070,7 @@ static void test_a_cancel_mid_transfer_stops_and_deletes_the_progress(void) {
     TEST_ASSERT_FALSE(exists(part));
     TEST_ASSERT_FALSE(exists(state_file));
     TEST_ASSERT_FALSE(exists(target));
+    TEST_ASSERT_EQUAL_INT(0, handed_over.calls);
 }
 
 static void test_a_cancel_during_a_wait_ends_the_wait(void) {
@@ -1114,12 +1149,15 @@ static void test_a_quit_leaves_the_job_queued_and_it_resumes(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, job_with(id).state);
     TEST_ASSERT_TRUE(exists(part));
     TEST_ASSERT_TRUE(exists(state_file));
+    TEST_ASSERT_EQUAL_INT(0, handed_over.calls);
     TEST_PRINTF("as after a relaunch: the queue file is read again");
     skiff_jobs_destroy(jobs);
     create_jobs();
     run();
     report(id);
     TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    TEST_PRINTF("the download finished in the second launch hands its file over there");
+    TEST_ASSERT_EQUAL_INT(1, handed_over.calls);
     TEST_ASSERT_TRUE(transport.log[transport.log_count - 1].has_range);
     assert_complete();
 }
@@ -1175,9 +1213,15 @@ static void watch_io(void *ctx, const char *call, const char *path) {
 static void create_tracked_jobs(void) {
     skiff_jobs_destroy(jobs);
     memset(&locks, 0, sizeof locks);
-    const skiff_jobs_config config = {&storage.base,     queue_path,        logger,
-                                      tracked_lock_take, tracked_lock_give, &locks.state,
-                                      &locks.commit};
+    const skiff_jobs_config config = {.storage = &storage.base,
+                                      .path = queue_path,
+                                      .log = logger,
+                                      .lock = tracked_lock_take,
+                                      .unlock = tracked_lock_give,
+                                      .lock_ctx = &locks.state,
+                                      .save_lock_ctx = &locks.commit,
+                                      .downloaded = on_downloaded,
+                                      .downloaded_ctx = &handed_over};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_create(&config, &jobs));
     storage.on_call = watch_io;
 }
@@ -1193,6 +1237,31 @@ static void assert_locks_used_well(void) {
     TEST_ASSERT_EQUAL_INT(0, locks.forbidden_commits);
     TEST_ASSERT_EQUAL_INT(0, locks.io_under_state);
     TEST_ASSERT_EQUAL_INT(0, locks.queue_opens_without_commit);
+}
+
+static void test_a_finished_download_is_handed_over_before_it_shows_as_done(void) {
+    create_tracked_jobs();
+    const uint32_t id = add_job();
+    run();
+    report(id);
+    TEST_PRINTF("hook ran %d time(s); the queue said %s then; locks held: state %d, commit %d",
+                handed_over.calls, skiff_job_state_name(handed_over.listed_state),
+                handed_over.state_held, handed_over.commit_held);
+    TEST_ASSERT_EQUAL_INT(1, handed_over.calls);
+    TEST_ASSERT_EQUAL_UINT32(id, handed_over.job.id);
+    TEST_ASSERT_EQUAL_UINT64(ROM_ID, handed_over.job.rom_id);
+    TEST_ASSERT_EQUAL_STRING(FILE_NAME, handed_over.job.file_name);
+    TEST_ASSERT_EQUAL_STRING(target, handed_over.job.target);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, handed_over.job.size);
+    TEST_ASSERT_TRUE(handed_over.job.has_crc32);
+    TEST_ASSERT_EQUAL_HEX32(body_crc, handed_over.job.crc32);
+    TEST_PRINTF("the UI still saw it active: done comes only once the installer had its turn");
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_ACTIVE, handed_over.listed_state);
+    TEST_ASSERT_EQUAL_INT(0, handed_over.state_held);
+    TEST_ASSERT_EQUAL_INT(0, handed_over.commit_held);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    assert_complete();
+    assert_locks_used_well();
 }
 
 static void test_saves_hold_the_commit_lock_and_never_the_state_lock(void) {
@@ -1371,8 +1440,8 @@ static void test_a_cancel_as_the_job_ends_is_not_lost(void) {
 
 static void test_bad_arguments_are_refused(void) {
     skiff_jobs *other = NULL;
-    skiff_jobs_config config = {&storage.base, queue_path, NULL, tracked_lock_take,
-                                NULL,          NULL,       NULL};
+    skiff_jobs_config config = {
+        .storage = &storage.base, .path = queue_path, .lock = tracked_lock_take};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(&config, &other));
     TEST_ASSERT_NULL(other);
     /* Lock hooks need a commit lock, and one apart from the state lock. */
@@ -1425,6 +1494,7 @@ int main(void) {
     RUN_TEST(test_a_refused_cancel_keeps_the_progress);
     RUN_TEST(test_two_jobs_never_write_to_one_target);
     RUN_TEST(test_a_job_downloads_into_a_folder_it_creates);
+    RUN_TEST(test_a_finished_download_is_handed_over_before_it_shows_as_done);
     RUN_TEST(test_the_log_is_written_right_after_each_block);
     RUN_TEST(test_progress_reports_bytes_and_speed);
     RUN_TEST(test_an_error_a_retry_cannot_fix_fails_the_job);

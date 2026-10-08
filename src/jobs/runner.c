@@ -416,6 +416,11 @@ skiff_err skiff_jobs_run_one(skiff_jobs *jobs, const skiff_jobs_env *env, int *r
     } else if (state == SKIFF_JOB_CANCELLED) {
         err = SKIFF_ERR_CANCELLED;
     }
+    /* Before the queue says done, so the UI never sees a finished job the installer has not
+     * recorded. */
+    if (state == SKIFF_JOB_DONE && jobs->downloaded != NULL) {
+        jobs->downloaded(jobs->downloaded_ctx, &job);
+    }
     conclude(&r, &job, state, err, attempts);
     return SKIFF_OK;
 }

@@ -69,6 +69,17 @@ skiff_err skiff_storage_resolve(const skiff_storage_roots *roots, const char *lo
                                 size_t out_size);
 
 /*
+ * The reverse of skiff_storage_resolve(): turns "ms0:/ISO/Game.iso" back into "games:/Game.iso" (a
+ * root's folder alone gives the root, "games:"), for a path that resolve could have produced. The
+ * path must start with a root's folder exactly, followed by nothing or by '/' and plain names (the
+ * same rule resolve applies); when two roots' folders match, the longer wins. SKIFF_ERR_INVALID_ARG
+ * for a NULL argument or a path under no root or with a part resolve refuses,
+ * SKIFF_ERR_BUFFER_TOO_SMALL when the result does not fit; out is empty on any error.
+ */
+skiff_err skiff_storage_logical_path(const skiff_storage_roots *roots, const char *path, char *out,
+                                     size_t out_size);
+
+/*
  * Writes "<directory of program_path>/<file_name>" into out. program_path is argv[0] as the PSP
  * passes it, e.g. "ms0:/PSP/GAME/SkiffSelftest/EBOOT.PBP". Returns SKIFF_ERR_INVALID_ARG for a NULL
  * argument or a path without a directory, SKIFF_ERR_BUFFER_TOO_SMALL if the result does not fit; on

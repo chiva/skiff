@@ -131,14 +131,20 @@ dialogs and the network, and reaches it through `skiff_app_env`.
 - **Before a download is queued**: the installer can take the file (one `.iso`, `.cso` or `.zso`,
   a usable name), the queue has room (64 unfinished jobs; the player is told to clear finished
   ones), `installed.json` has room (512 records), and a game already installed asks "Replace your
-  installed copy?". `games:` is created first.
+  installed copy?". `games:` is created first. Downloads already queued count against the 512
+  records too, since each will need one.
 - **Settings**: a new server address clears the token and RomM's device id (they belong to the old
   server) and pairs again. The old server's downloads cannot run against the new one (other ROM
-  ids, other files), so the player confirms that they are cancelled, and the change goes in an
-  order that never lets them: stop the worker, cancel them, save `config.ini`, then rebuild the
-  queue and the client. A worker that will not stop in time changes nothing; a failed cancel or
+  ids, other files), and neither does what Skiff installed from it say anything about the new
+  one (a ROM id and file name may match another game there). So the player confirms, and the
+  change goes in an order that never lets either act on the new server: stop the worker, cancel
+  the downloads, drop the `installed.json` records (the games stay, protected as copied by hand),
+  save `config.ini`, then rebuild the queue and the client. A worker that will not stop in time changes nothing; a failed cancel or
   save keeps the old server and starts a new worker for it. "Pair again" keeps the address and
   the downloads and replaces the token, restarting the worker with it.
+- **installed.json is saved off the lock the UI reads**: the worker records a finished download
+  under the manifest lock, copies the manifest, and saves the copy without it, so drawing the
+  library never waits for the Memory Stick.
 - **Secrets**: the token and every custom header value of at least 8 characters are registered
   with the log; a shorter value cannot be found reliably and registering it would withhold every
   line.

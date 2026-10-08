@@ -174,6 +174,38 @@ static skiff_err start_log(skiff_app *app) {
     return skiff_log_create(&log_config, &app->log);
 }
 
+/*
+ * Records a finished install and saves installed.json. The UI reads the manifest under its lock
+ * while it draws, so the lock is held only to change it and copy it; the copy is saved without it
+ * (only this thread saves while the worker runs). Without memory for the copy the record stays in
+ * memory and the next save writes it.
+ */
+static skiff_err record_and_save(skiff_app *app, const skiff_install_record *record,
+                                 const char *path) {
+    skiff_install_manifest *snapshot = NULL;
+    const skiff_err copy_err = skiff_install_manifest_create(&snapshot);
+    app_lock_manifest(app);
+    skiff_err err = skiff_install_manifest_record(app->manifest, record);
+    if (err == SKIFF_OK && copy_err == SKIFF_OK) {
+        *snapshot = *app->manifest;
+    }
+    app_unlock_manifest(app);
+    if (err == SKIFF_OK) {
+        err = copy_err;
+    }
+    if (err == SKIFF_OK) {
+        err = skiff_install_manifest_save(snapshot, app->config.storage, path);
+    }
+    if (err == SKIFF_OK) {
+        /* A damaged file set aside by this save is not set aside again. */
+        app_lock_manifest(app);
+        app->manifest->set_aside_damaged = snapshot->set_aside_damaged;
+        app_unlock_manifest(app);
+    }
+    skiff_install_manifest_destroy(snapshot);
+    return err;
+}
+
 static void on_downloaded(void *ctx, const skiff_job *job) {
     skiff_app *app = ctx;
     skiff_install_record record;
@@ -195,12 +227,7 @@ static void on_downloaded(void *ctx, const skiff_job *job) {
             app->config.clock(app->config.clock_ctx, &record.installed_ms) == 0) {
             record.installed_ms = 0;
         }
-        app_lock_manifest(app);
-        err = skiff_install_manifest_record(app->manifest, &record);
-        if (err == SKIFF_OK) {
-            err = skiff_install_manifest_save(app->manifest, app->config.storage, manifest_path);
-        }
-        app_unlock_manifest(app);
+        err = record_and_save(app, &record, manifest_path);
     }
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
                     "job %u installed as %s: %s (%d)", (unsigned)job->id, record.path,
@@ -366,6 +393,7 @@ skiff_err app_reset_server(skiff_app *app) {
     app->total_known = 0;
     app->has_rom = 0;
     app->request = REQUEST_NONE;
+    app->failed_request = REQUEST_NONE;
     memset(app->pages, 0, sizeof app->pages);
     const skiff_err err = start_queue(app);
     app_queue_refresh(app);
@@ -464,6 +492,8 @@ static void message_update(skiff_app *app, unsigned actions) {
     }
     switch (action) {
     case MESSAGE_BACK:
+        /* What failed is given up. */
+        app->failed_request = REQUEST_NONE;
         app_set_screen(app, app->message.back);
         break;
     case MESSAGE_RETRY_CONNECT:
@@ -513,7 +543,12 @@ static void message_update(skiff_app *app, unsigned actions) {
         break;
     }
     case MESSAGE_NEW_PAIRING:
-        app_pair_begin(app);
+        if (app->net_joined) {
+            app_pair_begin(app);
+        } else {
+            app->pairing_requested = 1;
+            app_connect_begin(app, CONNECT_NETWORK);
+        }
         break;
     case MESSAGE_SETTINGS:
         app_set_screen(app, SKIFF_APP_SCREEN_SETTINGS);

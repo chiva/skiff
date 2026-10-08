@@ -87,6 +87,26 @@ static skiff_err cancel_old_downloads(skiff_app *app) {
     return err;
 }
 
+/* What Skiff installed from the old server says nothing about the new one: its ROM ids and file
+ * names may match other games. The records go (the games stay on the Memory Stick, protected as
+ * copied by hand); on a failed save they are read back. */
+static skiff_err forget_installed(skiff_app *app) {
+    char path[SKIFF_STORAGE_PATH_MAX];
+    skiff_err err = skiff_storage_resolve(&app->config.roots, APP_MANIFEST_FILE, path, sizeof path);
+    const size_t forgotten = app->manifest->count;
+    if (err == SKIFF_OK && forgotten > 0) {
+        app->manifest->count = 0;
+        err = skiff_install_manifest_save(app->manifest, app->config.storage, path);
+        if (err != SKIFF_OK) {
+            (void)skiff_install_manifest_load(app->manifest, app->config.storage, path, NULL);
+        }
+    }
+    skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
+                    "new server: %zu installed record(s) forgotten: %s (%d)", forgotten,
+                    skiff_err_name(err), (int)err);
+    return err;
+}
+
 /* A step of the change failed after the worker stopped: the old server stays, and connecting to it
  * again starts a new worker on the queue as the file now holds it. */
 static void keep_old_server(skiff_app *app, skiff_err err, const skiff_config_issue *issue) {
@@ -97,8 +117,9 @@ static void keep_old_server(skiff_app *app, skiff_err err, const skiff_config_is
                    SKIFF_APP_SCREEN_SETTINGS);
 }
 
-/* In this order, so the new address is saved only once nothing of the old server's can run: stop
- * the worker, cancel the old downloads, save config.ini, start over with the new server. */
+/* In this order, so the new address is saved only once nothing of the old server's can run or be
+ * replaced: stop the worker, cancel the old downloads, forget the old installs, save config.ini,
+ * start over with the new server. */
 static void apply_server(skiff_app *app, const char *url) {
     const skiff_app_screen from = app->keyboard_from;
     char text[SKIFF_CONFIG_TEXT_MAX + 1];
@@ -116,6 +137,9 @@ static void apply_server(skiff_app *app, const char *url) {
         return;
     }
     err = cancel_old_downloads(app);
+    if (err == SKIFF_OK) {
+        err = forget_installed(app);
+    }
     if (err == SKIFF_OK) {
         err = app_config_replace(app, text, length);
     }
@@ -149,7 +173,7 @@ void app_server_entered(skiff_app *app, const char *url) {
         return;
     }
     app_queue_refresh(app);
-    if (app_queue_unfinished(app) > 0) {
+    if (app_queue_unfinished(app) > 0 || app->manifest->count > 0) {
         snprintf(app->pending_url, sizeof app->pending_url, "%s", url);
         app_confirm(app, SKIFF_TEXT_CONFIRM_SERVER_CHANGE, CONFIRM_SERVER_CHANGE, 0);
         return;

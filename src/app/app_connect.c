@@ -255,7 +255,7 @@ void app_connect_update(skiff_app *app, unsigned actions) {
         }
         return;
     case CONNECT_PAIRING:
-        if (app->settings.token[0] == '\0') {
+        if (app->settings.token[0] == '\0' || app->pairing_requested) {
             app_pair_begin(app);
         } else {
             app->connect = CONNECT_PLATFORM;
@@ -272,6 +272,7 @@ void app_connect_update(skiff_app *app, unsigned actions) {
 /* ---- Pairing ---- */
 
 void app_pair_begin(skiff_app *app) {
+    app->pairing_requested = 0;
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
     memset(&app->pairing, 0, sizeof app->pairing);
     app_set_screen(app, SKIFF_APP_SCREEN_PAIR);

@@ -1044,7 +1044,7 @@ static void test_a_new_server_cancels_the_old_downloads(void) {
     frame(0);
     print_view();
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
-    TEST_ASSERT_TRUE(shows("Downloads from the current server will be cancelled."));
+    TEST_ASSERT_TRUE(shows("A new server cancels the current downloads"));
     TEST_PRINTF("back keeps the server and the download");
     frame(SKIFF_UI_ACTION_BACK);
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
@@ -1188,6 +1188,126 @@ static void test_a_worker_that_cannot_start_is_shown(void) {
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_EQUAL_INT(2, env_state.worker_starts);
+}
+
+static void test_a_new_server_forgets_the_old_installs(void) {
+    record_installed(1, body_crc);
+    open_paired_library(1);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_INSTALLED), view()->rows[0].detail);
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    TEST_PRINTF("no downloads, but an installed game: the player is asked too");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_ASSERT_EQUAL_size_t(0, app->manifest->count);
+    char manifest[RAW_MAX];
+    read_app_file(SKIFF_INSTALL_MANIFEST_NAME, manifest, sizeof manifest);
+    TEST_PRINTF("installed.json: %s", manifest);
+    TEST_ASSERT_NULL(strstr(manifest, "Game 1.iso"));
+    TEST_PRINTF("the game itself stays");
+    char iso[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Game 1.iso", iso, sizeof iso));
+    FILE *still = fopen(iso, "rb");
+    TEST_ASSERT_NOT_NULL(still);
+    fclose(still);
+}
+
+static void test_an_abandoned_retry_is_forgotten(void) {
+    open_paired_library(2);
+    fake_route *broken = serve_raw("/api/roms/1", "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    TEST_ASSERT_NOT_NULL(broken);
+    open_details_failing();
+    TEST_ASSERT_EQUAL_INT(REQUEST_ROM, app->failed_request);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_EQUAL_INT(REQUEST_NONE, app->failed_request);
+}
+
+static void test_a_new_code_after_a_lost_connection_joins_first(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    fake_route *lost = serve_raw(PATH_INIT, JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    lost->max_uses = 1;
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[111]"));
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_TRUE(app->pairing.active);
+}
+
+static void test_queued_downloads_hold_their_installed_records(void) {
+    open_paired_library(2);
+    app->manifest->count = SKIFF_INSTALL_RECORDS_MAX - 1;
+    for (size_t i = 0; i < app->manifest->count; i++) {
+        app->manifest->records[i].rom_id = 1000 + i;
+    }
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("511 records and one queued download: the 512th place is promised");
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    print_view();
+    TEST_ASSERT_TRUE(shows("Skiff can't keep track of more installed games."));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+}
+
+static int lock_held[4];
+static int manifest_saves_under_lock;
+static int manifest_saves;
+static void tracked_lock(void *ctx) { *(int *)ctx = 1; }
+static void tracked_unlock(void *ctx) { *(int *)ctx = 0; }
+static void watch_manifest(void *ctx, const char *call, const char *path) {
+    (void)ctx;
+    if (strcmp(call, "open") == 0 && strstr(path, SKIFF_INSTALL_MANIFEST_NAME) != NULL) {
+        manifest_saves++;
+        manifest_saves_under_lock += lock_held[3];
+    }
+}
+
+static void test_installed_json_is_saved_without_the_lock_the_ui_reads(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(1);
+    memset(lock_held, 0, sizeof lock_held);
+    const skiff_app_config config = {.storage = &storage.base,
+                                     .roots = roots,
+                                     .lock = tracked_lock,
+                                     .unlock = tracked_unlock,
+                                     .log_lock = &lock_held[0],
+                                     .jobs_lock = &lock_held[1],
+                                     .jobs_save_lock = &lock_held[2],
+                                     .manifest_lock = &lock_held[3]};
+    const skiff_app_env env = make_env();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_create(&config, &env, &app));
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    serve_content(1);
+    manifest_saves = 0;
+    manifest_saves_under_lock = 0;
+    storage.on_call = watch_manifest;
+    run_worker_once();
+    storage.on_call = NULL;
+    TEST_PRINTF("installed.json opened %d time(s) by the save, %d with the manifest lock held",
+                manifest_saves, manifest_saves_under_lock);
+    TEST_ASSERT_GREATER_THAN_INT(0, manifest_saves);
+    TEST_ASSERT_EQUAL_INT(0, manifest_saves_under_lock);
+    TEST_ASSERT_EQUAL_size_t(1, app->manifest->count);
 }
 
 /* ---- The log ---- */
@@ -1339,6 +1459,11 @@ int main(void) {
     RUN_TEST(test_a_failed_details_request_is_retried_for_the_same_rom);
     RUN_TEST(test_a_lost_connection_joins_again_then_opens_the_same_rom);
     RUN_TEST(test_a_worker_that_cannot_start_is_shown);
+    RUN_TEST(test_a_new_server_forgets_the_old_installs);
+    RUN_TEST(test_an_abandoned_retry_is_forgotten);
+    RUN_TEST(test_a_new_code_after_a_lost_connection_joins_first);
+    RUN_TEST(test_queued_downloads_hold_their_installed_records);
+    RUN_TEST(test_installed_json_is_saved_without_the_lock_the_ui_reads);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);
     RUN_TEST(test_wrapping_breaks_between_words_and_inside_long_ones);

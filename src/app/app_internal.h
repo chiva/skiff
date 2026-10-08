@@ -174,6 +174,8 @@ struct skiff_app {
     app_request request;
     app_request failed_request;
     int has_rom;
+    /* A new pairing waits for the Wi-Fi to be joined again. */
+    int pairing_requested;
     int free_known;
 
     skiff_romm_server server;

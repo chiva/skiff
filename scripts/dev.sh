@@ -15,6 +15,10 @@ readonly UI_PROTO_TIMEOUT_SECONDS=90
 # The app smoke test draws its first screen for 60 frames in the same software renderer, after
 # reading its files; CI passes the same value in its app step.
 readonly APP_SMOKE_TIMEOUT_SECONDS=90
+# The launch check (tests/hardware/launch_check.c): its build folder and the disc images
+# launch-disc writes there (tests/hardware/make_launch_disc.py).
+readonly LAUNCH_CHECK_DIR="build/psp/pbp/skiff_launch_check"
+readonly LAUNCH_DISC_IMAGES=("Skiff Launch Check.iso" "Skiff Launch Check.cso")
 readonly COVERAGE_FLOOR=85
 # CI runs `test` and `asan` through this script, so this list is the compiler matrix everywhere.
 readonly HOST_COMPILERS=(gcc clang)
@@ -24,6 +28,8 @@ readonly COMPOSE_FILE="$REPO_ROOT/tests/integration/compose.yaml"
 readonly COMPOSE_PROJECT="skiff-romm"
 readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
 readonly ROMM_ADMIN_USER="skiff"
+# The PSP platform's folder in the RomM container (tests/integration/seed.py, LIBRARY_DIR).
+readonly ROMM_PLATFORM_DIR="/romm/library/roms/psp"
 # The fake transport's recorded RomM responses (tests/support/fake_transport.h), and the size of the
 # synthetic file seeded while recording them, kept small so the fixture stays small.
 readonly FIXTURES_DIR="tests/fixtures/romm"
@@ -77,8 +83,13 @@ Commands run in the order given and stop at the first failure.
   app-smoke    Run the app's smoke test in PPSSPPHeadless, which has no ARK and no config.ini: the
                app must start, reach the screen asking for the server address, draw it, and tear
                down (needs `psp` first; pairing, browsing and downloads need a real PSP)
+  launch-disc  Pack the launch check as a UMD disc image, .iso and .cso (needs `psp` first); romm-up
+               and romm-lan then seed both, for the hardware tier's XMB launch (A1)
+  launch-check Boot both launch check images in PPSSPPHeadless: each must read its whole pattern
+               file back from the disc (needs `launch-disc` first)
   romm-up      Start a fresh test RomM behind a TLS proxy on 127.0.0.1 (tests/integration/)
-  romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP)
+  romm-lan     The same, reachable from a PSP on the LAN (IP detected, or set SKIFF_LAN_IP);
+               SKIFF_LIBRARY_ROMS=<n> seeds the app's hardware library (A1, tests/integration/seed.py)
   romm-check   Check the running test RomM: TLS, client certificates, token, ranged download
   romm-test    Run the host build's transport and resumable downloads against the running test
                RomM (TLS, mTLS, clock, keep-alive, ranged and resumed downloads)
@@ -180,6 +191,22 @@ lan_ip() {
   esac
 }
 
+# The A1 library (SKIFF_LIBRARY_ROMS, tests/integration/seed.py) includes the launch check's disc
+# images when launch-disc has made them: copied into the platform's folder before the seed scans it.
+seed_launch_disc() {
+  local image found=0
+  compose exec -T romm mkdir -p "$ROMM_PLATFORM_DIR"
+  for image in "${LAUNCH_DISC_IMAGES[@]}"; do
+    if [[ -f "$REPO_ROOT/$LAUNCH_CHECK_DIR/$image" ]]; then
+      compose cp "$REPO_ROOT/$LAUNCH_CHECK_DIR/$image" "romm:$ROMM_PLATFORM_DIR/$image"
+      found=1
+    fi
+  done
+  if [[ "$found" == 0 ]]; then
+    echo "note: no launch check disc images; run scripts/dev.sh psp launch-disc first to seed them" >&2
+  fi
+}
+
 # romm_up <bind-address> [<lan-ip>]: always a fresh server (empty volumes, new secrets), so every run
 # starts from the same state. Plain HTTP is published on the LAN only with SKIFF_LAN_PLAIN_HTTP=1.
 romm_up() {
@@ -205,10 +232,14 @@ romm_up() {
   echo "test RomM: starting from empty volumes (about a minute)..." >&2
   compose down --volumes --remove-orphans
   compose up --detach --wait
+  if [[ -n "${SKIFF_LIBRARY_ROMS:-}" ]]; then
+    seed_launch_disc
+  fi
   (
     umask 077
     compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
       ${SKIFF_PAYLOAD_BYTES:+-e SKIFF_PAYLOAD_BYTES="$SKIFF_PAYLOAD_BYTES"} \
+      ${SKIFF_LIBRARY_ROMS:+-e SKIFF_LIBRARY_ROMS="$SKIFF_LIBRARY_ROMS"} \
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
@@ -293,6 +324,15 @@ run_command() {
   app-smoke)
     run_emulator build/psp/pbp/skiff_app_smoke/EBOOT.PBP "APP SMOKE" "$APP_SMOKE_TIMEOUT_SECONDS"
     ;;
+  launch-disc)
+    run_host "python3 tests/hardware/make_launch_disc.py $LAUNCH_CHECK_DIR"
+    ;;
+  launch-check)
+    local image
+    for image in "${LAUNCH_DISC_IMAGES[@]}"; do
+      run_emulator "$LAUNCH_CHECK_DIR/$image" "LAUNCH CHECK"
+    done
+    ;;
   romm-up)
     romm_up 127.0.0.1
     ;;
@@ -314,7 +354,8 @@ run_command() {
   romm-record)
     # The server exists only for the recording: stop it even when starting or recording fails.
     trap romm_down EXIT
-    SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
+    # Never the A1 library: the fixtures record the default seed.
+    SKIFF_LIBRARY_ROMS="" SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
     run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
     trap - EXIT
     romm_down

@@ -30,8 +30,9 @@ target_link_libraries(skiff_psp PUBLIC ${SKIFF_PSP_LIBRARIES})
 skiff_set_warnings(skiff_psp)
 
 # Optional ICON and BACKGROUND name the XMB artwork; without them the XMB shows its default icon.
+# PRX also writes the program as a relocatable module, <ELF>.prx, as a disc's EBOOT.BIN must be.
 function(skiff_add_psp_app target title main_source)
-  cmake_parse_arguments(PARSE_ARGV 3 SKIFF_APP "" "ICON;BACKGROUND" "")
+  cmake_parse_arguments(PARSE_ARGV 3 SKIFF_APP "PRX" "ICON;BACKGROUND" "")
   add_executable(${target} ${main_source})
   target_link_libraries(${target} PRIVATE skiff_core skiff_psp)
   skiff_set_warnings(${target})
@@ -46,12 +47,17 @@ function(skiff_add_psp_app target title main_source)
     list(APPEND artwork BACKGROUND_PATH "${SKIFF_APP_BACKGROUND}")
     set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${SKIFF_APP_BACKGROUND}")
   endif()
+  set(prx)
+  if(SKIFF_APP_PRX)
+    set(prx BUILD_PRX)
+  endif()
   create_pbp_file(
     TARGET ${target}
     TITLE "${title}"
     VERSION "${SKIFF_PBP_VERSION}"
     MEMSIZE ${SKIFF_PBP_MEMSIZE_FULL}
     ${artwork}
+    ${prx}
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/pbp/${target}")
 endfunction()
 
@@ -227,3 +233,25 @@ target_link_libraries(skiff PRIVATE ${SKIFF_PSP_APP_LIBRARIES})
 skiff_add_psp_app(skiff_app_smoke "${SKIFF_PBP_TITLE} app smoke test" src/platform/psp/app_main.c)
 target_compile_definitions(skiff_app_smoke PRIVATE SKIFF_APP_SMOKE)
 target_link_libraries(skiff_app_smoke PRIVATE ${SKIFF_PSP_APP_LIBRARIES} skiff_psp_check)
+
+# Launch check (hardware row A1, never packaged): a tiny game for a UMD disc image, which Skiff
+# downloads from the test RomM and the XMB launches (see tests/hardware/launch_check.c). Its PRX, a
+# game PARAM.SFO (category UG) and UMD_DATA.BIN, both with a made-up disc ID, are laid out here as
+# the disc's files; `scripts/dev.sh launch-disc` adds the pattern file and writes the .iso and .cso.
+set(SKIFF_LAUNCH_DISC_DIR "${CMAKE_CURRENT_BINARY_DIR}/pbp/skiff_launch_check/disc")
+set(SKIFF_LAUNCH_DISC_ID "SKIF00001")
+# "<disc ID with a dash>|<16 hex digits>|0001|G", as on pressed discs.
+file(WRITE "${SKIFF_LAUNCH_DISC_DIR}/UMD_DATA.BIN" "SKIF-00001|0000000000000001|0001|G")
+skiff_add_psp_app(skiff_launch_check "${SKIFF_PBP_TITLE} launch check" tests/hardware/launch_check.c
+  PRX)
+target_link_libraries(skiff_launch_check PRIVATE skiff_psp_check)
+add_custom_command(
+  TARGET skiff_launch_check
+  POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${SKIFF_LAUNCH_DISC_DIR}/PSP_GAME/SYSDIR"
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:skiff_launch_check>.prx"
+          "${SKIFF_LAUNCH_DISC_DIR}/PSP_GAME/SYSDIR/EBOOT.BIN"
+  COMMAND "${PSPDEV}/bin/mksfoex" -s CATEGORY=UG -s DISC_ID=${SKIFF_LAUNCH_DISC_ID}
+          -s DISC_VERSION=${SKIFF_PBP_VERSION} -d BOOTABLE=1 -d DISC_NUMBER=1 -d DISC_TOTAL=1
+          "${SKIFF_PBP_TITLE} launch check" "${SKIFF_LAUNCH_DISC_DIR}/PSP_GAME/PARAM.SFO"
+  COMMENT "Laying out the launch check's disc files")

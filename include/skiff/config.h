@@ -17,6 +17,9 @@
  *              key_file
  *   [headers]  <name>      sent on every request (e.g. CF-Access-Client-Id)
  *   [log]      level       error, warn, info or debug; info when unset
+ *   [network]  profile     the Network Settings connection Skiff joins (1-10); Skiff saves the one
+ *                          the player picked, so later launches join without asking
+ *   [skiff]    romm_notice the newer RomM release line the player was already told about
  *
  * Lines are "key = value"; '#' or ';' at the start of a line begins a comment. There are no inline
  * comments, because a token or header value may contain '#'. Section and key names ignore case.
@@ -42,6 +45,15 @@
 #define SKIFF_CONFIG_KEY_TOKEN "token"
 #define SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER "device_identifier"
 #define SKIFF_CONFIG_KEY_DEVICE_ID "device_id"
+/* The keys the app writes besides pairing's. */
+#define SKIFF_CONFIG_SECTION_SKIFF "skiff"
+#define SKIFF_CONFIG_SECTION_SERVER "server"
+#define SKIFF_CONFIG_SECTION_NETWORK "network"
+#define SKIFF_CONFIG_KEY_URL "url"
+#define SKIFF_CONFIG_KEY_PROFILE "profile"
+#define SKIFF_CONFIG_KEY_ROMM_NOTICE "romm_notice"
+/* The PSP keeps up to 10 connections in Network Settings, numbered from 1. */
+#define SKIFF_CONFIG_PROFILE_MAX 10
 
 /* Buffer sizes, terminator included. A longer value is refused, never cut. */
 #define SKIFF_CONFIG_URL_MAX 256
@@ -54,6 +66,8 @@
 #define SKIFF_CONFIG_NAME_MAX 64
 #define SKIFF_CONFIG_HEADER_VALUE_MAX 256
 #define SKIFF_CONFIG_HEADERS_MAX 8
+/* A RomM release line ("5.4"), or a version that is not one ("dev-1234"). */
+#define SKIFF_CONFIG_NOTICE_MAX 32
 
 typedef struct skiff_config_header {
     char name[SKIFF_CONFIG_NAME_MAX];
@@ -79,6 +93,9 @@ typedef struct skiff_config {
     skiff_config_header headers[SKIFF_CONFIG_HEADERS_MAX];
     size_t header_count;
     skiff_log_level log_level;
+    /* 0 when Skiff has not saved one yet. */
+    int network_profile;
+    char romm_notice[SKIFF_CONFIG_NOTICE_MAX];
     /* Keys Skiff does not know are ignored (a newer Skiff may have written them), but a typo such
      * as "ca-file" would silently do nothing, so the first is kept for a log warning. */
     int unknown_count;
@@ -98,7 +115,8 @@ typedef struct skiff_config {
  *     or https:// or with blanks, a token, device_identifier or device_id with blanks or control
  *     characters, a file name with a path in it, a header Skiff sets itself (Authorization, Host,
  *     Range, If-Range), a header name that is not an HTTP token, an empty header value, or more
- *     than SKIFF_CONFIG_HEADERS_MAX headers;
+ *     than SKIFF_CONFIG_HEADERS_MAX headers, a network profile that is not a number from 1 to
+ *     SKIFF_CONFIG_PROFILE_MAX, or a romm_notice with blanks or control characters;
  *   - SKIFF_ERR_INVALID_ARG: NULL text with a non-zero length, or a NULL out.
  */
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,

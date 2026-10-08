@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "skiff/app.h"
 #include "skiff/config.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
@@ -322,6 +323,21 @@ static const char *check_ui_utf16(void) {
                : "UTF-16 came back as other UTF-8";
 }
 
+/* The app wraps sentences between words with the same measure: on the PSP's signed char a line
+ * must still never end inside "é" or "ñ". */
+static const char *check_app_wrap(void) {
+    char lines[4][SKIFF_TEXT_MAX];
+    const size_t count = skiff_app_wrap("A\xC3\xB1"
+                                        "adido a las descargas: caf\xC3\xA9",
+                                        12.0f, measure_characters, NULL, lines, 4);
+    return count == 4 &&
+                   strcmp(lines[0], "A\xC3\xB1"
+                                    "adido a") == 0 &&
+                   strcmp(lines[3], "caf\xC3\xA9") == 0
+               ? NULL
+               : "a sentence was not wrapped between words";
+}
+
 /* The download queue's file is written with cJSON's number printing (newlib's snprintf on the
  * PSP) and read back with strtod: a size just under 4 GiB and a 15-digit ROM id must survive. */
 static const char *check_jobs_queue(void) {
@@ -407,6 +423,7 @@ static const selftest_check CHECKS[] = {
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},
     {"ui-utf16", check_ui_utf16},
+    {"app-wrap", check_app_wrap},
     {"jobs-queue", check_jobs_queue},
     {"install-manifest", check_install_manifest},
 };

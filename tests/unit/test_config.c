@@ -196,6 +196,48 @@ static void test_an_unknown_log_level_is_refused(void) {
                    "level");
 }
 
+static void test_the_network_profile_is_a_number_from_1_to_10(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[server]\nurl = https://romm.test\n"));
+    TEST_PRINTF("unset until Skiff saves the connection the player picked");
+    TEST_ASSERT_EQUAL_INT(0, config.network_profile);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[Network]\nProfile = 3\n"));
+    TEST_ASSERT_EQUAL_INT(3, config.network_profile);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[network]\nprofile = 10\n"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_CONFIG_PROFILE_MAX, config.network_profile);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[network]\nprofile =\n"));
+    TEST_ASSERT_EQUAL_INT(0, config.network_profile);
+    const char *refused[] = {"[network]\nprofile = 0\n",   "[network]\nprofile = 11\n",
+                             "[network]\nprofile = -1\n",  "[network]\nprofile = 1a\n",
+                             "[network]\nprofile = 2 3\n", "[network]\nprofile = 99999999999\n"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        assert_refused(refused[i], SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "network", "profile");
+        TEST_ASSERT_EQUAL_INT(0, config.network_profile);
+    }
+    assert_refused("[network]\nprofile = 1\nprofile = 2\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 3,
+                   "network", "profile");
+}
+
+static void test_the_romm_notice_keeps_the_release_line_told(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 1\nromm_notice = 5.4\n"));
+    TEST_ASSERT_EQUAL_STRING("5.4", config.romm_notice);
+    assert_refused("[skiff]\nromm_notice = 5 4\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "skiff",
+                   "romm_notice");
+    char text[SKIFF_CONFIG_NOTICE_MAX + 32];
+    snprintf(text, sizeof text, "[skiff]\nromm_notice = %0*d\n", SKIFF_CONFIG_NOTICE_MAX, 0);
+    assert_refused(text, SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "skiff", "romm_notice");
+    TEST_PRINTF("the app writes both keys through the line-preserving edit");
+    set("[server]\nurl = https://romm.test\n", SKIFF_CONFIG_SECTION_NETWORK,
+        SKIFF_CONFIG_KEY_PROFILE, "2");
+    TEST_ASSERT_EQUAL_STRING("[server]\nurl = https://romm.test\n\n[network]\nprofile = 2\n",
+                             edited);
+    char with_profile[TEXT_BUFFER];
+    snprintf(with_profile, sizeof with_profile, "%s", edited);
+    set(with_profile, SKIFF_CONFIG_SECTION_SKIFF, SKIFF_CONFIG_KEY_ROMM_NOTICE, "5.4");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse(edited));
+    TEST_ASSERT_EQUAL_INT(2, config.network_profile);
+    TEST_ASSERT_EQUAL_STRING("5.4", config.romm_notice);
+}
+
 static void test_version_1_and_no_version_are_accepted(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 1\n"));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 01\n"));
@@ -792,6 +834,8 @@ int main(void) {
     RUN_TEST(test_the_last_line_needs_no_newline);
     RUN_TEST(test_the_log_level_defaults_to_info_and_takes_any_case);
     RUN_TEST(test_an_unknown_log_level_is_refused);
+    RUN_TEST(test_the_network_profile_is_a_number_from_1_to_10);
+    RUN_TEST(test_the_romm_notice_keeps_the_release_line_told);
     RUN_TEST(test_version_1_and_no_version_are_accepted);
     RUN_TEST(test_unknown_keys_are_ignored_and_the_first_is_kept);
     RUN_TEST(test_a_key_before_any_section_is_unknown);

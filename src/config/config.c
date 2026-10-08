@@ -7,14 +7,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SECTION_SKIFF "skiff"
-#define SECTION_SERVER "server"
+#define SECTION_SKIFF SKIFF_CONFIG_SECTION_SKIFF
+#define SECTION_SERVER SKIFF_CONFIG_SECTION_SERVER
+#define SECTION_NETWORK SKIFF_CONFIG_SECTION_NETWORK
 #define SECTION_AUTH SKIFF_CONFIG_SECTION_AUTH
 #define SECTION_MTLS "mtls"
 #define SECTION_HEADERS "headers"
 #define SECTION_LOG "log"
 #define KEY_VERSION "version"
-#define KEY_URL "url"
+#define KEY_URL SKIFF_CONFIG_KEY_URL
+#define KEY_PROFILE SKIFF_CONFIG_KEY_PROFILE
+#define KEY_ROMM_NOTICE SKIFF_CONFIG_KEY_ROMM_NOTICE
 #define KEY_CA_FILE "ca_file"
 #define KEY_TOKEN SKIFF_CONFIG_KEY_TOKEN
 #define KEY_DEVICE_IDENTIFIER SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER
@@ -42,6 +45,7 @@ typedef enum value_kind {
     VALUE_FILE_NAME,
     VALUE_TOKEN,
     VALUE_LOG_LEVEL,
+    VALUE_PROFILE,
 } value_kind;
 
 #define FIELD(name) offsetof(skiff_config, name), sizeof(((skiff_config *)NULL)->name)
@@ -50,7 +54,8 @@ typedef struct known_key {
     const char *section;
     const char *key;
     value_kind kind;
-    /* Where the value goes in skiff_config; unused for the version and the log level. */
+    /* Where the value goes in skiff_config; unused for the version, the log level and the
+     * profile. */
     size_t offset;
     size_t size;
 } known_key;
@@ -58,6 +63,7 @@ typedef struct known_key {
 // clang-format off
 static const known_key KNOWN_KEYS[] = {
     {SECTION_SKIFF, KEY_VERSION, VALUE_VERSION, 0, 0},
+    {SECTION_SKIFF, KEY_ROMM_NOTICE, VALUE_TOKEN, FIELD(romm_notice)},
     {SECTION_SERVER, KEY_URL, VALUE_URL, FIELD(server_url)},
     {SECTION_SERVER, KEY_CA_FILE, VALUE_FILE_NAME, FIELD(ca_file)},
     {SECTION_AUTH, KEY_TOKEN, VALUE_TOKEN, FIELD(token)},
@@ -66,6 +72,7 @@ static const known_key KNOWN_KEYS[] = {
     {SECTION_MTLS, KEY_CERT_FILE, VALUE_FILE_NAME, FIELD(cert_file)},
     {SECTION_MTLS, KEY_KEY_FILE, VALUE_FILE_NAME, FIELD(key_file)},
     {SECTION_LOG, KEY_LEVEL, VALUE_LOG_LEVEL, 0, 0},
+    {SECTION_NETWORK, KEY_PROFILE, VALUE_PROFILE, 0, 0},
 };
 // clang-format on
 
@@ -240,9 +247,31 @@ static int parse_log_level(span value, skiff_log_level *out) {
     return copy_whole(value, name, sizeof name) && skiff_log_level_from_name(name, out) == SKIFF_OK;
 }
 
+/* A Network Settings connection, 1 to SKIFF_CONFIG_PROFILE_MAX; empty leaves it unset (0). */
+static int parse_profile(span value, int *out) {
+    char digits[SKIFF_CONFIG_NAME_MAX];
+    if (value.length == 0) {
+        *out = 0;
+        return 1;
+    }
+    if (!copy_whole(value, digits, sizeof digits) || strspn(digits, "0123456789") != value.length) {
+        return 0;
+    }
+    errno = 0;
+    const unsigned long profile = strtoul(digits, NULL, DECIMAL_BASE);
+    if (errno != 0 || profile < 1 || profile > SKIFF_CONFIG_PROFILE_MAX) {
+        return 0;
+    }
+    *out = (int)profile;
+    return 1;
+}
+
 static int store_value(const known_key *known, span value, skiff_config *config) {
     if (known->kind == VALUE_VERSION) {
         return parse_version(value);
+    }
+    if (known->kind == VALUE_PROFILE) {
+        return parse_profile(value, &config->network_profile);
     }
     if (known->kind == VALUE_LOG_LEVEL) {
         return parse_log_level(value, &config->log_level);
@@ -263,6 +292,7 @@ static int store_value(const known_key *known, span value, skiff_config *config)
         return is_plain_file_name(value);
     case VALUE_VERSION:
     case VALUE_LOG_LEVEL:
+    case VALUE_PROFILE:
         break;
     }
     return 0;

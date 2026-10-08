@@ -38,7 +38,7 @@
 Only `src/platform/psp/` includes PSP SDK headers. Every other layer compiles on the host, which is
 what makes it unit-testable and lets sanitizers run over it.
 
-Status: `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
+Status: `app/` (screens and state machine, host-tested; the PSP wiring arrives next), `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
 text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
 `storage/` (the storage seam, logical roots, free space, safe names), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
@@ -106,6 +106,48 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   when it unloads (`skiff_psp_net_load()`, `SKIFF_PSP_NET_CPU_MHZ`). On a PSP-1000 that took HTTPS
   downloads from about 350 to 470 KB/s. The clock has to change before the network modules load:
   with Wi-Fi on, the firmware accepts the call and keeps 222 MHz.
+
+## The app
+
+`include/skiff/app.h` (`src/app/`) is the state machine the player walks through, portable and
+tested on the host with a fake platform: STARTING (read `config.ini`, start `skiff.log` at its
+`[log] level`, the queue and `installed.json`), SERVER (no address yet: the on-screen keyboard),
+CONNECTING (join the Wi-Fi, start TLS, the heartbeat), PAIR, LIBRARY, DETAILS, the downloads
+screen and Settings, plus an error or notice screen and a confirmation. The platform reads the
+buttons, draws the view the app describes (text already fitted and wrapped), runs the system
+dialogs and the network, and reaches it through `skiff_app_env`.
+
+- **One blocking step per frame, announced first.** Requests to RomM run on the UI thread, since a
+  second thread's stack would come out of the ~84 KB left once the worker runs; each is made on the
+  frame after the one that showed what is being waited for ("Contacting RomM..."). Joining the
+  Wi-Fi (7 to 13 s) is polled instead.
+- **The Wi-Fi connection** is picked once with the system's network picker and saved as
+  `[network] profile`; later launches join it without asking, and a failed join offers the picker
+  again. The network stays up until Skiff quits.
+- **Startup order**: heartbeat first (205 below RomM 5.3; a newer release line gets a notice once,
+  remembered as `[skiff] romm_notice`), then pairing when there is no token, then the `psp`
+  platform. The worker starts once RomM answered, with its own copies of the server address, token
+  and transport settings, so Settings can change them while it runs.
+- **Before a download is queued**: the installer can take the file (one `.iso`, `.cso` or `.zso`,
+  a usable name), the queue has room (64 unfinished jobs; the player is told to clear finished
+  ones), `installed.json` has room (512 records), and a game already installed asks "Replace your
+  installed copy?". `games:` is created first. Downloads already queued count against the 512
+  records too, since each will need one.
+- **Settings**: a new server address clears the token and RomM's device id (they belong to the old
+  server) and pairs again. The old server's downloads cannot run against the new one (other ROM
+  ids, other files), and neither does what Skiff installed from it say anything about the new
+  one (a ROM id and file name may match another game there). So the player confirms, and the
+  change goes in an order that never lets either act on the new server: stop the worker, cancel
+  the downloads, drop the `installed.json` records (the games stay, protected as copied by hand),
+  save `config.ini`, then rebuild the queue and the client. A worker that will not stop in time changes nothing; a failed cancel or
+  save keeps the old server and starts a new worker for it. "Pair again" keeps the address and
+  the downloads and replaces the token, restarting the worker with it.
+- **installed.json is saved off the lock the UI reads**: the worker records a finished download
+  under the manifest lock, copies the manifest, and saves the copy without it, so drawing the
+  library never waits for the Memory Stick.
+- **Secrets**: the token and every custom header value of at least 8 characters are registered
+  with the log; a shorter value cannot be found reliably and registering it would withhold every
+  line.
 
 ## UI: GU + intraFont
 
@@ -196,6 +238,8 @@ know and the player's order survive.
 | `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
 | `[headers]` | any name | Sent on every request; not `Authorization`, `Host`, `Range` or `If-Range` |
 | `[log]` | `level` | `error`, `warn`, `info` or `debug` for `skiff.log`; `info` when unset |
+| `[network]` | `profile` | The Network Settings connection (1-10) Skiff joins; Skiff saves the one picked in the network picker on the first launch |
+| `[skiff]` | `romm_notice` | The newer RomM release line the player was already told about; written by Skiff |
 
 - **Parsing**: a UTF-8 byte-order mark and CRLF line endings are accepted (Notepad writes both);
   names ignore case; `#` or `;` starts a comment only at the start of a line, because a token or a

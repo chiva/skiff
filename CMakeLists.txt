@@ -42,6 +42,12 @@ endif()
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
 add_library(
   skiff_core STATIC
+  src/app/app.c
+  src/app/app_connect.c
+  src/app/app_library.c
+  src/app/app_queue.c
+  src/app/app_settings.c
+  src/app/app_view.c
   src/config/config.c
   src/core/error.c
   src/core/selftest.c

@@ -57,6 +57,8 @@ typedef struct fake_env {
     int started_profile;
     skiff_err tls_error;
     int opens;
+    /* The CA file the last browsing transport was opened with. */
+    char opened_ca_file[SKIFF_STORAGE_PATH_MAX];
     int worker_starts;
     int worker_stops;
     skiff_err stop_error;
@@ -126,8 +128,10 @@ static skiff_err env_tls(void *ctx) { return ((fake_env *)ctx)->tls_error; }
 
 static skiff_err env_open(void *ctx, const skiff_app_transport_settings *settings,
                           skiff_transport **out) {
-    (void)settings;
     fake_env *e = ctx;
+    if (settings != NULL) {
+        snprintf(e->opened_ca_file, sizeof e->opened_ca_file, "%s", settings->ca_file);
+    }
     proxy_transport *proxy = calloc(1, sizeof *proxy);
     TEST_ASSERT_NOT_NULL(proxy);
     proxy->base.ops = &PROXY_OPS;
@@ -1412,11 +1416,36 @@ static void test_transport_settings_come_from_the_skiff_folder(void) {
     TEST_ASSERT_EQUAL_STRING(expected, settings.client_key);
     TEST_ASSERT_EQUAL_size_t(1, settings.header_count);
     TEST_ASSERT_EQUAL_STRING("X-A", settings.headers[0].name);
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_parse("", 0, &config, NULL));
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_transport_settings_from(&config, &roots, &settings));
-    TEST_ASSERT_EQUAL_STRING("", settings.ca_file);
+    TEST_PRINTF("a set ca_file replaces the bundle: %s", settings.ca_file);
+    TEST_ASSERT_NULL(strstr(settings.ca_file, SKIFF_APP_DEFAULT_CA_FILE));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_app_transport_settings_from(NULL, &roots, &settings));
+}
+
+static void test_an_unset_ca_file_trusts_the_bundled_cas(void) {
+    static const char text[] = "[server]\nurl = https://romm.test\nca_file =\n";
+    skiff_config config;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_parse(text, sizeof text - 1, &config, NULL));
+    skiff_app_transport_settings settings;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_transport_settings_from(&config, &roots, &settings));
+    char expected[TEMP_DIR_PATH_MAX];
+    app_file(SKIFF_APP_DEFAULT_CA_FILE, expected, sizeof expected);
+    TEST_PRINTF("an empty ca_file: %s", settings.ca_file);
+    TEST_ASSERT_EQUAL_STRING(expected, settings.ca_file);
+    TEST_PRINTF("no client certificate unless one is set");
+    TEST_ASSERT_EQUAL_STRING("", settings.client_cert);
+    TEST_ASSERT_EQUAL_STRING("", settings.client_key);
+}
+
+static void test_the_app_browses_and_downloads_with_the_bundled_cas(void) {
+    open_paired_library(1);
+    char expected[TEMP_DIR_PATH_MAX];
+    app_file(SKIFF_APP_DEFAULT_CA_FILE, expected, sizeof expected);
+    TEST_PRINTF("browsing transport CA file: %s", env_state.opened_ca_file);
+    TEST_ASSERT_EQUAL_STRING(expected, env_state.opened_ca_file);
+    TEST_ASSERT_NOT_NULL(env_state.spec.transport);
+    TEST_PRINTF("download worker CA file: %s", env_state.spec.transport->ca_file);
+    TEST_ASSERT_EQUAL_STRING(expected, env_state.spec.transport->ca_file);
 }
 
 static void test_wrapping_breaks_between_words_and_inside_long_ones(void) {
@@ -1533,6 +1562,8 @@ int main(void) {
     RUN_TEST(test_installed_json_is_saved_without_the_lock_the_ui_reads);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);
+    RUN_TEST(test_an_unset_ca_file_trusts_the_bundled_cas);
+    RUN_TEST(test_the_app_browses_and_downloads_with_the_bundled_cas);
     RUN_TEST(test_wrapping_breaks_between_words_and_inside_long_ones);
     RUN_TEST(test_bad_arguments_and_locks);
     return UNITY_END();

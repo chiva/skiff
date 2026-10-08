@@ -26,8 +26,13 @@ and its key.
 
 ## HTTPS with a public certificate
 
-Nothing to do on the PSP. Skiff ships a list of trusted certificate authorities and checks the
+Nothing to do on the PSP. Skiff ships Mozilla's list of trusted certificate authorities, the one
+Firefox and curl use, as `PSP/GAME/Skiff/cacert.pem`. While `ca_file` is empty, Skiff checks the
 server's certificate against it.
+
+Each release brings the newest list, and unzipping a release over the old one replaces the file. Do
+not edit it: put your own certificates in another file and set `ca_file` instead (below). If
+`cacert.pem` is missing, HTTPS stops with error 402 until you unzip the release again.
 
 ## HTTPS with your own certificate authority
 
@@ -39,6 +44,10 @@ Copy your CA certificate (PEM format, the text file starting with `-----BEGIN CE
 url = https://romm.home.arpa
 ca_file = ca.pem
 ```
+
+`ca_file` replaces Mozilla's list; it does not add to it. With it set, Skiff trusts only the
+certificates in that file. To trust your CA and the public ones too, put them in one file, for
+example `cat cacert.pem my-ca.crt > ca.pem`, and repeat that after each update.
 
 ## mTLS
 

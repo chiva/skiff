@@ -34,6 +34,9 @@
 
 #define SKIFF_APP_LOG_TAG "app"
 #define SKIFF_APP_LOG_FILE_NAME "skiff.log"
+/* The CA bundle in the Skiff folder that the release ships (Mozilla's roots, as curl publishes
+ * them): the server certificates trusted when config.ini sets no ca_file. A ca_file replaces it. */
+#define SKIFF_APP_DEFAULT_CA_FILE "cacert.pem"
 /* The platform the app browses and the installer it downloads with. */
 #define SKIFF_APP_PLATFORM_SLUG "psp"
 
@@ -138,8 +141,9 @@ typedef struct skiff_app_view {
 
 /* The file names in config.ini made into paths, and its custom headers, for a transport. */
 typedef struct skiff_app_transport_settings {
-    /* Empty for none. */
+    /* Always set: config.ini's ca_file, or SKIFF_APP_DEFAULT_CA_FILE. */
     char ca_file[SKIFF_STORAGE_PATH_MAX];
+    /* Empty for none. */
     char client_cert[SKIFF_STORAGE_PATH_MAX];
     char client_key[SKIFF_STORAGE_PATH_MAX];
     /* Views into the config the app keeps. */
@@ -251,8 +255,8 @@ skiff_log *skiff_app_log(const skiff_app *app);
 
 /*
  * Makes config's ca_file, cert_file and key_file into paths in app: and points headers at its
- * custom headers. SKIFF_ERR_INVALID_ARG for a NULL argument, skiff_storage_resolve()'s error for a
- * name that does not resolve.
+ * custom headers. An unset ca_file becomes SKIFF_APP_DEFAULT_CA_FILE. SKIFF_ERR_INVALID_ARG for a
+ * NULL argument, skiff_storage_resolve()'s error for a name that does not resolve.
  */
 skiff_err skiff_app_transport_settings_from(const skiff_config *config,
                                             const skiff_storage_roots *roots,

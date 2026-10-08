@@ -104,15 +104,28 @@ The host image builds the same two libraries with the same profile and options
 the TLS stack the PSP uses. Host test binaries seed it from the operating system's `getrandom()`
 (`src/platform/host/tls_hooks.c`), which is never linked into an EBOOT.
 
+### Trusted certificate authorities
+
+Skiff checks server certificates against one CA file. The release ships Mozilla's root
+certificates as curl publishes them, `cacert.pem` next to the EBOOT, and the app uses it while
+`config.ini`'s `ca_file` is empty. A set `ca_file` replaces it, so a server on a private CA is
+trusted through that CA alone. curl is built without a compiled-in bundle or path
+(`CURL_CA_BUNDLE=none`), so nothing else is trusted. The bundle is a dated file pinned by SHA256
+([Toolchain](toolchain.md#the-ca-bundle)).
+
 ### Verified sources
 
-Archives are pinned by SHA256; mbedtls is checked against its published checksums and curl against
+Archives and the CA bundle are pinned by SHA256; mbedtls is checked against its published checksums and curl against
 its maintainer's signature whenever a version changes. The pspdev base image is pinned by digest.
 
 ## Costs of this approach
 
 - **An extra image build.** The first local build compiles mbedtls and curl (minutes under
   emulation on Apple Silicon); CI builds it natively in about two minutes.
+- **A CA bundle to parse.** curl's Mbed TLS backend parses the CA file (Mozilla's full list,
+  about 190 KB of PEM) for each new TLS connection and holds it while the connection lives; kept
+  connections pay it once. Its parse time and heap on a PSP are still to be measured by the hardware
+  tier; the list is trimmed only if they are too high.
 - **Networking needs the entropy source, even for plain HTTP.** Since curl 7.57,
   `curl_global_init()` always initialises TLS, which in Mbed TLS 4 means `psa_crypto_init()`. If the
   source cannot answer, no connection of any kind can be made.

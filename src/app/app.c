@@ -709,7 +709,9 @@ skiff_err skiff_app_transport_settings_from(const skiff_config *config,
     if (config == NULL || roots == NULL || out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    const char *const names[] = {config->ca_file, config->cert_file, config->key_file};
+    const char *const ca_file =
+        config->ca_file[0] != '\0' ? config->ca_file : SKIFF_APP_DEFAULT_CA_FILE;
+    const char *const names[] = {ca_file, config->cert_file, config->key_file};
     char *const paths[] = {out->ca_file, out->client_cert, out->client_key};
     for (size_t i = 0; i < 3; i++) {
         if (names[i][0] == '\0') {

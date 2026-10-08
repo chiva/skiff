@@ -38,6 +38,9 @@ CI runs these same commands, so the compiler matrix lives only in `HOST_COMPILER
 PSP builds use the `skiff-toolchain` image (`docker/toolchain.Dockerfile`): pspdev, pinned as
 `tag@digest`, plus Mbed TLS 4.1 and curl 8.22 pinned by SHA256. The host image builds the same TLS
 stack from the same script (`docker/toolchain/build-tls.sh`), so versions and checksums live there.
+The toolchain image also holds the CA bundle the app trusts by default (Mozilla's `cacert.pem`,
+date and SHA256 in `docker/ca-bundle/fetch-ca-bundle.sh`); PSP builds copy it next to the app's
+EBOOT, and the release zip ships it.
 CI job names are required status checks in the `main` ruleset: add steps or jobs, never rename
 existing ones.
 

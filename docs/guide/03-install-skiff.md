@@ -23,7 +23,9 @@
      GAME/
        Skiff/
          EBOOT.PBP
+         cacert.pem
          LICENSE.txt
+         third-party-licenses/
    ```
 
 4. Eject the drive on your computer, then press ○ on the PSP to leave USB mode.

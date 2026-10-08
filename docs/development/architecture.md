@@ -232,7 +232,7 @@ know and the player's order survive.
 |---|---|---|
 | `[skiff]` | `version` | Schema version; absent means 1, a newer one is refused (402) |
 | `[server]` | `url` | Explicit `http://` or `https://`, no blanks (the transport's own rule) |
-| `[server]` | `ca_file` | A file name in the Skiff folder; empty for the bundled public CAs |
+| `[server]` | `ca_file` | A file name in the Skiff folder; empty for the bundled Mozilla CAs (`cacert.pem`), which a set one replaces |
 | `[auth]` | `token` | Printable ASCII without blanks |
 | `[auth]` | `device_identifier`, `device_id` | Printable ASCII without blanks; written by pairing (below) |
 | `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
@@ -617,6 +617,17 @@ Go's (Caddy, Traefik), which read a client listing ChaCha20 first as one without
 integration tests check that the transport negotiates ChaCha20 with Caddy and still reaches a TLS
 1.2 server that offers only AES-128-GCM.
 
+Server certificates are checked against one CA file. The release ships Mozilla's root
+certificates as curl publishes them (`cacert.pem` next to the EBOOT, about 190 KB), and
+the app uses it while `config.ini`'s `ca_file` is empty (`SKIFF_APP_DEFAULT_CA_FILE`,
+`skiff_app_transport_settings_from()`). A set `ca_file` replaces the bundle rather than adding to
+it, so a private CA does not widen trust to every public one, and a player who wants both writes
+both into one file. The bundle is a dated file pinned by SHA256 in
+`docker/ca-bundle/fetch-ca-bundle.sh`, fetched into the toolchain image ([Toolchain](toolchain.md#the-ca-bundle)).
+Skiff's Mbed TLS profile parses all 121 roots of the 2026-09-25 bundle (host build). The full list
+is kept until the hardware tier measures its parse time and heap on a PSP; it is trimmed only if
+that is slow.
+
 For mTLS, client keys should be ECDSA P-256: on a PSP-1000, a TLS 1.3 handshake took 0.59 s
 without a client certificate, 0.69 s with an ECDSA P-256 one and 2.07 s with RSA-2048 (median of
 5). Connections are kept alive to pay the handshake once per session; a second request on a kept
@@ -688,5 +699,7 @@ the release zip ships all their licences in `third-party-licenses/`, collected b
   LGPL §6 lets players relink with a modified copy; Skiff meets this by publishing its complete
   source and build under MIT with a public toolchain.
 - **mbedtls (Apache-2.0)** requires its licence in the distribution.
+- **Mozilla's root certificates (MPL-2.0)** ship as `cacert.pem`, unmodified and so in their source
+  form; `scripts/collect-licenses.sh` adds the MPL-2.0 text as `third-party-licenses/cacert/`.
 - **argosy-sigil (MPL-2.0)**, once adopted, requires its source to stay available, which the
   pinned public submodule does.

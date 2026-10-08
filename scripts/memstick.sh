@@ -278,6 +278,21 @@ forget_server_state() {
   fi
 }
 
+# Finishes or undoes a save of <path> cut short, as the app's next load would
+# (skiff_storage_read_whole()): the draft goes; the next version becomes the file when the file is
+# gone, and goes when the file is there.
+finish_cut_save() {
+  local path="$1"
+  rm -f "$path.tmp"
+  if [[ -f "$path.new" ]]; then
+    if [[ -f "$path" ]]; then
+      rm -f "$path.new"
+    else
+      mv "$path.new" "$path"
+    fi
+  fi
+}
+
 install_app_config() {
   local dest="$GAME_DIR/$APP_FOLDER" host url server_id config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG"
   host="$(test_server_lan_ip)"
@@ -290,6 +305,7 @@ install_app_config() {
   server_id="$(test_server_id)"
   # Every romm-lan makes a new test CA, so the bundle is rewritten even for a kept config.ini.
   cat "$dest/$CA_BUNDLE_NAME" "$INTEGRATION_CERTS/ca.crt" >"$dest/$APP_CA_FILE"
+  finish_cut_save "$config"
   if [[ -f "$config" && "$(ini_value "$config" server url)" == "$url" ]] &&
     grep -qxF "$SERVER_ID_COMMENT$server_id" "$config"; then
     echo "$APP_FOLDER: config.ini for this test server kept (pairing and network too)"

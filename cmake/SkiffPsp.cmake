@@ -166,7 +166,7 @@ target_link_libraries(skiff_resume_probe PRIVATE skiff_net skiff_probe_support s
 
 # The UI renderer (src/platform/psp/ui_psp.h): GU and intraFont with the firmware's fonts, drawing
 # skiff/ui.h's models. intraFont comes from pspdev's packages; it draws through GU, so it goes before
-# pspgu. Its licence joins scripts/psp-packages.txt once the app links it.
+# pspgu. Its licence ships through scripts/psp-packages.txt (libintrafont).
 add_library(skiff_psp_ui OBJECT src/platform/psp/ui_psp.c)
 target_compile_options(skiff_psp_ui PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_link_libraries(skiff_psp_ui PUBLIC skiff_core intrafont pspgu)
@@ -192,7 +192,7 @@ target_link_libraries(skiff_ui_proto PRIVATE skiff_psp_check skiff_psp_net skiff
 # The download queue's worker on the PSP (src/platform/psp/jobs_psp.h): the thread running
 # skiff_jobs_run_one(), and the hooks the runner asks for (curl transport, Wi-Fi switch, rejoining
 # and reloading the network, suspends, keep-awake, clock), plus the mutex and real-time clock the
-# queue and the log use. The app links it once it has screens; the jobs probe does now.
+# queue and the log use. Linked by the app and the jobs probe.
 add_library(skiff_psp_jobs OBJECT src/platform/psp/jobs_psp.c)
 target_compile_options(skiff_psp_jobs PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_link_libraries(skiff_psp_jobs PUBLIC skiff_core skiff_net skiff_psp_net)
@@ -208,3 +208,22 @@ target_link_libraries(skiff_jobs_probe PRIVATE skiff_net skiff_probe_support ski
                                                skiff_psp_net skiff_psp_storage skiff_psp_jobs
                                                skiff_psp_ui skiff_psp_ark skiff_psp_tls
                                                skiff_psp_entropy)
+
+# The app on the PSP (src/platform/psp/app_psp.h): skiff/app.h's hooks over the network stack, the
+# download worker, the system dialogs and the renderer. Linked by the app and its smoke test. Objects
+# of OBJECT libraries reach only the executables that list them, so both list them all.
+add_library(skiff_psp_app OBJECT src/platform/psp/app_psp.c)
+target_compile_options(skiff_psp_app PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
+target_link_libraries(skiff_psp_app PUBLIC skiff_core skiff_net)
+target_include_directories(skiff_psp_app PUBLIC src/platform/psp)
+skiff_set_warnings(skiff_psp_app)
+set(SKIFF_PSP_APP_LIBRARIES
+    skiff_psp_app skiff_net skiff_psp_net skiff_psp_storage skiff_psp_jobs skiff_psp_ui
+    skiff_psp_dialog skiff_psp_ark skiff_psp_tls skiff_psp_entropy)
+target_link_libraries(skiff PRIVATE ${SKIFF_PSP_APP_LIBRARIES})
+
+# App smoke test (emulator, never packaged): the app's own main with SKIFF_APP_SMOKE, which boots
+# without ARK or config.ini to the screen asking for the server, draws it and quits by itself.
+skiff_add_psp_app(skiff_app_smoke "${SKIFF_PBP_TITLE} app smoke test" src/platform/psp/app_main.c)
+target_compile_definitions(skiff_app_smoke PRIVATE SKIFF_APP_SMOKE)
+target_link_libraries(skiff_app_smoke PRIVATE ${SKIFF_PSP_APP_LIBRARIES} skiff_psp_check)

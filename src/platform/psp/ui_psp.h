@@ -109,6 +109,21 @@ typedef const char *(*skiff_psp_ui_label_fn)(void *ctx, size_t index);
 void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
                        skiff_psp_ui_label_fn label, void *label_ctx);
 
+/* A row of skiff_psp_ui_rows(): its label, already fitted; a detail drawn right-aligned in the
+ * row (NULL or "" for none); and whether to draw it dimmed (shown but not usable). */
+typedef struct skiff_psp_ui_row {
+    const char *label;
+    const char *detail;
+    int dim;
+} skiff_psp_ui_row;
+
+/* Fills *row for item index of the list. */
+typedef void (*skiff_psp_ui_row_fn)(void *ctx, size_t index, skiff_psp_ui_row *row);
+
+/* As skiff_psp_ui_list(), with a detail on the right of each row and dimmed rows. */
+void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
+                       skiff_psp_ui_row_fn row, void *row_ctx);
+
 /* A bar from x to x + width, filled to percent (0-100). */
 void skiff_psp_ui_progress_bar(const skiff_psp_ui *ui, int x, int y, int width, int height,
                                unsigned percent);

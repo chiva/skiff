@@ -144,6 +144,12 @@ jobs:
         run: >-
           docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
           tests/emulator/run_eboot.sh build/psp/pbp/skiff_ui_proto/EBOOT.PBP "UI PROTO HEADLESS" 90
+      # The app itself, built with SKIFF_APP_SMOKE: no ARK and no config.ini, so it must reach the
+      # screen asking for the server address, draw it, and tear down. Same 90 s as scripts/dev.sh.
+      - name: Run the app smoke test EBOOT (headless, boots to the first screen)
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src skiff-ppsspp:ci
+          tests/emulator/run_eboot.sh build/psp/pbp/skiff_app_smoke/EBOOT.PBP "APP SMOKE" 90
 
   # The disposable RomM behind a TLS proxy (tests/integration/) that the network probe and the
   # integration tests use: started and checked through scripts/dev.sh, as locally. romm-test then

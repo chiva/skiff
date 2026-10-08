@@ -331,21 +331,30 @@ void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints,
     }
 }
 
-void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
-                       skiff_psp_ui_label_fn label, void *label_ctx) {
-    if (list == NULL || label == NULL) {
+void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
+                       skiff_psp_ui_row_fn row, void *row_ctx) {
+    if (list == NULL || row == NULL) {
         return;
     }
     const int track_height = (int)list->rows * SKIFF_PSP_UI_ROW_HEIGHT;
-    for (size_t row = 0; row < list->rows && list->first + row < list->count; row++) {
-        const size_t index = list->first + row;
-        const int top = y + (int)row * SKIFF_PSP_UI_ROW_HEIGHT;
+    for (size_t shown = 0; shown < list->rows && list->first + shown < list->count; shown++) {
+        const size_t index = list->first + shown;
+        const int top = y + (int)shown * SKIFF_PSP_UI_ROW_HEIGHT;
         if (index == list->selected) {
             skiff_psp_ui_rect(ui, 0, top, SKIFF_PSP_UI_SCREEN_WIDTH - LIST_TEXT_RIGHT,
                               SKIFF_PSP_UI_ROW_HEIGHT, SKIFF_PSP_UI_COLOUR_SELECTION);
         }
+        skiff_psp_ui_row item = {NULL, NULL, 0};
+        row(row_ctx, index, &item);
+        const unsigned int colour =
+            item.dim ? SKIFF_PSP_UI_COLOUR_DIM_TEXT : SKIFF_PSP_UI_COLOUR_TEXT;
         skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, top + ROW_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
-                          SKIFF_PSP_UI_COLOUR_TEXT, label(label_ctx, index));
+                          colour, item.label);
+        if (item.detail != NULL && item.detail[0] != '\0') {
+            (void)print_aligned(ui, SKIFF_PSP_UI_SCREEN_WIDTH - LIST_TEXT_RIGHT - SCROLL_BAR_RIGHT,
+                                top + ROW_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
+                                SKIFF_PSP_UI_COLOUR_DIM_TEXT, INTRAFONT_ALIGN_RIGHT, item.detail);
+        }
     }
     if (list->count <= list->rows) {
         return;
@@ -360,6 +369,26 @@ void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
     skiff_psp_ui_rect(ui, track_x, y, SCROLL_BAR_WIDTH, track_height, SKIFF_PSP_UI_COLOUR_BAR);
     skiff_psp_ui_rect(ui, track_x, thumb_top, SCROLL_BAR_WIDTH, thumb,
                       SKIFF_PSP_UI_COLOUR_DIM_TEXT);
+}
+
+/* A plain list is rows with only a label. */
+typedef struct label_rows {
+    skiff_psp_ui_label_fn label;
+    void *ctx;
+} label_rows;
+
+static void label_row(void *ctx, size_t index, skiff_psp_ui_row *row) {
+    const label_rows *rows = ctx;
+    row->label = rows->label(rows->ctx, index);
+}
+
+void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
+                       skiff_psp_ui_label_fn label, void *label_ctx) {
+    if (label == NULL) {
+        return;
+    }
+    label_rows rows = {label, label_ctx};
+    skiff_psp_ui_rows(ui, list, y, label_row, &rows);
 }
 
 void skiff_psp_ui_progress_bar(const skiff_psp_ui *ui, int x, int y, int width, int height,

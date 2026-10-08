@@ -55,7 +55,8 @@ when the output contains `SKIFF <NAME> OK`. It runs `skiff_selftest` (`SELFTEST`
 [Network probe](#network-probe)), `skiff_ui_proto` (`UI PROTO HEADLESS`, see
 [UI prototype](#ui-prototype)), `skiff_bench` (`BENCH NO ARK`, see [Benchmark](#benchmark)) and
 `skiff_resume_probe` (`RESUME PROBE NO ARK`, see [Resume probe](#resume-probe)) and `skiff_jobs_probe`
-(`JOBS PROBE NO ARK`, see [Jobs probe](#jobs-probe)). PPSSPPHeadless only shows a
+(`JOBS PROBE NO ARK`, see [Jobs probe](#jobs-probe)), and `skiff_app_smoke` (`APP SMOKE`, see
+[App smoke test](#app-smoke-test)). PPSSPPHeadless only shows a
 program's stdout inside its full log (`-l`, lines starting `I stdout: `), so the script extracts
 those lines and prints the end of the log when the marker is missing. The first local run builds the
 PPSSPP image, which takes several minutes; later runs reuse it.
@@ -468,6 +469,17 @@ Without ARK, as in PPSSPP, TLS cannot start: the probe queues a job that fails o
 before any network I/O (`SKIFF_ERR_NET_NEEDS_ARK`), checks that the queue file on the emulated Memory
 Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PROBE NO ARK OK`
 (`scripts/dev.sh jobs-probe`, run in CI).
+
+## App smoke test
+
+`skiff_app_smoke` is the app itself (`src/platform/psp/app_main.c`) built with `SKIFF_APP_SMOKE`,
+never packaged. PPSSPPHeadless has no ARK, no `config.ini` and nobody at the buttons, so the app
+must start (storage, the five mutexes, the font and renderer, `skiff.log`, the queue and
+`installed.json`), reach the screen asking for the server address, draw it for 60 frames, and
+tear down: it then ends with `SKIFF APP SMOKE OK`. It ends with `SKIFF APP SMOKE FAIL` when it
+cannot start, stops on an error screen, has not reached that screen within 1800 frames, or leaves
+something to the process exit. `scripts/dev.sh app-smoke` runs it, as CI does. Pairing, browsing
+and downloads need a real PSP (hardware row A1).
 
 ## UI prototype
 

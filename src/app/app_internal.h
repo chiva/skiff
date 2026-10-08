@@ -237,6 +237,9 @@ void app_request_run(skiff_app *app);
 skiff_text_id app_details_refusal(const skiff_app *app);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */
 int app_rom_downloadable(const skiff_app *app, const skiff_romm_rom_summary *rom);
+/* installed.json can still record rom_id's file_name, counting the records queued downloads will
+ * need (takes the manifest lock). */
+int app_installed_room(skiff_app *app, uint64_t rom_id, const char *file_name);
 
 /* ---- app_queue.c ---- */
 

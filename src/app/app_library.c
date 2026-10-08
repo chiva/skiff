@@ -354,6 +354,25 @@ static void queue_download(skiff_app *app) {
 
 void app_download_confirmed(skiff_app *app) { queue_download(app); }
 
+int app_installed_room(skiff_app *app, uint64_t rom_id, const char *file_name) {
+    app_lock_manifest(app);
+    const int recorded = skiff_install_manifest_find(app->manifest, rom_id, file_name) != NULL;
+    /* Downloads already queued that will each need a record of their own count as taken. */
+    size_t promised_records = 0;
+    for (size_t i = 0; i < app->queue.count; i++) {
+        const skiff_job *job = &app->queue.jobs[i];
+        const int unfinished = job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE ||
+                               job->state == SKIFF_JOB_FAILED;
+        promised_records +=
+            (size_t)(unfinished && skiff_install_manifest_find(app->manifest, job->rom_id,
+                                                               job->file_name) == NULL);
+    }
+    const int room =
+        recorded || app->manifest->count + promised_records < SKIFF_INSTALL_RECORDS_MAX;
+    app_unlock_manifest(app);
+    return room;
+}
+
 static void download(skiff_app *app) {
     if (app_details_refusal(app) != SKIFF_TEXT_COUNT) {
         return;
@@ -375,21 +394,8 @@ static void download(skiff_app *app) {
         return;
     }
     const skiff_romm_file *file = only_file(&app->rom);
+    const int full = !app_installed_room(app, app->rom.summary.id, file->file_name);
     app_lock_manifest(app);
-    const int recorded =
-        skiff_install_manifest_find(app->manifest, app->rom.summary.id, file->file_name) != NULL;
-    /* Downloads already queued that will each need a record of their own count as taken. */
-    size_t promised_records = 0;
-    for (size_t i = 0; i < app->queue.count; i++) {
-        const skiff_job *job = &app->queue.jobs[i];
-        const int unfinished = job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE ||
-                               job->state == SKIFF_JOB_FAILED;
-        promised_records +=
-            (size_t)(unfinished && skiff_install_manifest_find(app->manifest, job->rom_id,
-                                                               job->file_name) == NULL);
-    }
-    const int full =
-        !recorded && app->manifest->count + promised_records >= SKIFF_INSTALL_RECORDS_MAX;
     const skiff_install_state state = skiff_install_state_of(app->manifest, &app->rom.summary);
     app_unlock_manifest(app);
     if (full) {

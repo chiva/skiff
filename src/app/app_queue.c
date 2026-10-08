@@ -121,6 +121,13 @@ void app_queue_update(skiff_app *app, unsigned actions) {
     }
     if ((actions & SKIFF_UI_ACTION_CONFIRM) &&
         (job->state == SKIFF_JOB_FAILED || job->state == SKIFF_JOB_CANCELLED)) {
+        /* A cancelled job gave up its place in installed.json; a failed one still holds it. */
+        if (job->state == SKIFF_JOB_CANCELLED &&
+            !app_installed_room(app, job->rom_id, job->file_name)) {
+            app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, app_text(app, SKIFF_TEXT_INSTALLED_FULL),
+                          MESSAGE_BACK, SKIFF_APP_SCREEN_QUEUE);
+            return;
+        }
         player_change(app, "retry", job->id, skiff_jobs_retry(app->jobs, job->id));
     }
 }

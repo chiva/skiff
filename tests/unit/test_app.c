@@ -1266,6 +1266,38 @@ static void test_queued_downloads_hold_their_installed_records(void) {
     TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
 }
 
+static void test_a_cancelled_retry_needs_room_in_the_installed_list(void) {
+    open_paired_library(2);
+    app->manifest->count = SKIFF_INSTALL_RECORDS_MAX - 1;
+    for (size_t i = 0; i < app->manifest->count; i++) {
+        app->manifest->records[i].rom_id = 1000 + i;
+    }
+    TEST_PRINTF("A queued, then cancelled; B takes the last place; A cannot come back");
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_until(SKIFF_APP_SCREEN_QUEUE);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_QUEUE);
+    frame(SKIFF_UI_ACTION_BACK);
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_until(SKIFF_APP_SCREEN_QUEUE);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    list_jobs(jobs);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, jobs[0].state);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    print_view();
+    TEST_ASSERT_TRUE(shows("Skiff can't keep track of more installed games."));
+    list_jobs(jobs);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, jobs[0].state);
+}
+
 static int lock_held[4];
 static int manifest_saves_under_lock;
 static int manifest_saves;
@@ -1463,6 +1495,7 @@ int main(void) {
     RUN_TEST(test_an_abandoned_retry_is_forgotten);
     RUN_TEST(test_a_new_code_after_a_lost_connection_joins_first);
     RUN_TEST(test_queued_downloads_hold_their_installed_records);
+    RUN_TEST(test_a_cancelled_retry_needs_room_in_the_installed_list);
     RUN_TEST(test_installed_json_is_saved_without_the_lock_the_ui_reads);
     RUN_TEST(test_secrets_and_the_log_level);
     RUN_TEST(test_transport_settings_come_from_the_skiff_folder);

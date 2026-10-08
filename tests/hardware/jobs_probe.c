@@ -276,6 +276,11 @@ typedef struct watch {
     attempt_record attempts[ATTEMPTS_MAX];
     int attempts_seen;
     int attempt_open;
+    /* The speed counts every attempt, also those past the ATTEMPTS_MAX kept for the report: the
+     * attempt running now, and the bytes and time of those before it. */
+    attempt_record current_attempt;
+    uint64_t earlier_attempts_bytes;
+    long long earlier_attempts_us;
     long long draw_us_total;
     long long draw_us_max;
     long draws;
@@ -534,16 +539,19 @@ static void track_attempt(probe *p, watch *w, uint64_t done, long long now) {
             snprintf(label, sizeof label, "attempt %d", w->attempts_seen + 1);
             note_environment(p, label);
         }
-        if (w->attempts_seen < ATTEMPTS_MAX) {
-            w->attempts[w->attempts_seen] = (attempt_record){
-                .first_us = now, .last_us = now, .first_done = done, .last_done = done};
+        if (w->attempts_seen > 0) {
+            w->earlier_attempts_bytes +=
+                w->current_attempt.last_done - w->current_attempt.first_done;
+            w->earlier_attempts_us += w->current_attempt.last_us - w->current_attempt.first_us;
         }
+        w->current_attempt = (attempt_record){
+            .first_us = now, .last_us = now, .first_done = done, .last_done = done};
         w->attempts_seen++;
     }
+    w->current_attempt.last_us = now;
+    w->current_attempt.last_done = done;
     if (w->attempts_seen <= ATTEMPTS_MAX) {
-        attempt_record *attempt = &w->attempts[w->attempts_seen - 1];
-        attempt->last_us = now;
-        attempt->last_done = done;
+        w->attempts[w->attempts_seen - 1] = w->current_attempt;
     }
 }
 
@@ -1061,12 +1069,13 @@ static void report_memory(probe *p, const char *label) {
 /* The download's speed while it ran: every attempt's bytes over every attempt's time, so waiting
  * for Wi-Fi and rejoining do not count. */
 static unsigned long long attempts_kb_per_s(const watch *w) {
-    unsigned long long bytes = 0;
-    long long elapsed_us = 0;
-    for (int i = 0; i < w->attempts_seen && i < ATTEMPTS_MAX; i++) {
-        bytes += w->attempts[i].last_done - w->attempts[i].first_done;
-        elapsed_us += w->attempts[i].last_us - w->attempts[i].first_us;
+    if (w->attempts_seen == 0) {
+        return 0;
     }
+    const uint64_t bytes =
+        w->earlier_attempts_bytes + (w->current_attempt.last_done - w->current_attempt.first_done);
+    const long long elapsed_us =
+        w->earlier_attempts_us + (w->current_attempt.last_us - w->current_attempt.first_us);
     return skiff_probe_kb_per_s(bytes, elapsed_us);
 }
 

@@ -210,10 +210,14 @@ warn, info and debug, and errors appear by stable name and number, never transla
 - **Suspend-safe and durable**: each batch opens the file, writes, syncs and closes it, so no
   handle is left open for a suspend to invalidate and a crash cannot lose a warning already
   written. A batch that fails is tried once more at the same offset (a handle lost
-  to a suspend works again once reopened); one refused twice is dropped, and the next line says
-  how many were lost. Whatever part of a dropped batch reached the file stays (the storage seam
-  cannot shorten a file) and is cut off from the next batch by a line break. Logging never fails
-  its caller.
+  to a suspend works again once reopened). One refused twice stays in the buffer and goes out with
+  the next warning, error or flush, written over whatever part of it reached the file: right after
+  a suspend the Memory Stick can refuse for longer than one retry, and the line logged then (why
+  the download stopped) is the one a bug report needs. While the Memory Stick keeps refusing, a
+  full buffer gives up its oldest lines rather than retry per line, and the batch that finally
+  goes out starts with a line saying how many were lost. A part of a batch whose first lines were
+  given up meanwhile cannot be written over; it stays (the storage seam cannot shorten a file) and
+  is cut off from the next batch by a line break. Logging never fails its caller.
 - **Size cap**: past 256 KB the log moves to `skiff.log.1`, replacing an older one, and a new file
   starts. If the move fails, the log starts over rather than grow past the cap.
 - **Redaction in the logger, not at call sites**: the values that are secret (the token, the

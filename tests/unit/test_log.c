@@ -6,6 +6,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "skiff/log.h"
@@ -363,6 +364,44 @@ static void test_a_failed_rotation_starts_the_log_over_rather_than_pass_the_cap(
 
 /* ---- Failures ---- */
 
+#define REPORT_ONE "W log: 1 earlier lines could not be written\n"
+/* What the Memory Stick takes of a batch before it fills up, in the tests that cut one short. */
+#define FRAGMENT_BYTES 5U
+
+/* An info line of exactly length bytes, newline included: "I jobs: " and fill. Copied into line
+ * (SKIFF_LOG_LINE_MAX + 1 bytes) unless it is NULL. */
+static void info_line_of(size_t length, char fill, char *line) {
+    char text[SKIFF_LOG_LINE_MAX];
+    const char *prefix = "I jobs: ";
+    const size_t prefix_length = strlen(prefix);
+    const size_t fill_length = length - prefix_length - 1;
+    memset(text, fill, fill_length);
+    text[fill_length] = '\0';
+    skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "%s", text);
+    if (line != NULL) {
+        memcpy(line, prefix, prefix_length);
+        memcpy(line + prefix_length, text, fill_length);
+        line[length - 1] = '\n';
+        line[length] = '\0';
+    }
+}
+
+/* Every later write fails, after storing at most bytes more. */
+static void refuse_writes_after(uint64_t bytes) {
+    fake.write_budget = fake.bytes_written + bytes;
+    fake.write_error = SKIFF_ERR_STORAGE_IO;
+}
+
+static void accept_writes(void) { fake.write_error = SKIFF_OK; }
+
+static int count_of(const char *text, const char *needle) {
+    int count = 0;
+    for (const char *at = strstr(text, needle); at != NULL; at = strstr(at + 1, needle)) {
+        count++;
+    }
+    return count;
+}
+
 static void test_a_handle_lost_to_a_suspend_is_reopened_without_repeating_lines(void) {
     create();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "app", "before suspend");
@@ -373,80 +412,136 @@ static void test_a_handle_lost_to_a_suspend_is_reopened_without_repeating_lines(
     TEST_ASSERT_EQUAL_STRING("E app: before suspend\nE app: after wake\n", read_file(path));
 }
 
-static void test_a_refused_batch_is_dropped_and_counted_in_the_next_line(void) {
+static void test_a_refused_batch_stays_buffered_and_goes_out_with_the_next(void) {
     create();
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "one");
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "two");
-    fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
-    fake.write_budget = 0;
+    refuse_writes_after(0);
     skiff_log_flush(logger);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, fake.writes, "one write and one retry");
-    fake.write_error = SKIFF_OK;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, fake.writes, "one try and one retry");
+    TEST_ASSERT_EQUAL_STRING("", read_file(path));
+    accept_writes();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "three");
-    TEST_ASSERT_EQUAL_STRING("W log: 2 earlier lines could not be written\nE jobs: three\n",
+    TEST_ASSERT_EQUAL_STRING("I jobs: one\nI jobs: two\nE jobs: three\n", read_file(path));
+}
+
+/* J1 on a PSP-1000 (2026-10-07/08): right after waking, the warning saying why the download
+ * stopped was refused twice and lost, in three runs out of three. */
+static void test_a_warning_logged_right_after_waking_waits_until_the_memory_stick_takes_it(void) {
+    create();
+    skiff_log_write(logger, SKIFF_LOG_WARN, "jobs", "attempt 1: SKIFF_ERR_NET_UNAVAILABLE (100)");
+    refuse_writes_after(0);
+    skiff_log_write(logger, SKIFF_LOG_WARN, "jobs",
+                    "attempt 2: SKIFF_ERR_NET_CONNECTION_LOST (111)");
+    const int after_warning = fake.writes;
+    skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "rejoin profile 1: SKIFF_OK (0)");
+    TEST_PRINTF("writes: %d after the refused warning, %d after an info line", after_warning,
+                fake.writes);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(after_warning, fake.writes, "an info line adds no try");
+    skiff_log_flush(logger);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(after_warning + 2, fake.writes, "a flush tries again");
+    accept_writes();
+    skiff_log_flush(logger);
+    TEST_ASSERT_EQUAL_STRING("W jobs: attempt 1: SKIFF_ERR_NET_UNAVAILABLE (100)\n"
+                             "W jobs: attempt 2: SKIFF_ERR_NET_CONNECTION_LOST (111)\n"
+                             "I jobs: rejoin profile 1: SKIFF_OK (0)\n",
                              read_file(path));
 }
 
-static void test_part_of_a_lost_batch_gets_a_line_of_its_own(void) {
+static void test_lines_wait_in_memory_while_the_memory_stick_refuses(void) {
+    create();
+    refuse_writes_after(0);
+    for (int i = 0; i < 3; i++) {
+        skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "error %d", i);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(6, fake.writes, "two tries per error");
+    accept_writes();
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "back");
+    TEST_ASSERT_EQUAL_STRING("E jobs: error 0\nE jobs: error 1\nE jobs: error 2\nE jobs: back\n",
+                             read_file(path));
+}
+
+static void test_part_of_a_refused_batch_in_the_file_is_written_over(void) {
     create();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "kept");
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "cut short");
-    /* The Memory Stick takes 5 bytes of the batch, then fills up. */
-    fake.write_budget = fake.bytes_written + 5;
-    fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    TEST_PRINTF("the Memory Stick takes 5 bytes of the batch, then fills up");
+    refuse_writes_after(5);
     skiff_log_flush(logger);
-    fake.write_error = SKIFF_OK;
+    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI job", read_file(path));
+    accept_writes();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "next");
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "and after");
-    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI job\nW log: 1 earlier lines could not be written\n"
-                             "E jobs: next\nE jobs: and after\n",
+    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI jobs: cut short\nE jobs: next\nE jobs: and after\n",
                              read_file(path));
 }
 
-static void test_a_fragment_left_by_the_retry_after_a_failed_plan_is_cut_off_too(void) {
+static void test_a_batch_cut_short_after_a_failed_plan_is_written_over_too(void) {
     create();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "kept");
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "cut short");
     TEST_PRINTF("the first look at the log's size fails, the retry writes 5 bytes and fills up");
     fake.size_failures = 1;
-    fake.write_budget = fake.bytes_written + 5;
-    fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    refuse_writes_after(5);
     skiff_log_flush(logger);
     TEST_ASSERT_EQUAL_INT(0, fake.size_failures);
-    fake.write_error = SKIFF_OK;
+    accept_writes();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "next");
-    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI job\nW log: 1 earlier lines could not be written\n"
-                             "E jobs: next\n",
-                             read_file(path));
+    TEST_ASSERT_EQUAL_STRING("E jobs: kept\nI jobs: cut short\nE jobs: next\n", read_file(path));
 }
 
-#define FRAGMENT_BYTES 5U
-/* "W log: 1 earlier lines could not be written\n" and "E jobs: x\n". */
-#define REPORT_AND_LINE_BYTES 54U
+static void test_a_batch_that_cannot_be_synced_is_written_again_in_place(void) {
+    create();
+    skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "one");
+    fake.sync_error = SKIFF_ERR_STORAGE_IO;
+    skiff_log_flush(logger);
+    TEST_PRINTF("syncs %d", fake.syncs);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, fake.syncs, "one sync per try");
+    fake.sync_error = SKIFF_OK;
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "two");
+    TEST_ASSERT_EQUAL_STRING("I jobs: one\nE jobs: two\n", read_file(path));
+}
 
-static void test_the_line_break_after_a_fragment_counts_against_the_cap(void) {
+/* 3 lines of 256 bytes and one of 228: 996 bytes, 28 short of the cap. */
+#define NEAR_CAP_BYTES 996U
+/* "I jobs: cut short\n" and "E jobs: x\n". */
+#define CUT_SHORT_AND_X_BYTES 28U
+
+static void fill_near_the_cap(void) {
     config.cap_bytes = SMALL_CAP;
     config.buffer_bytes = SKIFF_LOG_LINE_MAX;
     create();
-    /* Lines, then the fragment of a lost batch, end exactly where the next batch would reach the
-     * cap without its leading line break. */
     write_lines_of(3, 256);
-    write_lines_of(1, SMALL_CAP - REPORT_AND_LINE_BYTES - FRAGMENT_BYTES - 3 * 256);
+    write_lines_of(1, NEAR_CAP_BYTES - 3 * 256);
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "cut short");
-    fake.write_budget = fake.bytes_written + FRAGMENT_BYTES;
-    fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    refuse_writes_after(FRAGMENT_BYTES);
     skiff_log_flush(logger);
-    fake.write_error = SKIFF_OK;
-    TEST_ASSERT_EQUAL_UINT64(SMALL_CAP - REPORT_AND_LINE_BYTES, file_size(path));
+    accept_writes();
+    TEST_ASSERT_EQUAL_UINT64(NEAR_CAP_BYTES + FRAGMENT_BYTES, file_size(path));
+}
+
+static void test_a_batch_tried_again_is_checked_against_the_cap_where_it_goes(void) {
+    fill_near_the_cap();
     skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "x");
     TEST_PRINTF("log %llu bytes, rotated %llu bytes", (unsigned long long)file_size(path),
                 (unsigned long long)file_size(rotated));
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(SMALL_CAP - REPORT_AND_LINE_BYTES, file_size(rotated),
-                                     "the line break would have passed the cap: rotated");
-    TEST_ASSERT_EQUAL_UINT64(REPORT_AND_LINE_BYTES, file_size(path));
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(0, file_size(rotated),
+                                     "written over its own part: exactly at the cap, no rotation");
+    TEST_ASSERT_EQUAL_UINT64(NEAR_CAP_BYTES + CUT_SHORT_AND_X_BYTES, file_size(path));
 }
 
-static void test_a_batch_lost_to_a_full_buffer_is_reported_before_the_next_line(void) {
+static void test_a_batch_tried_again_past_the_cap_rotates_and_leaves_its_part_behind(void) {
+    fill_near_the_cap();
+    char line[SKIFF_LOG_LINE_MAX + 1];
+    info_line_of(100, 'n', line);
+    skiff_log_flush(logger);
+    TEST_ASSERT_EQUAL_UINT64(NEAR_CAP_BYTES + FRAGMENT_BYTES, file_size(rotated));
+    char expected[2 * SKIFF_LOG_LINE_MAX];
+    snprintf(expected, sizeof expected, "I jobs: cut short\n%s", line);
+    TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
+}
+
+static void test_a_full_buffer_gives_up_its_oldest_lines_while_the_memory_stick_refuses(void) {
     config.buffer_bytes = SKIFF_LOG_LINE_MAX;
     create();
     char filler[SKIFF_LOG_LINE_MAX];
@@ -454,11 +549,10 @@ static void test_a_batch_lost_to_a_full_buffer_is_reported_before_the_next_line(
     filler[100] = '\0';
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "%s", filler);
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "%s", filler);
-    fake.write_error = SKIFF_ERR_STORAGE_IO;
-    fake.write_budget = 0;
-    /* Does not fit next to the first two: they go out, and are lost. */
+    refuse_writes_after(0);
+    /* Does not fit next to the first two: they are tried, refused, and give way to it. */
     skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "last %s", filler);
-    fake.write_error = SKIFF_OK;
+    accept_writes();
     skiff_log_destroy(logger);
     logger = NULL;
     char expected[2 * SKIFF_LOG_LINE_MAX];
@@ -467,17 +561,115 @@ static void test_a_batch_lost_to_a_full_buffer_is_reported_before_the_next_line(
     TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
 }
 
-static void test_logging_goes_on_while_the_memory_stick_refuses(void) {
+enum { MANY_LINES = 40, MANY_LINE_BYTES = 60 };
+
+static void test_a_refusing_memory_stick_gets_no_try_per_line_and_the_count_is_exact(void) {
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
     create();
-    fake.write_error = SKIFF_ERR_STORAGE_IO;
-    fake.write_budget = 0;
-    for (int i = 0; i < 3; i++) {
-        skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "error %d", i);
+    refuse_writes_after(0);
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "first");
+    const int before = fake.writes;
+    char newest[SKIFF_LOG_LINE_MAX + 1];
+    for (int i = 0; i < MANY_LINES; i++) {
+        info_line_of(MANY_LINE_BYTES, (char)('a' + i % 26), newest);
     }
-    fake.write_error = SKIFF_OK;
-    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "back");
-    TEST_ASSERT_EQUAL_STRING("W log: 3 earlier lines could not be written\nE jobs: back\n",
-                             read_file(path));
+    const int tries = fake.writes - before;
+    TEST_PRINTF("%d info lines of %d bytes into a %d-byte buffer: %d write tries", MANY_LINES,
+                MANY_LINE_BYTES, SKIFF_LOG_LINE_MAX, tries);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, tries, "a buffer's worth of lost lines tries again");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(MANY_LINES, tries, "fewer tries than lines");
+    accept_writes();
+    skiff_log_flush(logger);
+    const char *text = read_file(path);
+    const char *report_prefix = "W log: ";
+    TEST_ASSERT_EQUAL_INT(0, strncmp(text, report_prefix, strlen(report_prefix)));
+    char *after_count = NULL;
+    const unsigned long lost = strtoul(text + strlen(report_prefix), &after_count, 10);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(after_count, " earlier lines could not be written\n",
+                                     strlen(" earlier lines could not be written\n")));
+    const int kept_lines = count_lines(text) - 1;
+    TEST_PRINTF("%lu lost, %d kept", lost, kept_lines);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1 + MANY_LINES, (int)lost + kept_lines,
+                                  "every line written or counted, once");
+    TEST_ASSERT_EQUAL_INT(1, count_of(text, "earlier lines"));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(newest, text + strlen(text) - strlen(newest),
+                                     "the newest line is kept");
+}
+
+static void test_a_report_cut_short_is_written_over_not_repeated(void) {
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
+    create();
+    char second[SKIFF_LOG_LINE_MAX + 1];
+    char third[SKIFF_LOG_LINE_MAX + 1];
+    info_line_of(100, 'a', NULL);
+    info_line_of(100, 'b', second);
+    refuse_writes_after(0);
+    skiff_log_flush(logger);
+    /* No room next to the first two: the oldest goes, and the report takes its place. */
+    info_line_of(100, 'c', third);
+    TEST_PRINTF("the next try gets 10 bytes of the report onto the Memory Stick");
+    refuse_writes_after(10);
+    skiff_log_flush(logger);
+    accept_writes();
+    skiff_log_flush(logger);
+    char expected[4 * SKIFF_LOG_LINE_MAX];
+    snprintf(expected, sizeof expected, REPORT_ONE "%s%s", second, third);
+    TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
+}
+
+static void test_a_part_whose_first_lines_were_given_up_gets_a_line_of_its_own(void) {
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
+    create();
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "kept");
+    info_line_of(200, 'a', NULL);
+    refuse_writes_after(FRAGMENT_BYTES);
+    skiff_log_flush(logger);
+    /* No room next to the first: it goes, so its 5 bytes in the file can no longer be written
+     * over. */
+    char second[SKIFF_LOG_LINE_MAX + 1];
+    info_line_of(151, 'b', second);
+    accept_writes();
+    skiff_log_flush(logger);
+    char expected[4 * SKIFF_LOG_LINE_MAX];
+    snprintf(expected, sizeof expected, "E jobs: kept\nI job\n" REPORT_ONE "%s", second);
+    TEST_ASSERT_EQUAL_STRING(expected, read_file(path));
+}
+
+/* 3 lines of 256 bytes and one of 56. */
+#define BEFORE_FRAGMENT_BYTES 824U
+
+static void test_the_line_break_after_a_part_counts_against_the_cap(void) {
+    config.cap_bytes = SMALL_CAP;
+    config.buffer_bytes = SKIFF_LOG_LINE_MAX;
+    create();
+    write_lines_of(3, 256);
+    write_lines_of(1, BEFORE_FRAGMENT_BYTES - 3 * 256);
+    /* Exactly to the cap: tried at 824, 5 bytes land. */
+    info_line_of(SMALL_CAP - BEFORE_FRAGMENT_BYTES, 'a', NULL);
+    refuse_writes_after(FRAGMENT_BYTES);
+    skiff_log_flush(logger);
+    /* The first line gives way; the report and this one would end exactly at the cap after the
+     * part, but not with the line break in front. */
+    const size_t report_bytes = strlen(REPORT_ONE);
+    const size_t second_bytes = SMALL_CAP - BEFORE_FRAGMENT_BYTES - FRAGMENT_BYTES - report_bytes;
+    info_line_of(second_bytes, 'b', NULL);
+    accept_writes();
+    skiff_log_flush(logger);
+    TEST_PRINTF("log %llu bytes, rotated %llu bytes", (unsigned long long)file_size(path),
+                (unsigned long long)file_size(rotated));
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(BEFORE_FRAGMENT_BYTES + FRAGMENT_BYTES, file_size(rotated),
+                                     "the line break would have passed the cap: rotated");
+    TEST_ASSERT_EQUAL_UINT64(report_bytes + second_bytes, file_size(path));
+}
+
+static void test_kept_lines_stay_redacted(void) {
+    create();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_log_add_secret(logger, TOKEN));
+    refuse_writes_after(0);
+    skiff_log_write(logger, SKIFF_LOG_ERROR, "romm", "token %s refused", TOKEN);
+    accept_writes();
+    skiff_log_flush(logger);
+    TEST_ASSERT_EQUAL_STRING("E romm: token " SKIFF_LOG_REDACTED " refused\n", read_file(path));
 }
 
 /* ---- Redaction ---- */
@@ -573,18 +765,6 @@ static void test_nested_and_overlapping_secrets_are_redacted_whole(void) {
                              read_file(path));
     skiff_log_write(logger, SKIFF_LOG_ERROR, "app", "d=abcdefghXYZ12345!");
     TEST_ASSERT_NOT_NULL(strstr(read_file(path), "E app: d=" SKIFF_LOG_REDACTED "!\n"));
-}
-
-static void test_a_batch_that_cannot_be_synced_counts_as_lost(void) {
-    create();
-    skiff_log_write(logger, SKIFF_LOG_INFO, "jobs", "one");
-    fake.sync_error = SKIFF_ERR_STORAGE_IO;
-    skiff_log_flush(logger);
-    TEST_PRINTF("syncs %d", fake.syncs);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, fake.syncs, "one sync per attempt");
-    fake.sync_error = SKIFF_OK;
-    skiff_log_write(logger, SKIFF_LOG_ERROR, "jobs", "two");
-    TEST_ASSERT_NOT_NULL(strstr(read_file(path), "W log: 1 earlier lines could not be written\n"));
 }
 
 static void test_a_cut_line_keeps_no_part_of_a_secret(void) {
@@ -720,17 +900,24 @@ int main(void) {
     RUN_TEST(test_a_second_rotation_replaces_the_older_file);
     RUN_TEST(test_a_failed_rotation_starts_the_log_over_rather_than_pass_the_cap);
     RUN_TEST(test_a_handle_lost_to_a_suspend_is_reopened_without_repeating_lines);
-    RUN_TEST(test_a_refused_batch_is_dropped_and_counted_in_the_next_line);
-    RUN_TEST(test_part_of_a_lost_batch_gets_a_line_of_its_own);
-    RUN_TEST(test_a_fragment_left_by_the_retry_after_a_failed_plan_is_cut_off_too);
-    RUN_TEST(test_the_line_break_after_a_fragment_counts_against_the_cap);
-    RUN_TEST(test_a_batch_lost_to_a_full_buffer_is_reported_before_the_next_line);
-    RUN_TEST(test_logging_goes_on_while_the_memory_stick_refuses);
+    RUN_TEST(test_a_refused_batch_stays_buffered_and_goes_out_with_the_next);
+    RUN_TEST(test_a_warning_logged_right_after_waking_waits_until_the_memory_stick_takes_it);
+    RUN_TEST(test_lines_wait_in_memory_while_the_memory_stick_refuses);
+    RUN_TEST(test_part_of_a_refused_batch_in_the_file_is_written_over);
+    RUN_TEST(test_a_batch_cut_short_after_a_failed_plan_is_written_over_too);
+    RUN_TEST(test_a_batch_that_cannot_be_synced_is_written_again_in_place);
+    RUN_TEST(test_a_batch_tried_again_is_checked_against_the_cap_where_it_goes);
+    RUN_TEST(test_a_batch_tried_again_past_the_cap_rotates_and_leaves_its_part_behind);
+    RUN_TEST(test_a_full_buffer_gives_up_its_oldest_lines_while_the_memory_stick_refuses);
+    RUN_TEST(test_a_refusing_memory_stick_gets_no_try_per_line_and_the_count_is_exact);
+    RUN_TEST(test_a_report_cut_short_is_written_over_not_repeated);
+    RUN_TEST(test_a_part_whose_first_lines_were_given_up_gets_a_line_of_its_own);
+    RUN_TEST(test_the_line_break_after_a_part_counts_against_the_cap);
+    RUN_TEST(test_kept_lines_stay_redacted);
     RUN_TEST(test_registered_secrets_never_reach_the_file);
     RUN_TEST(test_twelve_secrets_of_up_to_255_bytes_are_redacted);
     RUN_TEST(test_a_secret_that_cannot_be_registered_withholds_every_message);
     RUN_TEST(test_nested_and_overlapping_secrets_are_redacted_whole);
-    RUN_TEST(test_a_batch_that_cannot_be_synced_counts_as_lost);
     RUN_TEST(test_a_cut_line_keeps_no_part_of_a_secret);
     RUN_TEST(test_a_secret_cut_by_formatting_is_redacted_to_the_end);
     RUN_TEST(test_a_long_secret_redacted_leaves_room_for_the_rest);

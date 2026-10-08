@@ -57,18 +57,30 @@ struct skiff_log {
     char secrets[SKIFF_LOG_SECRETS_MAX][SKIFF_LOG_SECRET_MAX + 1];
     size_t secret_lengths[SKIFF_LOG_SECRETS_MAX];
     size_t secret_count;
-    /* Lines lost to batches the Memory Stick refused, reported by the next line; reported_lines is
-     * the count in a report still waiting in the buffer (0 for none). */
+    /* Lines that left the buffer unwritten since the last batch that reached the file. Always the
+     * oldest ones, so the report of them (report, report_length bytes, composed when the count
+     * changes) goes at the front of the next batch. */
     unsigned long dropped_lines;
-    unsigned long reported_lines;
-    /* A failed batch may have left part of itself in the file from failed_offset on; the next batch
-     * then starts on a new line. */
+    char report[SKIFF_LOG_LINE_MAX];
+    size_t report_length;
+    /* The last batch failed and is still buffered: a full buffer then gives up its oldest lines
+     * instead of trying again, until a warning, an error, a flush, or a buffer's worth of dropped
+     * bytes (dropped_bytes_since_try) calls for another try. */
+    int failing;
+    size_t dropped_bytes_since_try;
+    /* Where the buffered batch was last tried, while its start is unchanged since: the next try
+     * writes there again, over whatever part of it reached the file. */
+    int retry_known;
+    skiff_file_mode retry_mode;
+    uint64_t retry_offset;
+    int retry_separate;
+    /* A failed batch whose start then changed may have left part of itself in the file from
+     * failed_offset on; the next batch then starts on a new line. */
     int fragment_possible;
     uint64_t failed_offset;
     /* A secret could not be registered, so no message can be shown safely. */
     int withholding;
     size_t pending_bytes;
-    unsigned long pending_lines;
     size_t buffer_bytes;
     char buffer[];
 };
@@ -232,42 +244,63 @@ static int after_fragment(const skiff_log *log, skiff_file_mode mode, uint64_t o
     return log->fragment_possible && mode == SKIFF_FILE_WRITE_AT && offset > log->failed_offset;
 }
 
-/* Where the batch goes: appended to the log, or a new file once the log is missing or full. */
-static skiff_err plan_batch(skiff_log *log, skiff_file_mode *mode, uint64_t *offset) {
+/* Where a batch goes, and whether it starts with a line break. */
+typedef struct batch_plan {
+    skiff_file_mode mode;
+    uint64_t offset;
+    int separate;
+} batch_plan;
+
+/*
+ * Where the batch goes: appended to the log, or a new file once the log is missing or full. A
+ * batch tried before goes where it went then (it starts as it did), so whatever part of it reached
+ * the file is written over, not repeated; that place is checked against the cap like the end.
+ */
+static skiff_err plan_batch(skiff_log *log, batch_plan *plan) {
     uint64_t size = 0;
     const skiff_err err = skiff_storage_size(log->storage, log->path, &size);
-    *mode = SKIFF_FILE_REPLACE;
-    *offset = 0;
-    if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
+    plan->mode = SKIFF_FILE_REPLACE;
+    plan->offset = 0;
+    plan->separate = 0;
+    if (err == SKIFF_ERR_STORAGE_NOT_FOUND ||
+        (err == SKIFF_OK && log->retry_known && log->retry_mode == SKIFF_FILE_REPLACE)) {
         return SKIFF_OK;
     }
     if (err != SKIFF_OK) {
         return err;
     }
-    const uint64_t batch_bytes =
-        log->pending_bytes + (after_fragment(log, SKIFF_FILE_WRITE_AT, size) ? 1U : 0U);
-    /* batch_bytes is at most the buffer plus one, and the buffer at most the cap, so this cannot
-     * overflow. */
-    if (size > log->cap_bytes || batch_bytes > log->cap_bytes - size) {
+    uint64_t end = size;
+    int separate = after_fragment(log, SKIFF_FILE_WRITE_AT, size);
+    if (log->retry_known && size >= log->retry_offset) {
+        end = log->retry_offset;
+        separate = log->retry_separate;
+    }
+    const uint64_t batch_bytes = log->report_length + log->pending_bytes + (separate ? 1U : 0U);
+    /* The report and the lines fit the buffer together, and the buffer is at most the cap, so this
+     * cannot overflow. */
+    if (end > log->cap_bytes || batch_bytes > log->cap_bytes - end) {
         rotate(log);
         return SKIFF_OK;
     }
-    *mode = SKIFF_FILE_WRITE_AT;
-    *offset = size;
+    plan->mode = SKIFF_FILE_WRITE_AT;
+    plan->offset = end;
+    plan->separate = separate;
     return SKIFF_OK;
 }
 
-static skiff_err write_batch(skiff_log *log, skiff_file_mode mode, uint64_t offset) {
-    const int separate = after_fragment(log, mode, offset);
+static skiff_err write_batch(skiff_log *log, const batch_plan *plan) {
     skiff_file *file = NULL;
-    skiff_err err = skiff_storage_open(log->storage, log->path, mode, offset, &file);
+    skiff_err err = skiff_storage_open(log->storage, log->path, plan->mode, plan->offset, &file);
     if (err != SKIFF_OK) {
         return err;
     }
-    if (separate) {
+    if (plan->separate) {
         err = skiff_file_write(file, "\n", 1);
     }
-    if (err == SKIFF_OK) {
+    if (err == SKIFF_OK && log->report_length > 0) {
+        err = skiff_file_write(file, log->report, log->report_length);
+    }
+    if (err == SKIFF_OK && log->pending_bytes > 0) {
         err = skiff_file_write(file, log->buffer, log->pending_bytes);
     }
     if (err == SKIFF_OK) {
@@ -278,53 +311,54 @@ static skiff_err write_batch(skiff_log *log, skiff_file_mode mode, uint64_t offs
     return err != SKIFF_OK ? err : close_err;
 }
 
+static skiff_err try_batch(skiff_log *log) {
+    batch_plan plan;
+    skiff_err err = plan_batch(log, &plan);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    err = write_batch(log, &plan);
+    if (err != SKIFF_OK) {
+        /* Part of it may be in the file now: the next try writes over it. */
+        log->retry_known = 1;
+        log->retry_mode = plan.mode;
+        log->retry_offset = plan.offset;
+        log->retry_separate = plan.separate;
+    }
+    return err;
+}
+
 /*
- * One attempt, then one more: a write after a suspend fails on the handle, and a file opened again
- * works. The second attempt writes at the same place, so bytes of a batch cut short are written
- * over rather than repeated.
+ * One try, then one more: a write after a suspend fails on the handle, and a file opened again
+ * works. A batch refused both times stays in the buffer and goes out with the next one; right
+ * after waking, the Memory Stick can refuse for longer than one retry.
  */
 static skiff_err flush_locked(skiff_log *log) {
-    if (log->pending_bytes == 0) {
+    log->dropped_bytes_since_try = 0;
+    if (log->pending_bytes == 0 && log->report_length == 0) {
         return SKIFF_OK;
     }
-    skiff_file_mode mode = SKIFF_FILE_REPLACE;
-    uint64_t offset = 0;
-    const int planned = plan_batch(log, &mode, &offset) == SKIFF_OK;
-    /* Whether a write ran: only then can part of the batch be in the file, at offset (the plan
-     * every write used). */
-    int wrote = planned;
-    skiff_err err = planned ? write_batch(log, mode, offset) : SKIFF_ERR_STORAGE_IO;
-    if (err != SKIFF_OK && !planned) {
-        err = plan_batch(log, &mode, &offset);
-        if (err == SKIFF_OK) {
-            wrote = 1;
-            err = write_batch(log, mode, offset);
-        }
-    } else if (err != SKIFF_OK) {
-        err = write_batch(log, mode, offset);
+    skiff_err err = try_batch(log);
+    if (err != SKIFF_OK) {
+        err = try_batch(log);
     }
-    if (err == SKIFF_OK) {
-        log->dropped_lines -= log->reported_lines;
-        log->fragment_possible = 0;
-    } else {
-        /* A lost report is not counted: the next one gives the new total. */
-        log->dropped_lines += log->pending_lines - (log->reported_lines != 0 ? 1 : 0);
-        if (wrote && !log->fragment_possible) {
-            log->fragment_possible = 1;
-            log->failed_offset = offset;
-        }
+    if (err != SKIFF_OK) {
+        log->failing = 1;
+        return err;
     }
-    log->reported_lines = 0;
+    log->failing = 0;
+    log->dropped_lines = 0;
+    log->report_length = 0;
+    log->retry_known = 0;
+    log->fragment_possible = 0;
     log->pending_bytes = 0;
-    log->pending_lines = 0;
-    return err;
+    return SKIFF_OK;
 }
 
 /* The caller has made room. */
 static void buffer_line(skiff_log *log, const char *line, size_t length) {
     memcpy(log->buffer + log->pending_bytes, line, length);
     log->pending_bytes += length;
-    log->pending_lines++;
 }
 
 /* ---- Composing lines ---- */
@@ -446,52 +480,72 @@ static size_t compose_line(const skiff_log *log, skiff_log_level level, const ch
     return redact_into(log, text, text_length, cut || (size_t)written >= sizeof text, line);
 }
 
-/* Queues a report of lost lines for the next batch, so a Memory Stick that keeps refusing does not
- * get an extra write per line. */
-static void queue_report(skiff_log *log) {
-    if (log->dropped_lines == 0 || log->reported_lines != 0) {
-        return;
-    }
-    /* Room first, so the count cannot change while the report waits to fit. */
-    if (log->pending_bytes + SKIFF_LOG_LINE_MAX > log->buffer_bytes) {
-        (void)flush_locked(log);
+/*
+ * Counts a line that will never be written (length bytes). The batch's start changes with the
+ * report, so a part of it already in the file can no longer be written over: the next batch starts
+ * on a new line after it instead.
+ */
+static void count_dropped(skiff_log *log, size_t length) {
+    log->dropped_lines++;
+    log->dropped_bytes_since_try += length;
+    if (log->retry_known) {
+        log->retry_known = 0;
+        if (!log->fragment_possible) {
+            log->fragment_possible = 1;
+            log->failed_offset = log->retry_mode == SKIFF_FILE_REPLACE ? 0 : log->retry_offset;
+        }
     }
     char message[SCRATCH_MAX];
     snprintf(message, sizeof message, "%lu earlier lines could not be written", log->dropped_lines);
-    char line[SKIFF_LOG_LINE_MAX];
-    const size_t length = compose_line(log, SKIFF_LOG_WARN, LOG_TAG, message, 0, line);
-    if (length > 0) {
-        buffer_line(log, line, length);
-        log->reported_lines = log->dropped_lines;
-    }
+    log->report_length = compose_line(log, SKIFF_LOG_WARN, LOG_TAG, message, 0, log->report);
 }
 
-static void add_line(skiff_log *log, skiff_log_level level, const char *tag, const char *message,
-                     int cut) {
-    char line[SKIFF_LOG_LINE_MAX];
-    const size_t length = compose_line(log, level, tag, message, cut, line);
-    if (length == 0) {
-        return;
+/* Gives up the oldest buffered line. Oldest, not the newest: the last lines tell what the player
+ * saw when they filed the report, and a warning stays as long as later lines leave room for it. */
+static void drop_oldest(skiff_log *log) {
+    const char *end = memchr(log->buffer, '\n', log->pending_bytes);
+    const size_t length = end != NULL ? (size_t)(end - log->buffer) + 1 : log->pending_bytes;
+    memmove(log->buffer, log->buffer + length, log->pending_bytes - length);
+    log->pending_bytes -= length;
+    count_dropped(log, length);
+}
+
+static int fits(const skiff_log *log, size_t length) {
+    return log->report_length + log->pending_bytes + length <= log->buffer_bytes;
+}
+
+/* Room for a line of length bytes next to the report: a full buffer is written, or, while the
+ * Memory Stick refuses, gives up its oldest lines. 0 when the line cannot fit even alone. */
+static int make_room(skiff_log *log, size_t length) {
+    if (fits(log, length)) {
+        return 1;
     }
-    if (log->pending_bytes + length > log->buffer_bytes) {
+    /* Retried once a buffer's worth of lines has been lost, as often as a full buffer was written
+     * before the failure; a refusing Memory Stick gets no extra try per line. */
+    if (!log->failing || log->dropped_bytes_since_try >= log->buffer_bytes) {
         (void)flush_locked(log);
-        /* If that batch was lost, the report goes ahead of this line. */
-        queue_report(log);
-        if (log->pending_bytes + length > log->buffer_bytes) {
-            (void)flush_locked(log);
-        }
     }
-    buffer_line(log, line, length);
-    if (level <= SKIFF_LOG_WARN) {
-        (void)flush_locked(log);
+    while (!fits(log, length) && log->pending_bytes > 0) {
+        drop_oldest(log);
     }
+    return fits(log, length);
 }
 
 static void log_message(skiff_log *log, skiff_log_level level, const char *tag, const char *message,
                         int cut) {
+    char line[SKIFF_LOG_LINE_MAX];
     take_lock(log);
-    queue_report(log);
-    add_line(log, level, tag, message, cut);
+    const size_t length = compose_line(log, level, tag, message, cut, line);
+    if (length > 0) {
+        if (make_room(log, length)) {
+            buffer_line(log, line, length);
+        } else {
+            count_dropped(log, length);
+        }
+        if (level <= SKIFF_LOG_WARN) {
+            (void)flush_locked(log);
+        }
+    }
     release_lock(log);
 }
 

@@ -18,9 +18,12 @@
  * (the token, custom header values) is replaced by SKIFF_LOG_REDACTED wherever it appears in a
  * line, and skiff_log_header() shows only the values of headers known to be harmless. Control
  * characters are replaced, so text from a server cannot forge log lines. Logging never fails its
- * caller: a batch the Memory Stick refuses twice is dropped, and the next line says how many lines
- * were lost. Whatever part of it reached the file stays there (the file cannot be shortened), cut
- * off from the next batch by a line break.
+ * caller: a batch the Memory Stick refuses twice stays in the buffer and goes out with the next one
+ * (the next warning, error or flush), written over whatever part of it reached the file. While the
+ * Memory Stick refuses, a full buffer gives up its oldest lines (tried again once a buffer's worth
+ * is gone), and the batch that finally reaches the file starts with a line saying how many were
+ * lost. A part of a batch that cannot be written over (its first lines were given up meanwhile)
+ * stays in the file (it cannot be shortened), cut off from the next batch by a line break.
  */
 
 #include <stddef.h>
@@ -121,7 +124,7 @@ void skiff_log_header(skiff_log *log, skiff_log_level level, const char *tag, co
 skiff_err skiff_log_add_secret(skiff_log *log, const char *value);
 
 /* Writes what is buffered now. Like every call here it cannot fail its caller: a batch the Memory
- * Stick refuses is dropped and counted (see above). Does nothing for NULL. */
+ * Stick refuses stays buffered for the next try (see above). Does nothing for NULL. */
 void skiff_log_flush(skiff_log *log);
 
 /* "error", "warn", "info" or "debug", as config.ini spells them. */

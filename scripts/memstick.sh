@@ -70,9 +70,11 @@ test_server_lan_ip() {
 }
 
 # json_field <name>: a value from romm.json, a single line written by tests/integration/seed.py.
-# Plain sed rather than jq, which this host-only script cannot assume is installed.
+# Plain sed rather than jq, which this host-only script cannot assume is installed. Only top-level
+# fields: the nested "extra" file repeats the names (size, crc32...) and is dropped first.
 json_field() {
-  sed -nE "s/.*\"$1\": *\"?([^\",}]*)\"?[,}].*/\1/p" "$INTEGRATION_SEED"
+  sed -E 's/, *"extra": *\{[^}]*\}//' "$INTEGRATION_SEED" |
+    sed -nE "s/.*\"$1\": *\"?([^\",}]*)\"?[,}].*/\1/p"
 }
 
 # Percent-encodes a file name for a URL path.

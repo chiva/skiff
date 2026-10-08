@@ -41,6 +41,16 @@ readonly APP_FILES=("$APP_MANIFEST" "$APP_QUEUE")
 readonly DOWNLOAD_SUFFIXES=(.part .resume)
 readonly MEMORY_STICK_DEVICE="ms0:/"
 readonly SECRET_RANDOM_BYTES=16
+# Each romm-up or romm-lan is a new server (empty volumes, new secrets) even at the same address,
+# where an old token no longer works: config.ini records which one it was written for, as a digest
+# of the secrets file romm_up wrote (never the secrets themselves).
+readonly SERVER_ID_COMMENT="# test server "
+readonly SERVER_ID_LENGTH=16
+# The app's secrets: in config.ini, and never anywhere else (results checks, and redacts them from
+# what it prints).
+readonly SECRET_SECTIONS=(auth headers)
+readonly SECRET_KEYS=(token "$APP_TEST_HEADER")
+readonly REDACTED="[redacted]"
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
 readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
@@ -121,6 +131,16 @@ ini_value() {
         exit
       }
     }' "$1"
+}
+
+test_server_id() {
+  local digest
+  if command -v shasum >/dev/null; then
+    digest="$(shasum -a 256 "$INTEGRATION_ENV")"
+  else
+    digest="$(sha256sum "$INTEGRATION_ENV")"
+  fi
+  printf '%s' "${digest:0:$SERVER_ID_LENGTH}"
 }
 
 random_hex() {
@@ -241,7 +261,7 @@ forget_server_state() {
 }
 
 install_app_config() {
-  local dest="$GAME_DIR/$APP_FOLDER" host url
+  local dest="$GAME_DIR/$APP_FOLDER" host url server_id config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG"
   host="$(test_server_lan_ip)"
   if [[ -z "$host" ]]; then
     echo "note: no LAN test server; the app keeps its config.ini (run scripts/dev.sh romm-lan and" \
@@ -249,16 +269,18 @@ install_app_config() {
     return
   fi
   url="https://$host:$TEST_SERVER_TLS_PORT"
+  server_id="$(test_server_id)"
   # Every romm-lan makes a new test CA, so the bundle is rewritten even for a kept config.ini.
   cat "$dest/$CA_BUNDLE_NAME" "$INTEGRATION_CERTS/ca.crt" >"$dest/$APP_CA_FILE"
-  if [[ -f "$dest/$APP_CONFIG" && "$(ini_value "$dest/$APP_CONFIG" server url)" == "$url" ]]; then
-    echo "$APP_FOLDER: config.ini for $url kept (pairing and network too)"
+  if [[ -f "$config" && "$(ini_value "$config" server url)" == "$url" ]] &&
+    grep -qxF "$SERVER_ID_COMMENT$server_id" "$config"; then
+    echo "$APP_FOLDER: config.ini for this test server kept (pairing and network too)"
     return
   fi
   forget_server_state "$dest"
-  printf '%s\n' "# Written by scripts/memstick.sh install for the test RomM" "[server]" "url = $url" \
-    "ca_file = $APP_CA_FILE" "" "[headers]" "$APP_TEST_HEADER = $(random_hex)" "" "[log]" \
-    "level = $APP_LOG_LEVEL" >"$dest/$APP_CONFIG"
+  printf '%s\n' "# Written by scripts/memstick.sh install for the test RomM" \
+    "$SERVER_ID_COMMENT$server_id" "[server]" "url = $url" "ca_file = $APP_CA_FILE" "" \
+    "[headers]" "$APP_TEST_HEADER = $(random_hex)" "" "[log]" "level = $APP_LOG_LEVEL" >"$config"
   echo "$APP_FOLDER: new config.ini for $url; the app pairs on its first launch"
 }
 
@@ -295,27 +317,57 @@ install_eboots() {
   echo "Eject the Memory Stick, then run each Skiff entry from Game > Memory Stick."
 }
 
+# The app's secret values from config.ini, one per line; set by results before anything is printed.
+APP_SECRET_VALUES=""
+
+load_app_secrets() {
+  local config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG" value i
+  [[ -f "$config" ]] || return 0
+  for i in "${!SECRET_KEYS[@]}"; do
+    value="$(ini_value "$config" "${SECRET_SECTIONS[$i]}" "${SECRET_KEYS[$i]}")"
+    if [[ -n "$value" ]]; then
+      APP_SECRET_VALUES+="$value"$'\n'
+    fi
+  done
+}
+
+# Prints a file with every secret value replaced by $REDACTED: a leak is reported, not repeated.
+print_file() {
+  SECRETS="$APP_SECRET_VALUES" MASK="$REDACTED" awk '
+    BEGIN { count = split(ENVIRON["SECRETS"], secrets, "\n") }
+    {
+      line = $0
+      for (i = 1; i <= count; i++) {
+        if (secrets[i] == "") continue
+        while ((at = index(line, secrets[i])) > 0) {
+          line = substr(line, 1, at - 1) ENVIRON["MASK"] substr(line, at + length(secrets[i]))
+        }
+      }
+      print line
+    }' "$1"
+}
+
 # The app's secrets (the token pairing wrote, the test header's value) must appear in no file Skiff
 # folders hold but config.ini. Names what leaked where, never the value; 1 if anything did.
 check_app_secrets() {
   local config="$GAME_DIR/$APP_FOLDER/$APP_CONFIG" value leaks i
-  local sections=(auth headers) keys=(token "$APP_TEST_HEADER")
   echo "== secrets"
   if [[ ! -f "$config" ]]; then
     echo "(no $APP_CONFIG in PSP/GAME/$APP_FOLDER)"
     return 0
   fi
   local status=0 checked=0
-  for i in "${!keys[@]}"; do
-    value="$(ini_value "$config" "${sections[$i]}" "${keys[$i]}")"
+  for i in "${!SECRET_KEYS[@]}"; do
+    value="$(ini_value "$config" "${SECRET_SECTIONS[$i]}" "${SECRET_KEYS[$i]}")"
     if [[ -z "$value" ]]; then
-      echo "[${sections[$i]}] ${keys[$i]}: not in $APP_CONFIG (not paired yet, or not written by install)"
+      echo "[${SECRET_SECTIONS[$i]}] ${SECRET_KEYS[$i]}: not in $APP_CONFIG (not paired yet, or" \
+        "not written by install)"
       continue
     fi
     checked=$((checked + 1))
     leaks="$(grep -rlF --exclude="$APP_CONFIG" -e "$value" "$GAME_DIR"/Skiff* || true)"
     if [[ -n "$leaks" ]]; then
-      echo "FAIL [${sections[$i]}] ${keys[$i]} found in:"
+      echo "FAIL [${SECRET_SECTIONS[$i]}] ${SECRET_KEYS[$i]} found in (shown as $REDACTED above):"
       printf '%s\n' "$leaks" | sed 's/^/  /'
       status=1
     fi
@@ -335,16 +387,16 @@ print_results() {
       for file in "${APP_FILES[@]}"; do
         if [[ -f "$GAME_DIR/${FOLDERS[$i]}/$file" ]]; then
           echo "-- $file"
-          cat "$GAME_DIR/${FOLDERS[$i]}/$file"
+          print_file "$GAME_DIR/${FOLDERS[$i]}/$file"
           echo
         fi
       done
       if [[ -f "$result" ]]; then
         echo "-- $RESULT_FILE (the launch check, a game Skiff downloaded)"
-        cat "$result"
+        print_file "$result"
       fi
     elif [[ -f "$result" ]]; then
-      cat "$result"
+      print_file "$result"
     else
       echo "(no $RESULT_FILE: not run yet, or it crashed before opening the file)"
     fi
@@ -352,7 +404,7 @@ print_results() {
       local log_path="$GAME_DIR/${FOLDERS[$i]}/$log"
       if [[ -f "$log_path" ]]; then
         echo "-- $log (appended by every run)"
-        cat "$log_path"
+        print_file "$log_path"
       fi
     done
   done
@@ -370,6 +422,7 @@ uninstall_eboots() {
 case "$COMMAND" in
 install) install_eboots ;;
 results)
+  load_app_secrets
   print_results
   check_app_secrets
   ;;

@@ -506,9 +506,11 @@ the disc needs both the PSP build and the host image.
    `config.ini` with only the test server's address, `ca_file = test-ca-bundle.pem` (the default
    `cacert.pem` plus the test CA, so the app parses as many certificates as it does by default), a
    custom header `X-Skiff-Test` with a random value, and `[log] level = debug`. With no
-   `[auth]` token, the app pairs on its first launch. A `config.ini` already naming the same server
-   is kept, with its pairing and network; the CA file is rewritten either way, as each `romm-lan`
-   makes a new test CA. Eject.
+   `[auth]` token, the app pairs on its first launch. A `config.ini` written for the same test
+   server (the same `romm-lan` run, recorded as a digest of its secrets) is kept, with its pairing
+   and network; for any other, the previous server's queue, its partial downloads and
+   `installed.json` go first, as when the server changes in the app's Settings (games stay). The
+   CA file is rewritten either way, as each `romm-lan` makes a new test CA. Eject.
 3. Run **Skiff**, pair it (approve the code in RomM's web UI, as the admin from
    `build/integration/romm.env`), browse, and download, interrupting downloads as the session's
    checklist asks. Launch **Skiff launch check** from Game → Memory Stick (the ISO loader lists it)
@@ -516,7 +518,8 @@ the disc needs both the PSP build and the host image.
 4. USB mode: `scripts/memstick.sh results <mount>`. For the app it prints `installed.json`,
    `queue.json`, the launch check's `result.txt` and `skiff.log`, and ends with the secrets check:
    neither the token pairing wrote nor the `X-Skiff-Test` value may appear in any file under
-   `PSP/GAME/Skiff*` but `config.ini` (it names the file, never the value, and exits with 1).
+   `PSP/GAME/Skiff*` but `config.ini`. Everything it prints shows those values as `[redacted]`;
+   a leak names the file and exits with 1.
 
 At `[log] level = debug`, `skiff.log` also holds what the session measures: one `request:` line
 per request the UI thread makes (time, status, body bytes, new connections, TLS version and cipher,

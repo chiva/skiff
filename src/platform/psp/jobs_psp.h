@@ -5,8 +5,9 @@
  * The download queue's worker on the PSP (skiff/jobs.h): a thread that runs skiff_jobs_run_one()
  * until Skiff quits, and the platform hooks the runner asks for (skiff_jobs_env): the curl
  * transport, the Wi-Fi switch and access point, rejoining or reloading the network (net_psp.h), the
- * suspend count and keep-awake (lifecycle.h), and the system clock. Also the mutex the queue and
- * the log lock with, and the real-time clock the log stamps its lines with.
+ * suspend count and keep-awake (lifecycle.h), and the system clock. Also the mutex the queue (its
+ * state and commit locks) and the log lock with, and the real-time clock the log stamps its lines
+ * with.
  *
  * The worker runs at a lower priority than the UI thread. The PSP's kernel never time-slices
  * threads of equal priority and always runs the highest-priority ready thread, so the UI, which
@@ -52,8 +53,9 @@ typedef struct skiff_psp_mutex {
 /* SKIFF_ERR_INVALID_ARG for NULL, SKIFF_ERR_NO_MEMORY when the kernel refuses the semaphore. */
 skiff_err skiff_psp_mutex_create(skiff_psp_mutex *mutex, const char *name);
 void skiff_psp_mutex_destroy(skiff_psp_mutex *mutex);
-/* ctx is the skiff_psp_mutex. Not recursive: the queue and the log each need their own, since the
- * queue logs while it holds its lock. */
+/* ctx is the skiff_psp_mutex. Not recursive: the queue's state lock, its commit lock and the log
+ * each need their own, since the queue takes its state lock and logs while it holds its commit
+ * lock. */
 void skiff_psp_mutex_lock(void *ctx);
 void skiff_psp_mutex_unlock(void *ctx);
 

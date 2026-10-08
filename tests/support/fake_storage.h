@@ -45,6 +45,10 @@ typedef struct fake_storage {
     /* When not SKIFF_OK, free_space fails with this (SKIFF_ERR_NOT_IMPLEMENTED: a device that
      * cannot tell). */
     skiff_err free_space_error;
+    /* Called at every open and remove, before the inner storage acts ("open" or "remove", and the
+     * path): a test runs code "during" Memory Stick I/O here. NULL for none. */
+    void (*on_call)(void *ctx, const char *call, const char *path);
+    void *on_call_ctx;
     /* What the fake saw. */
     int mkdirs;
     int free_space_queries;

@@ -11,9 +11,9 @@
  *
  * It measures what jobs/ was sized by guesswork: the worker's lowest free stack (of
  * SKIFF_PSP_WORKER_STACK_BYTES), the system memory left once joined and while downloading, the
- * download speed with the UI drawing, and the longest gap between two frames (the UI waits for the
- * queue's lock while the worker saves the queue file). The finished file is read back and checked
- * against RomM's CRC-32.
+ * download speed with the UI drawing, and the longest gap between two frames (the UI reads the
+ * queue every frame, and must not wait while the worker saves it). The finished file is read
+ * back and checked against RomM's CRC-32.
  *
  * So that a run explains its own numbers, the probe also keeps, and prints after the run: every
  * frame gap over the limit with where its time went (the queue's lock and events, the probe's own
@@ -198,6 +198,7 @@ typedef struct probe {
     skiff_psp_net net;
     skiff_storage *storage;
     skiff_psp_mutex jobs_lock;
+    skiff_psp_mutex jobs_save_lock;
     skiff_psp_mutex log_lock;
     skiff_log *log;
     skiff_jobs *jobs;
@@ -353,6 +354,7 @@ static int open_queue_and_log(probe *p) {
         return 0;
     }
     if (skiff_psp_mutex_create(&p->jobs_lock, "skiff_jobs_lock") != SKIFF_OK ||
+        skiff_psp_mutex_create(&p->jobs_save_lock, "skiff_jobs_save_lock") != SKIFF_OK ||
         skiff_psp_mutex_create(&p->log_lock, "skiff_log_lock") != SKIFF_OK) {
         report_check(p, 0, "mutexes: the kernel refused a semaphore");
         return 0;
@@ -377,6 +379,7 @@ static int open_queue_and_log(probe *p) {
             .lock = skiff_psp_mutex_lock,
             .unlock = skiff_psp_mutex_unlock,
             .lock_ctx = &p->jobs_lock,
+            .save_lock_ctx = &p->jobs_save_lock,
         };
         err = skiff_jobs_create(&jobs_config, &p->jobs);
     }
@@ -391,6 +394,7 @@ static void close_queue_and_log(probe *p) {
     skiff_log_destroy(p->log);
     p->log = NULL;
     skiff_psp_mutex_destroy(&p->jobs_lock);
+    skiff_psp_mutex_destroy(&p->jobs_save_lock);
     skiff_psp_mutex_destroy(&p->log_lock);
 }
 
@@ -1267,6 +1271,7 @@ int main(int argc, char *argv[]) {
     memset(&p, 0, sizeof p);
     p.program_path = argc > 0 ? argv[0] : NULL;
     p.jobs_lock.sema = -1;
+    p.jobs_save_lock.sema = -1;
     p.log_lock.sema = -1;
     skiff_probe_config_defaults(&p.config);
     skiff_psp_install_callbacks();

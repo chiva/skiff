@@ -5,8 +5,12 @@
  * The download queue: what the player asked to download, kept in a file on the Memory Stick
  * (PSP/GAME/Skiff/queue.json) so a quit, a crash or a flat battery loses nothing, and the runner
  * that works through it one job at a time. The UI thread adds, cancels and lists jobs; a worker
- * thread calls skiff_jobs_run_one(). Every call takes the queue's lock (both lock hooks, or neither
- * for one thread), and the runner holds it only between attempts, never during a transfer.
+ * thread calls skiff_jobs_run_one(). Two locks share the hooks (both hooks, or neither for one
+ * thread): the state lock (lock_ctx) guards what the UI reads every frame (the jobs, the events,
+ * the progress) and is held only for moments, never across Memory Stick I/O; the commit lock
+ * (save_lock_ctx) is held for a whole change that saves the queue file, so changes reach the file
+ * in order and the UI never waits for a save. The commit lock is always taken first. The runner
+ * holds neither during a transfer.
  *
  * A job is one file of one ROM. Its target path is decided when it is added (the installer picks
  * it, skiff/storage_paths.h), and the download URL is built from the RomM client when the job runs,
@@ -114,7 +118,11 @@ typedef struct skiff_jobs_config {
     /* Both or neither; NULL for one thread. */
     skiff_jobs_lock_fn lock;
     skiff_jobs_lock_fn unlock;
+    /* The state lock, passed to the hooks. */
     void *lock_ctx;
+    /* The commit lock, passed to the same hooks: required with them, and not lock_ctx (the hooks
+     * are not expected to nest one lock). */
+    void *save_lock_ctx;
 } skiff_jobs_config;
 
 typedef struct skiff_jobs skiff_jobs;
@@ -187,7 +195,8 @@ typedef struct skiff_jobs_env {
  * empty, the log says why, and the next save replaces the file; a job that cannot be used (a field
  * missing or too long) is dropped the same way, the rest kept. A job left active by a quit or a
  * crash is queued again: its .part file lets it resume. Returns SKIFF_ERR_INVALID_ARG for a NULL
- * argument or storage, an empty path, only one lock hook, or a path too long for
+ * argument or storage, an empty path, only one lock hook, lock hooks without a save_lock_ctx or
+ * with save_lock_ctx equal to lock_ctx, or a path too long for
  * SKIFF_STORAGE_PATH_MAX; SKIFF_ERR_NO_MEMORY; the storage's error when the file cannot be read.
  * *out is NULL on error.
  */

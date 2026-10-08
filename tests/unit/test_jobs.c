@@ -83,6 +83,54 @@ typedef struct fake_env {
     attempt_script script[SCRIPT_MAX];
 } fake_env;
 
+/* ---- Locks that record how they are used ---- */
+
+typedef struct tracked_lock {
+    int held;
+    int takes;
+    /* Taken while already held: a deadlock on a real mutex. */
+    int nested;
+} tracked_lock;
+
+typedef struct lock_tracker {
+    tracked_lock state;
+    tracked_lock commit;
+    /* The commit lock taken while the state lock was held (the wrong order). */
+    int commit_under_state;
+    /* While set, taking the commit lock is a fault: the call must not wait for a save. */
+    int forbid_commit;
+    int forbidden_commits;
+    /* Memory Stick calls (opens and removes) made while the state lock was held. */
+    int io_under_state;
+    /* Opens of the queue file (saves), and those made without the commit lock. */
+    int queue_opens;
+    int queue_opens_without_commit;
+    /* Runs once, just before the commit lock is taken for the commit_hook_at-th time. */
+    void (*commit_hook)(void);
+    int commit_hook_at;
+} lock_tracker;
+
+static lock_tracker locks;
+
+static void tracked_lock_take(void *ctx) {
+    tracked_lock *lock = ctx;
+    if (lock == &locks.commit && locks.commit_hook != NULL &&
+        locks.commit.takes + 1 == locks.commit_hook_at) {
+        void (*hook)(void) = locks.commit_hook;
+        locks.commit_hook = NULL;
+        hook();
+    }
+    if (lock == &locks.commit) {
+        locks.commit_under_state += locks.state.held;
+        locks.forbidden_commits += locks.forbid_commit;
+    }
+    lock->nested += lock->held;
+    lock->held = 1;
+    lock->takes++;
+}
+
+static void tracked_lock_give(void *ctx) { ((tracked_lock *)ctx)->held = 0; }
+
 static char dir[TEMP_DIR_PATH_MAX];
 static char queue_path[TEMP_DIR_PATH_MAX];
 static char log_path[TEMP_DIR_PATH_MAX];
@@ -160,7 +208,10 @@ static uint32_t env_suspends(void *ctx) {
         e->online = 0;
     }
     if (e->checks == e->cancel_at) {
+        /* The active job's cancel is a flag: it never waits for a save. */
+        locks.forbid_commit = 1;
         TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, e->cancel_id));
+        locks.forbid_commit = 0;
         if (e->refuse_saves_at_cancel) {
             storage.sync_error = SKIFF_ERR_STORAGE_IO;
         }
@@ -220,7 +271,7 @@ static void serve(void) {
 }
 
 static void create_jobs(void) {
-    const skiff_jobs_config config = {&storage.base, queue_path, logger, NULL, NULL, NULL};
+    const skiff_jobs_config config = {&storage.base, queue_path, logger, NULL, NULL, NULL, NULL};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_create(&config, &jobs));
 }
 
@@ -252,6 +303,7 @@ void setUp(void) {
                                          NULL,          NULL,     NULL, NULL, NULL};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_log_create(&log_config, &logger));
     memset(&env_state, 0, sizeof env_state);
+    memset(&locks, 0, sizeof locks);
     env_state.switch_on = 1;
     env_state.online = 1;
     const skiff_jobs_env base_env = {env_open,   env_switch_on, env_online,     env_rejoin,
@@ -1105,47 +1157,233 @@ static void test_a_folder_that_cannot_be_made_fails_the_job(void) {
 
 /* ---- Arguments and locking ---- */
 
-typedef struct lock_counter {
-    int depth;
-    int most;
-    int calls;
-} lock_counter;
-
-static void counting_lock(void *ctx) {
-    lock_counter *counter = ctx;
-    counter->depth++;
-    counter->calls++;
-    counter->most = counter->depth > counter->most ? counter->depth : counter->most;
+static int is_queue_file(const char *path) {
+    return strncmp(path, queue_path, strlen(queue_path)) == 0;
 }
 
-static void counting_unlock(void *ctx) { ((lock_counter *)ctx)->depth--; }
+/* Every Memory Stick open and remove: the state lock must not be held, and a save of the queue
+ * file must hold the commit lock. */
+static void watch_io(void *ctx, const char *call, const char *path) {
+    (void)ctx;
+    locks.io_under_state += locks.state.held;
+    if (strcmp(call, "open") == 0 && is_queue_file(path)) {
+        locks.queue_opens++;
+        locks.queue_opens_without_commit += !locks.commit.held;
+    }
+}
 
-static void test_every_call_takes_the_lock_once_and_gives_it_back(void) {
+static void create_tracked_jobs(void) {
     skiff_jobs_destroy(jobs);
-    lock_counter counter = {0, 0, 0};
-    const skiff_jobs_config config = {&storage.base, queue_path,      logger,
-                                      counting_lock, counting_unlock, &counter};
+    memset(&locks, 0, sizeof locks);
+    const skiff_jobs_config config = {&storage.base,     queue_path,        logger,
+                                      tracked_lock_take, tracked_lock_give, &locks.state,
+                                      &locks.commit};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_create(&config, &jobs));
+    storage.on_call = watch_io;
+}
+
+static void assert_locks_used_well(void) {
+    TEST_PRINTF("state lock taken %d times, commit lock %d, queue file opened %d times",
+                locks.state.takes, locks.commit.takes, locks.queue_opens);
+    TEST_ASSERT_EQUAL_INT(0, locks.state.held);
+    TEST_ASSERT_EQUAL_INT(0, locks.commit.held);
+    TEST_ASSERT_EQUAL_INT(0, locks.state.nested);
+    TEST_ASSERT_EQUAL_INT(0, locks.commit.nested);
+    TEST_ASSERT_EQUAL_INT(0, locks.commit_under_state);
+    TEST_ASSERT_EQUAL_INT(0, locks.forbidden_commits);
+    TEST_ASSERT_EQUAL_INT(0, locks.io_under_state);
+    TEST_ASSERT_EQUAL_INT(0, locks.queue_opens_without_commit);
+}
+
+static void test_saves_hold_the_commit_lock_and_never_the_state_lock(void) {
+    create_tracked_jobs();
     const uint32_t id = add_job();
     env_state.script[0].fail_mid_body = SKIFF_ERR_NET_CONNECTION_LOST;
     env_state.script[0].fail_after_bytes = MIB;
     run();
-    skiff_jobs_cancel(jobs, id);
-    skiff_jobs_retry(jobs, id);
-    skiff_jobs_clear_finished(jobs);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_clear_finished(jobs));
+    const uint32_t again = add_job();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, again));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_retry(jobs, again));
     skiff_jobs_request_stop(jobs);
-    TEST_PRINTF("%d lock calls, never nested", counter.calls);
-    TEST_ASSERT_EQUAL_INT(0, counter.depth);
-    TEST_ASSERT_EQUAL_INT(1, counter.most);
-    TEST_ASSERT_GREATER_THAN_INT(10, counter.calls);
+    int ran = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_run_one(jobs, &env, &ran));
+    TEST_ASSERT_EQUAL_INT(0, ran);
+    TEST_ASSERT_GREATER_THAN_INT(6, locks.queue_opens);
+    TEST_ASSERT_GREATER_THAN_INT(10, locks.state.takes);
+    assert_locks_used_well();
+}
+
+/* What the UI reads while a save is on the Memory Stick. */
+static size_t jobs_seen_during_save;
+static int events_seen_during_save;
+
+static void read_during_save(void *ctx, const char *call, const char *path) {
+    watch_io(ctx, call, path);
+    if (strcmp(call, "open") == 0 && is_queue_file(path) && jobs_seen_during_save == 0) {
+        jobs_seen_during_save = skiff_jobs_list(jobs, NULL, 0);
+        skiff_jobs_event event;
+        while (skiff_jobs_next_event(jobs, &event)) {
+            events_seen_during_save++;
+        }
+    }
+}
+
+static void test_a_reader_during_a_save_sees_the_queue_as_it_was(void) {
+    create_tracked_jobs();
+    add_job();
+    drain_events();
+    event_count = 0;
+    char other_target[TEMP_DIR_PATH_MAX];
+    const skiff_job_request request = request_named("Other.iso", other_target, sizeof other_target);
+    jobs_seen_during_save = 0;
+    events_seen_during_save = 0;
+    storage.on_call = read_during_save;
+    uint32_t id = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &id));
+    TEST_PRINTF("during the save the UI saw %zu job(s) and %d event(s); after it, %zu",
+                jobs_seen_during_save, events_seen_during_save, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_size_t(1, jobs_seen_during_save);
+    TEST_ASSERT_EQUAL_INT(0, events_seen_during_save);
+    TEST_ASSERT_EQUAL_size_t(2, skiff_jobs_list(jobs, NULL, 0));
+    drain_events();
+    TEST_ASSERT_EQUAL_size_t(1, event_count);
+    TEST_ASSERT_EQUAL_UINT32(id, events[0].job_id);
+    assert_locks_used_well();
+}
+
+static void test_a_save_that_fails_leaves_no_trace_for_the_reader(void) {
+    create_tracked_jobs();
+    add_job();
+    drain_events();
+    event_count = 0;
+    char other_target[TEMP_DIR_PATH_MAX];
+    const skiff_job_request request = request_named("Other.iso", other_target, sizeof other_target);
+    jobs_seen_during_save = 0;
+    storage.on_call = read_during_save;
+    storage.sync_error = SKIFF_ERR_STORAGE_IO;
+    uint32_t id = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, skiff_jobs_add(jobs, &request, &id));
+    storage.sync_error = SKIFF_OK;
+    TEST_ASSERT_EQUAL_size_t(1, jobs_seen_during_save);
+    TEST_ASSERT_EQUAL_size_t(1, skiff_jobs_list(jobs, NULL, 0));
+    drain_events();
+    TEST_ASSERT_EQUAL_size_t(0, event_count);
+    /* Nor did the failed add use up an id. */
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &id));
+    TEST_ASSERT_EQUAL_UINT32(2, id);
+    assert_locks_used_well();
+}
+
+/* At the removal of a cancelled job's partial files: the locks held, and the job as the UI sees
+ * it. */
+static int discard_seen;
+static int discard_without_commit;
+static skiff_job_state discard_state_seen;
+static uint32_t discard_job_id;
+
+static void watch_discard(void *ctx, const char *call, const char *path) {
+    watch_io(ctx, call, path);
+    /* After the cancel: the engine's own removals at the start of a download do not count. */
+    if (strcmp(call, "remove") == 0 && strcmp(path, part) == 0 &&
+        env_state.checks >= env_state.cancel_at) {
+        discard_seen++;
+        discard_without_commit += !locks.commit.held;
+        discard_state_seen = job_with(discard_job_id).state;
+    }
+}
+
+static void test_a_cancelled_jobs_files_go_under_the_commit_lock_alone(void) {
+    create_tracked_jobs();
+    discard_job_id = add_job();
+    discard_seen = 0;
+    discard_without_commit = 0;
+    storage.on_call = watch_discard;
+    env_state.cancel_at = 900;
+    env_state.cancel_id = discard_job_id;
+    run();
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, job_with(discard_job_id).state);
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_PRINTF("the .part file was removed %d time(s), %d without the commit lock; the UI saw "
+                "the job %s",
+                discard_seen, discard_without_commit, skiff_job_state_name(discard_state_seen));
+    TEST_ASSERT_GREATER_THAN_INT(0, discard_seen);
+    /* Held, so no other job can claim the target until the files are gone; the UI still reads. */
+    TEST_ASSERT_EQUAL_INT(0, discard_without_commit);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, discard_state_seen);
+    assert_locks_used_well();
+}
+
+static void stop_during_save(void *ctx, const char *call, const char *path) {
+    watch_io(ctx, call, path);
+    if (strcmp(call, "open") == 0 && is_queue_file(path)) {
+        skiff_jobs_request_stop(jobs);
+    }
+}
+
+static void test_a_stop_asked_for_during_the_start_save_starts_nothing(void) {
+    create_tracked_jobs();
+    const uint32_t id = add_job();
+    storage.on_call = stop_during_save;
+    int ran = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_run_one(jobs, &env, &ran));
+    TEST_PRINTF("ran %d, job %s, %d transport(s) opened", ran,
+                skiff_job_state_name(job_with(id).state), env_state.opens);
+    TEST_ASSERT_EQUAL_INT(0, ran);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, job_with(id).state);
+    TEST_ASSERT_EQUAL_INT(0, env_state.opens);
+    assert_locks_used_well();
+    /* The file may say active; a restart reads that as queued, and the job runs. */
+    storage.on_call = NULL;
+    skiff_jobs_destroy(jobs);
+    create_jobs();
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, job_with(id).state);
+    run();
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+}
+
+static uint32_t late_cancel_id;
+
+static void cancel_as_the_job_ends(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, late_cancel_id));
+}
+
+/* A cancel acknowledged after the attempt ended, just before the runner records how: it is not
+ * lost, whatever the attempt's own outcome (here a quit, which leaves the job queued). */
+static void test_a_cancel_as_the_job_ends_is_not_lost(void) {
+    create_tracked_jobs();
+    late_cancel_id = add_job();
+    /* The run's commits: the start, then the end. */
+    locks.commit_hook = cancel_as_the_job_ends;
+    locks.commit_hook_at = locks.commit.takes + 2;
+    env_state.stop_at = 900;
+    run();
+    TEST_PRINTF("job %s, .part %s", skiff_job_state_name(job_with(late_cancel_id).state),
+                exists(part) ? "kept" : "deleted");
+    TEST_ASSERT_NULL(locks.commit_hook);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, job_with(late_cancel_id).state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CANCELLED, job_with(late_cancel_id).error);
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+    assert_locks_used_well();
 }
 
 static void test_bad_arguments_are_refused(void) {
     skiff_jobs *other = NULL;
-    skiff_jobs_config config = {&storage.base, queue_path, NULL, counting_lock, NULL, NULL};
+    skiff_jobs_config config = {&storage.base, queue_path, NULL, tracked_lock_take,
+                                NULL,          NULL,       NULL};
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(&config, &other));
+    TEST_ASSERT_NULL(other);
+    /* Lock hooks need a commit lock, and one apart from the state lock. */
+    config.unlock = tracked_lock_give;
+    config.lock_ctx = &locks.state;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(&config, &other));
+    config.save_lock_ctx = &locks.state;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(&config, &other));
     TEST_ASSERT_NULL(other);
     config.lock = NULL;
+    config.unlock = NULL;
     config.path = "";
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(&config, &other));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_create(NULL, &other));
@@ -1211,7 +1449,12 @@ int main(void) {
     RUN_TEST(test_a_stop_asked_for_between_jobs_starts_no_job);
     RUN_TEST(test_a_transport_that_cannot_open_fails_the_job);
     RUN_TEST(test_a_folder_that_cannot_be_made_fails_the_job);
-    RUN_TEST(test_every_call_takes_the_lock_once_and_gives_it_back);
+    RUN_TEST(test_saves_hold_the_commit_lock_and_never_the_state_lock);
+    RUN_TEST(test_a_reader_during_a_save_sees_the_queue_as_it_was);
+    RUN_TEST(test_a_save_that_fails_leaves_no_trace_for_the_reader);
+    RUN_TEST(test_a_cancelled_jobs_files_go_under_the_commit_lock_alone);
+    RUN_TEST(test_a_stop_asked_for_during_the_start_save_starts_nothing);
+    RUN_TEST(test_a_cancel_as_the_job_ends_is_not_lost);
     RUN_TEST(test_bad_arguments_are_refused);
     return UNITY_END();
 }

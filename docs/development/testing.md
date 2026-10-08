@@ -411,9 +411,9 @@ the seeded file next to the EBOOT and asks the player, on screen, to interrupt i
 Wi-Fi switch off (then back on when asked), at 50% put the PSP to sleep and wake it. It measures
 what `jobs/` was sized by guesswork: the worker's lowest free stack, the system memory left once
 joined and while downloading, the speed with the UI drawing, and the longest gap between two
-frames (the UI waits for the queue's lock while the worker saves the queue file). The finished file
-is read back and checked against RomM's CRC-32. A job an earlier run left unfinished (HOME → Quit) is
-still in the queue file and resumes first, which tests the queue across launches.
+frames (the UI reads the queue every frame, and must not wait while the worker saves it). The
+finished file is read back and checked against RomM's CRC-32. A job an earlier run left unfinished
+(HOME → Quit) is still in the queue file and resumes first, which tests the queue across launches.
 
 Speed depends on the day's Wi-Fi as much as on Skiff (the same download has taken 359 and 410
 KB/s on two days with nothing drawn), so the probe does not judge it against a fixed number. A

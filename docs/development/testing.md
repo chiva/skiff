@@ -441,9 +441,9 @@ On a PSP (plugged in; about 5 minutes per run):
    (`kb_s_attempts`).
 
    A frame gap is judged without the time the probe spent writing its own report (the app writes
-   none; the list still shows it). A gap within a few frames of a suspend or resume event, before
-   or after it, is not counted: the power callback can arrive on either side of the frame that
-   spans the sleep, so such a gap is listed as "excluded (suspend)" instead (`gaps_excluded`).
+   none; the list still shows it). A gap within 3 s of a suspend or resume event, before or after
+   it, is not counted: on a PSP-1000 the power callback reached the probe 2.2 s after the frame
+   that spans the sleep, so such a gap is listed as "excluded (suspend)" instead (`gaps_excluded`).
 
    Each run appends one line to `jobs-log.txt`: speed before the Wi-Fi test and at the end, how
    soon the runner noticed the switch and how long until bytes came again, the same after the

@@ -342,6 +342,22 @@ static void start(skiff_app *app) {
 
 /* ---- The worker ---- */
 
+/* The worker's client only builds download URLs and the Authorization header (skiff/jobs.h): it
+ * never sends a request. It gets this transport, which refuses one and lives for the program,
+ * rather than borrowing the browse transport, which a lost connection replaces. */
+static skiff_err refuse_request(skiff_transport *transport, const skiff_http_request *request,
+                                skiff_http_response *response) {
+    (void)transport;
+    (void)request;
+    (void)response;
+    return SKIFF_ERR_NOT_IMPLEMENTED;
+}
+
+static void keep_transport(skiff_transport *transport) { (void)transport; }
+
+static const skiff_transport_ops NO_REQUEST_OPS = {refuse_request, keep_transport};
+static skiff_transport no_requests = {&NO_REQUEST_OPS};
+
 skiff_err app_start_worker(skiff_app *app) {
     if (app->worker_running) {
         return SKIFF_OK;
@@ -353,7 +369,7 @@ skiff_err app_start_worker(skiff_app *app) {
     skiff_err err = skiff_app_transport_settings_from(&app->worker_settings, &app->config.roots,
                                                       &app->worker_transport);
     if (err == SKIFF_OK) {
-        err = skiff_romm_client_init(&app->worker_romm, app->transport,
+        err = skiff_romm_client_init(&app->worker_romm, &no_requests,
                                      app->worker_settings.server_url, app->worker_settings.token);
     }
     if (err == SKIFF_OK) {

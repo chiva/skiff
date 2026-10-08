@@ -1106,6 +1106,12 @@ static void test_a_lost_network_is_joined_again_before_retrying(void) {
     TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
     TEST_ASSERT_GREATER_THAN_INT(opens, env_state.opens);
     TEST_ASSERT_TRUE(shows("Game 30"));
+    TEST_PRINTF("the worker's client never used the browse transport the failure replaced");
+    TEST_ASSERT_TRUE(env_state.spec.romm->transport != app->transport);
+    skiff_http_response response;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NOT_IMPLEMENTED,
+                          env_state.spec.romm->transport->ops->perform(
+                              env_state.spec.romm->transport, NULL, &response));
 }
 
 static void test_cancelling_pair_again_returns_to_the_library(void) {

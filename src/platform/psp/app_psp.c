@@ -4,6 +4,7 @@
 #include <pspctrl.h>
 #include <pspkernel.h>
 #include <pspwlan.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "skiff/curl_transport.h"
@@ -168,11 +169,56 @@ static skiff_curl_config curl_config(const skiff_app_transport_settings *setting
     return curl;
 }
 
+/* The browse transport: each request holds net_lock, so the worker cannot disconnect or unload the
+ * network under it. The lock is taken without waiting: while the worker recovers the network, the
+ * request fails as a lost connection, and the player's retry joins again once it is free. */
+typedef struct guarded_transport {
+    skiff_transport base;
+    skiff_transport *inner;
+    skiff_psp_app *platform;
+} guarded_transport;
+
+static skiff_err guarded_perform(skiff_transport *transport, const skiff_http_request *request,
+                                 skiff_http_response *response) {
+    guarded_transport *guarded = (guarded_transport *)transport;
+    skiff_psp_app *platform = guarded->platform;
+    const int already_held = platform->holds_net;
+    if (!try_take_network(platform)) {
+        return SKIFF_ERR_NET_CONNECTION_LOST;
+    }
+    const skiff_err err = guarded->inner->ops->perform(guarded->inner, request, response);
+    if (!already_held) {
+        give_network(platform);
+    }
+    return err;
+}
+
+static void guarded_destroy(skiff_transport *transport) {
+    guarded_transport *guarded = (guarded_transport *)transport;
+    skiff_transport_destroy(guarded->inner);
+    free(guarded);
+}
+
+static const skiff_transport_ops GUARDED_OPS = {guarded_perform, guarded_destroy};
+
 static skiff_err open_transport(void *ctx, const skiff_app_transport_settings *settings,
                                 skiff_transport **out) {
-    (void)ctx;
+    skiff_psp_app *platform = ctx;
+    *out = NULL;
+    guarded_transport *guarded = calloc(1, sizeof *guarded);
+    if (guarded == NULL) {
+        return SKIFF_ERR_NO_MEMORY;
+    }
     const skiff_curl_config curl = curl_config(settings);
-    return skiff_curl_transport_create(&curl, out);
+    const skiff_err err = skiff_curl_transport_create(&curl, &guarded->inner);
+    if (err != SKIFF_OK) {
+        free(guarded);
+        return err;
+    }
+    guarded->base.ops = &GUARDED_OPS;
+    guarded->platform = platform;
+    *out = &guarded->base;
+    return SKIFF_OK;
 }
 
 static skiff_err random_bytes(void *ctx, unsigned char *out, size_t size) {

@@ -150,7 +150,9 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   created at startup: the log's, the queue's two, `installed.json`'s and the network's. The network
   stack is used by one thread at a time, so the UI holds the network lock from the start of a join
   to its end, and while the network picker is open, taking it without waiting (while the worker
-  rejoins, up to 30 s, the screen keeps drawing); the worker takes it to rejoin or reload. Quitting
+  rejoins, up to 30 s, the screen keeps drawing); the worker takes it to rejoin or reload. Each
+  request to RomM from the UI holds it too, so the worker never tears the network down under one;
+  one made while the worker recovers fails as a lost connection, and Retry joins again. Quitting
   stops the worker (5 s); only when it stopped are the app, the network (after a disconnect that
   succeeded), TLS and the mutexes released, otherwise the process exit does it. A system dialog
   that will not close ends the app the same way.

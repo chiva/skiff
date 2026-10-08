@@ -71,7 +71,8 @@ typedef struct skiff_log_config {
     /* Copied. */
     const char *path;
     /* 0 selects SKIFF_LOG_DEFAULT_CAP_BYTES and SKIFF_LOG_DEFAULT_BUFFER_BYTES. The buffer holds at
-     * least one line and at most cap_bytes. */
+     * least one line and at most cap_bytes. One smaller than two lines can lose a longest line
+     * logged while the Memory Stick refuses: the report of lost lines takes part of its room. */
     uint64_t cap_bytes;
     size_t buffer_bytes;
     skiff_log_level level;

@@ -274,8 +274,7 @@ void app_connect_update(skiff_app *app, unsigned actions) {
     case CONNECT_PLATFORM:
         /* The step's request runs off this thread; its result moves the walk on. */
         if (!app_call_busy(app)) {
-            app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT
-                                                                  : CALL_PLATFORM);
+            app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT : CALL_PLATFORM);
         }
         return;
     case CONNECT_PAIRING:

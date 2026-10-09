@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
   skiff
-  VERSION 0.1.0 # x-release-please-version
+  VERSION 0.2.0 # x-release-please-version
   DESCRIPTION "A RomM client for the PSP"
   HOMEPAGE_URL "https://github.com/chiva/skiff"
   LANGUAGES C)

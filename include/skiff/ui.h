@@ -4,7 +4,7 @@
 /*
  * The parts of the UI that are not drawing, so they run and are tested on the host: buttons to
  * actions (with repeat for a held d-pad), a scrolling list, text cut to a width, UTF-8 to and from
- * the UTF-16 the system dialogs use, and download progress with its rate and time left.
+ * the UTF-16 the system dialogs use, download progress with its rate and time left, and QR codes.
  * src/platform/psp/ui_psp.h draws them with GU and intraFont; src/platform/psp/dialog_psp.h runs
  * the dialogs.
  */
@@ -177,5 +177,37 @@ skiff_err skiff_ui_format_bytes(uint64_t bytes, const char *decimal_separator, c
 /* "45 s", "12 min" (rounded up), "2 h 05 min": symbols both English and Spanish use. Errors as for
  * skiff_ui_format_bytes(). */
 skiff_err skiff_ui_format_duration(uint64_t seconds, char *out, size_t out_size);
+
+/* ---- QR codes ---- */
+
+/* The largest QR code Skiff makes: version 10, 57 modules a side, holding up to 213 bytes at error
+ * correction level M. A pairing address is about 60 bytes (version 4, 33 modules). */
+#define SKIFF_UI_QR_VERSION_MAX 10
+#define SKIFF_UI_QR_SIZE_MAX (SKIFF_UI_QR_VERSION_MAX * 4 + 17)
+/* The light border a reader needs around the code, in modules (the standard's quiet zone). */
+#define SKIFF_UI_QR_QUIET_ZONE 4
+
+typedef struct skiff_ui_qr {
+    /* Modules a side; 0 for no code. */
+    int size;
+    /* Row by row, one bit per module, set for a dark one. */
+    uint8_t modules[(SKIFF_UI_QR_SIZE_MAX * SKIFF_UI_QR_SIZE_MAX + 7) / 8];
+} skiff_ui_qr;
+
+/*
+ * Encodes text (UTF-8, as bytes) in the smallest QR code that holds it at error correction level M,
+ * with a higher level when that fits the same size (Nayuki's QR Code generator).
+ * SKIFF_ERR_INVALID_ARG for NULL, SKIFF_ERR_BUFFER_TOO_SMALL when it needs more than
+ * SKIFF_UI_QR_VERSION_MAX; out->size is 0 on error.
+ */
+skiff_err skiff_ui_qr_encode(const char *text, skiff_ui_qr *out);
+
+/* 1 for a dark module at (x, y), 0 for a light one, outside the code (its quiet zone) or for NULL.
+ */
+int skiff_ui_qr_dark(const skiff_ui_qr *qr, int x, int y);
+
+/* The most whole pixels a module can take for qr and its quiet zone to fit in max_pixels a side;
+ * 0 when not even one does, or for no code. */
+int skiff_ui_qr_scale(const skiff_ui_qr *qr, int max_pixels);
 
 #endif

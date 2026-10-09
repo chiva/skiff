@@ -1,7 +1,7 @@
 # Host toolchain for unit tests (gcc and clang), sanitizers, coverage, static analysis, icon
 # rendering (librsvg2-bin, for scripts/render-icons.sh), and the integration server's certificates
 # and checks (openssl, curl, jq; tests/integration/), the launch check's disc image (genisoimage,
-# below), zlib for the downloads' CRC-32 (the PSP
+# below), reading QR codes back (zbar-tools, below), zlib for the downloads' CRC-32 (the PSP
 # links pspdev's zlib) and cJSON for RomM's responses (built below at pspdev's version). The CI host jobs run scripts/dev.sh, which
 # runs this image, so local and CI results come from the same environment. Not used for PSP builds:
 # those run in the skiff-toolchain image (toolchain.Dockerfile).
@@ -36,10 +36,16 @@ RUN curl -fsSL --retry 3 -o /tmp/cjson.tar.gz \
  && rm -rf /tmp/cjson /tmp/cjson.tar.gz
 ENV CMAKE_PREFIX_PATH=/opt/skiff-tls:/opt/skiff-cjson
 
+# The QR Code generator the PSP links (src/ui/qr.c), from the same pinned script.
+COPY qrcodegen/ /opt/skiff-qrcodegen-build/
+RUN /opt/skiff-qrcodegen-build/build-qrcodegen.sh /opt/skiff-qrcodegen
+ENV CMAKE_PREFIX_PATH=/opt/skiff-tls:/opt/skiff-cjson:/opt/skiff-qrcodegen
+
 # genisoimage writes the launch check's UMD disc image (tests/hardware/make_launch_disc.py, for the
-# hardware tier). A layer of its own, after the TLS build, so adding it rebuilds nothing above.
+# hardware tier); zbarimg reads back the QR codes the unit tests draw (tests/unit/test_ui_qr.c). A
+# layer of its own, after the TLS build, so adding to it rebuilds nothing above.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends genisoimage \
+ && apt-get install -y --no-install-recommends genisoimage zbar-tools \
  && rm -rf /var/lib/apt/lists/*
 
 # The checkout is bind-mounted and owned by the host user, not the container's root. On Linux hosts

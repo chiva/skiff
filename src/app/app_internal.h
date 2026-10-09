@@ -86,6 +86,8 @@ typedef struct app_pairing {
      * the next poll may clear. */
     skiff_err ended;
     skiff_err last_error;
+    /* The address with the code, as a QR code; size 0 when it does not fit one. */
+    skiff_ui_qr qr;
 } app_pairing;
 
 /* What the queue screen shows: a copy of the queue and the active job's progress. */

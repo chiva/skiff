@@ -881,6 +881,23 @@ static void test_pages_load_as_the_player_scrolls(void) {
     TEST_ASSERT_TRUE(shows("Game 30"));
 }
 
+static void test_the_library_fills_the_body(void) {
+    const int rows = SKIFF_APP_ROWS_FIT(0, 0);
+    const int used = SKIFF_APP_BLOCK_GAP + rows * SKIFF_APP_LINE_HEIGHT;
+    TEST_PRINTF("%d rows take %d of the body's %d pixels", rows, used, SKIFF_APP_BODY_HEIGHT);
+    TEST_ASSERT_TRUE(used <= SKIFF_APP_BODY_HEIGHT);
+    TEST_ASSERT_TRUE(used + SKIFF_APP_LINE_HEIGHT > SKIFF_APP_BODY_HEIGHT);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_ROWS_MAX, rows);
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(30);
+    serve_page(25, 5, 30);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(0, view()->line_count);
+    TEST_ASSERT_EQUAL_size_t((size_t)rows, view()->list.rows);
+    TEST_ASSERT_EQUAL_size_t((size_t)rows, view()->row_count);
+}
+
 static void test_a_library_without_psp_games_says_so(void) {
     write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
     serve_heartbeat("5.3.1");
@@ -1060,10 +1077,76 @@ static void test_the_downloads_screen_follows_the_worker(void) {
     app_queue_event(app, &event);
     frame(0);
     TEST_ASSERT_TRUE(shows("Trying again in 4 s"));
+    TEST_PRINTF("progress, speed and recovery: %zu lines under the list (room for %d)",
+                view()->line_count, APP_QUEUE_DETAIL_LINES);
+    TEST_ASSERT_TRUE(view()->lines_below);
+    TEST_ASSERT_EQUAL_size_t(APP_QUEUE_DETAIL_LINES, view()->line_count);
     event.step = SKIFF_JOBS_WAITING_FOR_WIFI;
     app_queue_event(app, &event);
     frame(0);
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_QUEUE_WAITING_WIFI)));
+}
+
+static void test_the_downloads_list_stays_put_as_the_details_come_and_go(void) {
+    open_paired_library(2);
+    for (unsigned id = 1; id <= 2; id++) {
+        if (id > 1) {
+            frame(SKIFF_UI_ACTION_DOWN);
+        }
+        open_details(id);
+        frame(SKIFF_UI_ACTION_CONFIRM);
+        run_until(SKIFF_APP_SCREEN_LIBRARY);
+    }
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_until(SKIFF_APP_SCREEN_QUEUE);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    app->queue.jobs[0].state = SKIFF_JOB_ACTIVE;
+    skiff_jobs_event event = {.kind = SKIFF_JOBS_EVENT_PROGRESS,
+                              .job_id = jobs[0].id,
+                              .done = (uint64_t)1024 * 1024,
+                              .total = (uint64_t)4 * 1024 * 1024};
+    app_queue_event(app, &event);
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_ASSERT_TRUE(view()->has_progress);
+    TEST_ASSERT_TRUE(view()->line_count > 0);
+    const size_t rows = view()->list.rows;
+    TEST_PRINTF("the active download's details under %zu rows", rows);
+    TEST_ASSERT_TRUE(view()->lines_below);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_APP_ROWS_FIT(APP_QUEUE_DETAIL_LINES, 1), rows);
+    frame(SKIFF_UI_ACTION_DOWN);
+    print_view();
+    TEST_PRINTF("a waiting download has no details: the list keeps its rows and its place");
+    TEST_ASSERT_FALSE(view()->has_progress);
+    TEST_ASSERT_EQUAL_size_t(0, view()->line_count);
+    TEST_ASSERT_TRUE(view()->lines_below);
+    TEST_ASSERT_EQUAL_size_t(rows, view()->list.rows);
+    TEST_ASSERT_EQUAL_size_t(1, view()->list.selected);
+}
+
+static void test_every_error_fits_under_the_downloads_list(void) {
+    static const skiff_err errors[] = {
+#define TEST_ERROR_CODE(name, value, message) name,
+        SKIFF_ERROR_TABLE(TEST_ERROR_CODE)
+#undef TEST_ERROR_CODE
+    };
+    char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
+    size_t longest = 0;
+    for (int language = 0; language < SKIFF_LANGUAGE_COUNT; language++) {
+        for (size_t i = 0; i < sizeof errors / sizeof errors[0]; i++) {
+            char text[SKIFF_TEXT_MAX];
+            TEST_ASSERT_EQUAL_INT(
+                SKIFF_OK, skiff_error_line((skiff_language)language, errors[i], text, sizeof text));
+            const size_t count = skiff_app_wrap(text, SKIFF_APP_TEXT_WIDTH, env_measure, NULL,
+                                                lines, SKIFF_APP_LINES_MAX);
+            longest = count > longest ? count : longest;
+            TEST_ASSERT_TRUE_MESSAGE(count <= APP_QUEUE_DETAIL_LINES, text);
+        }
+    }
+    TEST_PRINTF("the longest error takes %zu of the %d lines under the list", longest,
+                APP_QUEUE_DETAIL_LINES);
 }
 
 static void test_cancel_retry_and_clear_from_the_downloads_screen(void) {
@@ -1216,6 +1299,7 @@ static void test_a_failed_page_can_be_retried(void) {
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_EQUAL_size_t(2, view()->row_count);
+    TEST_ASSERT_TRUE(view()->line_count <= APP_SETTINGS_LINES);
     TEST_PRINTF("a RomM error needs no new join");
     TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
 }
@@ -1674,6 +1758,7 @@ int main(void) {
     RUN_TEST(test_the_wifi_switch_and_a_failed_join);
     RUN_TEST(test_a_refused_join_is_tried_again_before_the_player_sees_it);
     RUN_TEST(test_pages_load_as_the_player_scrolls);
+    RUN_TEST(test_the_library_fills_the_body);
     RUN_TEST(test_a_library_without_psp_games_says_so);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);
     RUN_TEST(test_a_finished_download_shows_as_installed);
@@ -1681,6 +1766,8 @@ int main(void) {
     RUN_TEST(test_a_full_queue_shows_its_hint);
     RUN_TEST(test_a_full_installed_list_shows_its_hint);
     RUN_TEST(test_the_downloads_screen_follows_the_worker);
+    RUN_TEST(test_the_downloads_list_stays_put_as_the_details_come_and_go);
+    RUN_TEST(test_every_error_fits_under_the_downloads_list);
     RUN_TEST(test_cancel_retry_and_clear_from_the_downloads_screen);
     RUN_TEST(test_a_new_server_stops_the_worker_and_asks_to_pair);
     RUN_TEST(test_a_worker_that_will_not_stop_changes_nothing);

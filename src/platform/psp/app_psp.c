@@ -21,11 +21,17 @@
 #define WLAN_SWITCH_OFF 0
 
 enum {
-    LINE_HEIGHT = SKIFF_PSP_UI_ROW_HEIGHT,
+    LINE_HEIGHT = SKIFF_APP_LINE_HEIGHT,
     LINE_BASELINE = 10,
-    BLOCK_GAP = 4,
-    PROGRESS_HEIGHT = 8,
+    BLOCK_GAP = SKIFF_APP_BLOCK_GAP,
+    PROGRESS_HEIGHT = SKIFF_APP_PROGRESS_HEIGHT,
 };
+
+/* The app sizes its lists by its body geometry: it must be the body this renderer draws. */
+_Static_assert(SKIFF_APP_BODY_HEIGHT == SKIFF_PSP_UI_CONTENT_BOTTOM - SKIFF_PSP_UI_CONTENT_TOP,
+               "skiff/app.h's body height must be the area between header and footer");
+_Static_assert(SKIFF_APP_LINE_HEIGHT == SKIFF_PSP_UI_ROW_HEIGHT,
+               "skiff/app.h's line height must be a list row's");
 
 /* ---- Measurements (hardware row A1, debug level) ---- */
 
@@ -433,13 +439,8 @@ static void draw_qr(const skiff_psp_ui *ui, const skiff_ui_qr *qr) {
                     SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP, scale, qr);
 }
 
-static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view) {
-    const skiff_psp_ui *ui = &platform->ui;
-    skiff_psp_ui_header(ui, view->title, view->status[0] != '\0' ? view->status : NULL);
-    if (view->qr != NULL) {
-        draw_qr(ui, view->qr);
-    }
-    int y = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
+/* The view's lines from y down, then its progress bar: where they end. */
+static int draw_details(const skiff_psp_ui *ui, const skiff_app_view *view, int y) {
     for (size_t i = 0; i < view->line_count; i++) {
         skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, y + LINE_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
                           SKIFF_PSP_UI_COLOUR_TEXT, view->lines[i]);
@@ -452,11 +453,31 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
                                   PROGRESS_HEIGHT, view->percent);
         y += PROGRESS_HEIGHT;
     }
-    if (view->has_list) {
-        if (view->line_count > 0 || view->has_progress) {
-            y += BLOCK_GAP;
+    return y;
+}
+
+static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view) {
+    const skiff_psp_ui *ui = &platform->ui;
+    skiff_psp_ui_header(ui, view->title, view->status[0] != '\0' ? view->status : NULL);
+    if (view->qr != NULL) {
+        draw_qr(ui, view->qr);
+    }
+    const int top = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
+    if (view->lines_below) {
+        if (view->has_list) {
+            skiff_psp_ui_rows(ui, &view->list, top, view_row, (void *)view);
         }
-        skiff_psp_ui_rows(ui, &view->list, y, view_row, (void *)view);
+        const int height = (int)view->line_count * LINE_HEIGHT +
+                           (view->has_progress ? BLOCK_GAP + PROGRESS_HEIGHT : 0);
+        (void)draw_details(ui, view, SKIFF_PSP_UI_CONTENT_BOTTOM - height);
+    } else {
+        int y = draw_details(ui, view, top);
+        if (view->has_list) {
+            if (view->line_count > 0 || view->has_progress) {
+                y += BLOCK_GAP;
+            }
+            skiff_psp_ui_rows(ui, &view->list, y, view_row, (void *)view);
+        }
     }
     skiff_psp_ui_hint hints[SKIFF_APP_HINTS_MAX];
     for (size_t i = 0; i < view->hint_count; i++) {

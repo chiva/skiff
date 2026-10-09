@@ -19,8 +19,6 @@
 #define COLOUR_SQUARE 0xFFD090F0U
 /* Uncached view of VRAM: reading the frame back must not hit stale cache lines. */
 #define VRAM_UNCACHED_BIT 0x40000000U
-/* Fixed-point unit circle for the Circle symbol (an octagon), in thousandths. */
-#define UNIT 1000
 
 /* skiff/ui.h's bits are an anonymous enum, pspctrl.h's a named one: compare them as numbers. */
 #define SAME_BUTTON(ours, sdk) ((unsigned)(ours) == (unsigned)(sdk))
@@ -62,7 +60,6 @@ enum {
     LIST_TEXT_RIGHT = 12,
 
     PERCENT_FULL = 100,
-    OCTAGON_POINTS = 8,
 };
 
 static unsigned int __attribute__((aligned(16))) display_list[DISPLAY_LIST_WORDS];
@@ -74,8 +71,12 @@ typedef struct ui_vertex {
     short z;
 } ui_vertex;
 
-static const int OCTAGON[OCTAGON_POINTS][2] = {{UNIT, 0},  {707, 707},   {0, UNIT},  {-707, 707},
-                                               {-UNIT, 0}, {-707, -707}, {0, -UNIT}, {707, -707}};
+/* The Circle symbol, pixel by pixel ('#'): a midpoint circle of radius 4. Drawn as an outline, an
+ * octagon that small rounds to a diamond. */
+static const char CIRCLE_PIXELS[SYMBOL_SIZE][SYMBOL_SIZE + 1] = {
+    "   ###   ", " ##   ## ", " #     # ", "#       #", "#       #",
+    "#       #", " #     # ", " ##   ## ", "   ###   ",
+};
 
 intraFont *skiff_psp_ui_load_font(void) {
     intraFontInit();
@@ -205,6 +206,28 @@ static void draw_outline(const int (*points)[2], int count, int left, int top,
     draw_vertices(GU_LINE_STRIP, vertices, count + 1);
 }
 
+/* The '#' pixels of a SYMBOL_SIZE square at (left, top), one sprite each. */
+static void draw_pixels(const char (*pixels)[SYMBOL_SIZE + 1], int left, int top,
+                        unsigned int colour) {
+    int count = 0;
+    for (int y = 0; y < SYMBOL_SIZE; y++) {
+        for (int x = 0; x < SYMBOL_SIZE; x++) {
+            count += pixels[y][x] == '#';
+        }
+    }
+    ui_vertex *vertices = sceGuGetMemory((int)((size_t)count * 2 * sizeof(ui_vertex)));
+    int at = 0;
+    for (int y = 0; y < SYMBOL_SIZE; y++) {
+        for (int x = 0; x < SYMBOL_SIZE; x++) {
+            if (pixels[y][x] == '#') {
+                vertices[at++] = vertex(colour, left + x, top + y);
+                vertices[at++] = vertex(colour, left + x + 1, top + y + 1);
+            }
+        }
+    }
+    draw_vertices(GU_SPRITES, vertices, at);
+}
+
 /* The symbol of a face button in a SYMBOL_SIZE square at (left, top). */
 static void draw_symbol(unsigned button, int left, int top) {
     const int size = SYMBOL_SIZE - 1;
@@ -216,12 +239,7 @@ static void draw_symbol(unsigned button, int left, int top) {
         vertices[3] = vertex(COLOUR_CROSS, left, top + size);
         draw_vertices(GU_LINES, vertices, 4);
     } else if (button == SKIFF_UI_BUTTON_CIRCLE) {
-        int points[OCTAGON_POINTS][2];
-        for (int i = 0; i < OCTAGON_POINTS; i++) {
-            points[i][0] = size / 2 + OCTAGON[i][0] * (size / 2) / UNIT;
-            points[i][1] = size / 2 + OCTAGON[i][1] * (size / 2) / UNIT;
-        }
-        draw_outline((const int (*)[2])points, OCTAGON_POINTS, left, top, COLOUR_CIRCLE);
+        draw_pixels(CIRCLE_PIXELS, left, top, COLOUR_CIRCLE);
     } else if (button == SKIFF_UI_BUTTON_TRIANGLE) {
         const int points[3][2] = {{size / 2, 0}, {size, size}, {0, size}};
         draw_outline(points, 3, left, top, COLOUR_TRIANGLE);

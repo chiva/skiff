@@ -505,6 +505,11 @@ static void queue_view(skiff_app *app) {
     } else if (job->state == SKIFF_JOB_FAILED) {
         add_error(app, job->error);
     }
+    /* The rows leave this much room under them; the row's own detail still names the error. */
+    if (view->line_count > APP_QUEUE_DETAIL_LINES) {
+        view->line_count = APP_QUEUE_DETAIL_LINES;
+    }
+    view->lines_below = 1;
     view->has_list = 1;
     view->list = app->queue_list;
     for (size_t i = 0;

@@ -15,6 +15,14 @@
 #define APP_BYTES_PER_MIB (1024ULL * 1024ULL)
 /* What the keyboard starts with when there is no address yet. */
 #define APP_URL_PREFILL "https://"
+/* The rows each list shows. The library's fills the body. Downloads keeps room under its list for
+ * the selected download's details (progress, speed and recovery lines, or its error) and the
+ * progress bar, shown or not. Settings has the version, RomM and free-space lines over its list. */
+#define APP_LIBRARY_ROWS SKIFF_APP_ROWS_FIT(0, 0)
+#define APP_QUEUE_DETAIL_LINES 3
+#define APP_QUEUE_ROWS SKIFF_APP_ROWS_FIT(APP_QUEUE_DETAIL_LINES, 1)
+#define APP_SETTINGS_LINES 3
+#define APP_SETTINGS_ROWS SKIFF_APP_ROWS_FIT(APP_SETTINGS_LINES, 0)
 
 /* Where the walk from a launch to the library is. */
 typedef enum app_connect_step {

@@ -480,9 +480,9 @@ skiff_err skiff_app_create(const skiff_app_config *config, const skiff_app_env *
     app->installer = skiff_install_find_installer(SKIFF_APP_PLATFORM_SLUG);
     app->dirty = 1;
     app->screen = SKIFF_APP_SCREEN_STARTING;
-    skiff_ui_list_init(&app->library, 0, SKIFF_APP_ROWS_MAX);
-    skiff_ui_list_init(&app->queue_list, 0, SKIFF_APP_ROWS_MAX);
-    skiff_ui_list_init(&app->settings_list, 0, SKIFF_APP_ROWS_MAX);
+    skiff_ui_list_init(&app->library, 0, APP_LIBRARY_ROWS);
+    skiff_ui_list_init(&app->queue_list, 0, APP_QUEUE_ROWS);
+    skiff_ui_list_init(&app->settings_list, 0, APP_SETTINGS_ROWS);
     *out = app;
     return SKIFF_OK;
 }

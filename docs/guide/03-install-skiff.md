@@ -1,4 +1,4 @@
-# 4. Install Skiff
+# 3. Install Skiff
 
 ## Download
 
@@ -34,7 +34,8 @@
 
 Game → Memory Stick → **Skiff**.
 
-✅ **Check:** Skiff's screen shows its version number.
+✅ **Check:** the first time, Skiff asks for your RomM server's address (next page). Its version is
+shown under **Settings**.
 
 ## Update
 

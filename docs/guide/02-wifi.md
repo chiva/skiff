@@ -1,4 +1,4 @@
-# 3. Wi-Fi
+# 2. Wi-Fi
 
 The PSP's Wi-Fi was designed in 2004. Modern routers have dropped some of what it needs, so the
 most common reason a PSP "can't connect" is a router setting, not the PSP.

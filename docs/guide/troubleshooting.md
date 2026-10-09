@@ -42,15 +42,15 @@ with your PSP model and firmware.
 
 | Code | Meaning | What to try |
 |---|---|---|
-| 200 | Login rejected | The token was deleted or expired: pair again |
+| 200 | Login rejected | The token was deleted or expired: in **Settings**, choose **Pair again** |
 | 201 | Not allowed | Your RomM user lacks permission; check its role in RomM |
-| 202 | Not found | The game was removed from RomM; refresh the list |
+| 202 | Not found | The game was removed from RomM. Quit and open Skiff again to see the current list |
 | 203 | Server error | Check RomM's logs |
 | 204 | Unexpected response | Often a proxy login page (e.g. Authelia, Cloudflare Access) in front of RomM. Exempt `/api/` for devices, or use mTLS |
 | 205 | Unsupported RomM version | Update RomM to 5.3 or newer |
 | 206 | The file does not match RomM's checksum | The whole file arrived, but its CRC32 is not the one RomM recorded, so Skiff deleted it rather than install a damaged game. This usually means the file was replaced on the server after RomM scanned it: rescan the platform in RomM, then download again. If it keeps happening with the same file, the copy on the server may be damaged |
 | 207 | Pairing was refused in RomM | Someone chose to deny this PSP on RomM's pairing page. If that was a mistake, start pairing again on the PSP and approve it |
-| 208 | The pairing code expired | The code is valid for a few minutes (RomM shows how long) and only once. Start pairing again on the PSP and enter the new code in RomM in time |
+| 208 | The pairing code expired | The code is valid for a few minutes (the PSP counts them down) and only once. On the PSP choose **New code**, then scan the new QR code or open the new address in time |
 | 209 | Pairing was approved without the permissions Skiff needs | On RomM's pairing page, someone unticked reading platforms or ROMs, so the token could neither browse nor download; Skiff did not keep it. Delete the half-approved device in RomM, pair again and leave those permissions ticked |
 
 ## Memory Stick errors (300–305)
@@ -72,5 +72,5 @@ resort; you will need to pair again.
 | Code | Meaning | What to try |
 |---|---|---|
 | 400 | The file is damaged | Open it on a computer and go to the line Skiff names; look for a line without `=` or a missing `]`, or delete the file |
-| 401 | A required setting is missing | Add the setting Skiff names, e.g. `key_file` next to `cert_file` (see [Connect to RomM](04-connect-to-romm.md)) |
+| 401 | A required setting is missing | Add the setting Skiff names, e.g. `key_file` next to `cert_file` (see [Copy the certificate to the PSP](05-secure-connections.md#3-copy-the-certificate-to-the-psp)) |
 | 402 | A setting has an invalid value | Fix the value Skiff names: an address must start with `http://` or `https://`; a file name such as `ca_file` must be a file in the Skiff folder, without folders; each setting may appear only once. On an HTTPS server with no `ca_file` set, `cacert.pem` is missing from the Skiff folder: unzip the release again |

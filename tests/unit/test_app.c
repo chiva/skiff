@@ -1418,6 +1418,43 @@ static void test_a_lost_connection_under_a_dropped_request_still_counts(void) {
     TEST_ASSERT_NULL(app->transport);
     TEST_ASSERT_FALSE(app->net_joined);
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_DOWN);
+    serve_rom(2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_TRUE(shows("Game 2.iso"));
+}
+
+static void test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen(void) {
+    open_paired_library(80);
+    serve_page(25, 25, 80);
+    serve_page(50, 25, 80);
+    serve_page(75, 5, 80);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, app->call.kind);
+    TEST_ASSERT_EQUAL_UINT64(1, app->call.page_index);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    TEST_PRINTF("page 2 waits for page 1's request; then the player goes back to the top");
+    TEST_ASSERT_EQUAL_INT(REQUEST_PAGE, app->request);
+    TEST_ASSERT_EQUAL_UINT64(2, app->request_page);
+    for (int i = 0; i < 6; i++) {
+        frame(SKIFF_UI_ACTION_PAGE_UP);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, view()->list.first);
+    const size_t requests = transport.request_count;
+    env_state.hold_calls = 0;
+    finish_call();
+    wait_ms(500);
+    TEST_PRINTF("%zu request(s) after page 1's: page 2 is no longer on screen",
+                transport.request_count - requests - 1);
+    TEST_ASSERT_EQUAL_size_t(requests + 1, transport.request_count);
+    TEST_ASSERT_FALSE(app_call_busy(app));
 }
 
 static void test_a_new_server_drops_what_the_old_one_was_still_sending(void) {
@@ -1951,6 +1988,7 @@ int main(void) {
     RUN_TEST(test_the_library_answers_while_a_page_loads);
     RUN_TEST(test_leaving_a_game_while_it_loads_drops_its_details);
     RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);
+    RUN_TEST(test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen);
     RUN_TEST(test_a_new_server_drops_what_the_old_one_was_still_sending);
     RUN_TEST(test_a_request_that_cannot_start_shows_why);
     RUN_TEST(test_leaving_a_pairing_drops_its_poll_and_wipes_its_codes);

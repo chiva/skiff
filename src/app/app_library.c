@@ -134,8 +134,8 @@ void app_rom_done(skiff_app *app) {
     const skiff_err err = app->call.err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
                     SKIFF_APP_LOG_TAG, "ROM %llu: %zu file(s): %s (%d)",
-                    (unsigned long long)app->call.rom_id,
-                    err == SKIFF_OK ? fetched->file_count : 0, skiff_err_name(err), (int)err);
+                    (unsigned long long)app->call.rom_id, err == SKIFF_OK ? fetched->file_count : 0,
+                    skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
         app->has_rom = 0;
         app_network_failed(app, err);
@@ -154,6 +154,20 @@ void app_request_run(skiff_app *app) {
     }
     const app_request request = app->request;
     app->request = REQUEST_NONE;
+    /* A dropped request found the network gone: join again first; connecting then makes this
+     * request (app_resume_after_connect()). */
+    if (!app->net_joined) {
+        app->failed_request = request;
+        app_connect_begin(app, CONNECT_NETWORK);
+        return;
+    }
+    /* Asked for while another page loaded: the player may have scrolled on since. */
+    if (request == REQUEST_PAGE && app->total_known && !request_missing_page(app)) {
+        return;
+    }
+    if (app->request == REQUEST_PAGE) {
+        app->request = REQUEST_NONE;
+    }
     if (request == REQUEST_PAGE) {
         app->call.platform_id = app->platform.id;
         app->call.page_index = app->request_page;

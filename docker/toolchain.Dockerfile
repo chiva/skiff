@@ -26,4 +26,10 @@ ENV SKIFF_CA_BUNDLE_DIR="${PSPDEV}/psp/share/skiff-ca-bundle"
 COPY ca-bundle/ /opt/skiff-ca-bundle-build/
 RUN /opt/skiff-ca-bundle-build/fetch-ca-bundle.sh "${SKIFF_CA_BUNDLE_DIR}"
 
+# Nayuki's QR Code generator (MIT, pinned by SHA256 in qrcodegen/build-qrcodegen.sh), which draws
+# the pairing address as a QR code. A layer of its own, so a bump rebuilds nothing above.
+COPY qrcodegen/ /opt/skiff-qrcodegen-build/
+RUN /opt/skiff-qrcodegen-build/build-qrcodegen.sh "${PSPDEV}/psp" \
+      -DCMAKE_TOOLCHAIN_FILE="${PSPDEV}/psp/share/pspdev.cmake"
+
 WORKDIR /src

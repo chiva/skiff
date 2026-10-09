@@ -419,9 +419,23 @@ static void view_row(void *ctx, size_t index, skiff_psp_ui_row *row) {
     row->dim = view->rows[shown].dim;
 }
 
+/* The view's QR code in the body's top right corner, as large as SKIFF_APP_QR_WIDTH and the body's
+ * height allow. */
+static void draw_qr(const skiff_psp_ui *ui, const skiff_ui_qr *qr) {
+    const int width = (int)SKIFF_APP_QR_WIDTH;
+    const int height = SKIFF_PSP_UI_CONTENT_BOTTOM - SKIFF_PSP_UI_CONTENT_TOP - 2 * BLOCK_GAP;
+    const int scale = skiff_ui_qr_scale(qr, width < height ? width : height);
+    const int side = (qr->size + 2 * SKIFF_UI_QR_QUIET_ZONE) * scale;
+    skiff_psp_ui_qr(ui, SKIFF_PSP_UI_SCREEN_WIDTH - SKIFF_PSP_UI_MARGIN - side,
+                    SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP, scale, qr);
+}
+
 static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view) {
     const skiff_psp_ui *ui = &platform->ui;
     skiff_psp_ui_header(ui, view->title, view->status[0] != '\0' ? view->status : NULL);
+    if (view->qr != NULL) {
+        draw_qr(ui, view->qr);
+    }
     int y = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
     for (size_t i = 0; i < view->line_count; i++) {
         const int emphasis = (int)i == view->emphasis_line;

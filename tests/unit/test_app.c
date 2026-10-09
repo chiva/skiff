@@ -32,6 +32,11 @@
     "&order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false"                  \
     "&with_rom_id_index=false"
 #define JSON_OK "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
+/* Makes a pairing address longer than the largest QR code holds. */
+#define LONG_PAD                                                                                   \
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+    "xxxxxxxxxxxxxxxx"
 #define RAW_MAX (64 * 1024)
 #define FRAME_MS 16
 #define FRAMES_MAX 2000
@@ -531,8 +536,20 @@ static void test_a_first_launch_asks_for_the_server_then_pairs(void) {
     run_until(SKIFF_APP_SCREEN_PAIR);
     TEST_ASSERT_TRUE(view()->emphasis_line >= 0);
     TEST_ASSERT_EQUAL_STRING(USER_CODE, view()->lines[view()->emphasis_line]);
-    TEST_PRINTF("the address carries the code: RomM's page has no field to type it into");
-    TEST_ASSERT_TRUE(shows(SERVER "/pair/device?user_code=" USER_CODE));
+    TEST_PRINTF("the address carries the code (RomM's page has no field to type it into), broken "
+                "before it so the code stays whole");
+    TEST_ASSERT_TRUE(shows(SERVER "/pair/device"));
+    TEST_ASSERT_TRUE(shows("?user_code=" USER_CODE));
+    TEST_PRINTF("and a QR code of it, with the text wrapped beside it");
+    TEST_ASSERT_NOT_NULL(view()->qr);
+    TEST_ASSERT_TRUE(view()->qr->size > 0);
+    TEST_ASSERT_TRUE(shows("Scan the QR code"));
+    for (size_t i = 0; i < view()->line_count; i++) {
+        if ((int)i != view()->emphasis_line) {
+            TEST_ASSERT_TRUE_MESSAGE(env_measure(NULL, view()->lines[i]) <= SKIFF_APP_QR_TEXT_WIDTH,
+                                     view()->lines[i]);
+        }
+    }
     TEST_ASSERT_TRUE(shows("10 min"));
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
@@ -603,9 +620,12 @@ static void test_a_denied_or_expired_pairing_offers_a_new_code(void) {
         fake_transport_add_fixture(&transport, PATH_TOKEN, "romm/device-expired.http"));
     create_app();
     run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_ASSERT_NOT_NULL(view()->qr);
     wait_ms(5100);
     print_view();
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_PAIR_DENIED)));
+    TEST_PRINTF("an ended pairing shows no code to scan");
+    TEST_ASSERT_NULL(view()->qr);
     TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_NEW_CODE)));
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_PAIR);
@@ -613,6 +633,23 @@ static void test_a_denied_or_expired_pairing_offers_a_new_code(void) {
     wait_ms(5100);
     print_view();
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_PAIR_EXPIRED)));
+}
+
+static void test_an_address_too_long_for_a_qr_code_is_shown_as_text_only(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    TEST_PRINTF("a path past the 213 bytes the largest QR code holds");
+    serve_raw(PATH_INIT, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n\r\n"
+                         "{\"device_code\":\"skiff-device-code\",\"user_code\":\"" USER_CODE "\","
+                         "\"verification_path\":\"/pair/device\",\"verification_path_complete\":"
+                         "\"/pair/device?user_code=" USER_CODE "&pad=" LONG_PAD "\","
+                         "\"expires_in\":600,\"interval\":5}");
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    print_view();
+    TEST_ASSERT_NULL(view()->qr);
+    TEST_ASSERT_FALSE(shows("Scan the QR code"));
+    TEST_ASSERT_TRUE(shows("user_code=" USER_CODE));
 }
 
 static void test_a_code_that_runs_out_on_the_psp_ends_the_pairing(void) {
@@ -996,7 +1033,8 @@ static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
     TEST_ASSERT_NOT_NULL(strstr(config, "url = https://other.test"));
     TEST_ASSERT_NULL(strstr(config, TOKEN));
     TEST_ASSERT_NOT_NULL(strstr(config, "device_identifier = 00112233445566778899aabbccddeeff"));
-    TEST_ASSERT_TRUE(shows("https://other.test/pair/device?user_code=" USER_CODE));
+    TEST_ASSERT_TRUE(shows("https://other.test/pair/device"));
+    TEST_ASSERT_TRUE(shows("?user_code=" USER_CODE));
 }
 
 static void test_a_worker_that_will_not_stop_changes_nothing(void) {
@@ -1528,6 +1566,7 @@ int main(void) {
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
     RUN_TEST(test_a_slow_down_waits_five_seconds_more);
     RUN_TEST(test_a_denied_or_expired_pairing_offers_a_new_code);
+    RUN_TEST(test_an_address_too_long_for_a_qr_code_is_shown_as_text_only);
     RUN_TEST(test_a_code_that_runs_out_on_the_psp_ends_the_pairing);
     RUN_TEST(test_an_old_romm_is_refused);
     RUN_TEST(test_a_newer_romm_is_noticed_once);

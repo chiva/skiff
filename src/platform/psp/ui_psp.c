@@ -391,6 +391,32 @@ void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
     skiff_psp_ui_rows(ui, list, y, label_row, &rows);
 }
 
+void skiff_psp_ui_qr(const skiff_psp_ui *ui, int x, int y, int scale, const skiff_ui_qr *qr) {
+    if (qr == NULL || qr->size <= 0 || scale <= 0) {
+        return;
+    }
+    const int side = (qr->size + 2 * SKIFF_UI_QR_QUIET_ZONE) * scale;
+    skiff_psp_ui_rect(ui, x, y, side, side, SKIFF_PSP_UI_COLOUR_QR_LIGHT);
+    const int left = x + SKIFF_UI_QR_QUIET_ZONE * scale;
+    const int top = y + SKIFF_UI_QR_QUIET_ZONE * scale;
+    /* One sprite per run of dark modules in a row: a few hundred for a pairing address. */
+    for (int row = 0; row < qr->size; row++) {
+        int column = 0;
+        while (column < qr->size) {
+            if (!skiff_ui_qr_dark(qr, column, row)) {
+                column++;
+                continue;
+            }
+            const int start = column;
+            while (column < qr->size && skiff_ui_qr_dark(qr, column, row)) {
+                column++;
+            }
+            skiff_psp_ui_rect(ui, left + start * scale, top + row * scale, (column - start) * scale,
+                              scale, SKIFF_PSP_UI_COLOUR_QR_DARK);
+        }
+    }
+}
+
 void skiff_psp_ui_progress_bar(const skiff_psp_ui *ui, int x, int y, int width, int height,
                                unsigned percent) {
     if (percent > PERCENT_FULL) {

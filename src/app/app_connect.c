@@ -328,6 +328,12 @@ static void start_pairing(skiff_app *app) {
                        SKIFF_APP_SCREEN_PAIR);
         return;
     }
+    /* A phone reads the address from the screen; without a code (too long for one) it is typed. */
+    const skiff_err qr =
+        skiff_ui_qr_encode(app->pairing.pairing.verification_url_complete, &app->pairing.qr);
+    skiff_log_write(app->log, SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                    "pairing address as a QR code: %d modules a side: %s (%d)",
+                    app->pairing.qr.size, skiff_err_name(qr), (int)qr);
     const int64_t now = app_now(app);
     app->announced = 0;
     app->pairing.active = 1;
@@ -338,6 +344,7 @@ static void start_pairing(skiff_app *app) {
 
 static void end_pairing(skiff_app *app, skiff_err err) {
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
+    app->pairing.qr.size = 0;
     app->pairing.active = 0;
     app->pairing.ended = err;
     skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG, "pairing ended: %s (%d)",

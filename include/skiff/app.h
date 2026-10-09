@@ -40,8 +40,10 @@
 /* The platform the app browses and the installer it downloads with. */
 #define SKIFF_APP_PLATFORM_SLUG "psp"
 
-/* What the view holds; the PSP renderer draws it in the area between header and footer. */
-#define SKIFF_APP_LINES_MAX 8
+/* What the view holds; the PSP renderer draws it in the area between header and footer. Twelve
+ * body lines (one emphasised: 11 of 13 pixels and one of 26) take 169 of its 228 pixels: room for
+ * the pairing screen beside its QR code, with a network error under it. */
+#define SKIFF_APP_LINES_MAX 12
 #define SKIFF_APP_ROWS_MAX 12
 #define SKIFF_APP_HINTS_MAX 5
 #define SKIFF_APP_TITLE_MAX 64
@@ -55,6 +57,11 @@
 #define SKIFF_APP_DETAIL_WIDTH 110.0f
 /* The header's right part, after the title. */
 #define SKIFF_APP_STATUS_WIDTH 230.0f
+/* The pairing screen's QR code takes a square this wide on the right of the body (the platform
+ * fits the code and its quiet zone in it), and the body's text wraps to what is left. */
+#define SKIFF_APP_QR_WIDTH 176.0f
+#define SKIFF_APP_QR_GAP 8.0f
+#define SKIFF_APP_QR_TEXT_WIDTH (SKIFF_APP_TEXT_WIDTH - SKIFF_APP_QR_WIDTH - SKIFF_APP_QR_GAP)
 
 /* ROM pages kept in memory while browsing: the one on screen and its neighbours. */
 #define SKIFF_APP_CACHED_PAGES 3
@@ -116,11 +123,14 @@ typedef struct skiff_app_view {
     char title[SKIFF_APP_TITLE_MAX];
     /* Right of the title: a count, or a short message. */
     char status[SKIFF_APP_TITLE_MAX];
-    /* Body text, each line within SKIFF_APP_TEXT_WIDTH; the emphasised one (-1 for none) is drawn
-     * large, as the pairing code is. */
+    /* Body text, each line within SKIFF_APP_TEXT_WIDTH (SKIFF_APP_QR_TEXT_WIDTH beside a QR code);
+     * the emphasised one (-1 for none) is drawn large, as the pairing code is. */
     size_t line_count;
     char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
     int emphasis_line;
+    /* A QR code to draw in the body's top right corner, within SKIFF_APP_QR_WIDTH (the pairing
+     * address); NULL for none. Points into the app, valid until its next update. */
+    const skiff_ui_qr *qr;
     /* A list under the lines: rows[i] is item list.first + i. */
     int has_list;
     skiff_ui_list list;

@@ -138,6 +138,7 @@ All presets build with `-Werror` and a strict warning set (`cmake/SkiffWarnings.
 | pspdev toolchain | `docker/toolchain.Dockerfile` `FROM` | tag + digest, Renovate |
 | Mbed TLS, curl | `docker/toolchain.Dockerfile` | version + SHA256, Renovate + manual verification |
 | Mozilla CA bundle (`cacert.pem`) | `docker/ca-bundle/fetch-ca-bundle.sh` | date + SHA256, manual (above) |
+| QR Code generator (Nayuki, C, MIT) | `docker/qrcodegen/build-qrcodegen.sh`, built into the toolchain and host images | version + SHA256, Renovate + manual verification |
 | Unity (C test framework) | `tests/CMakeLists.txt` FetchContent | commit, Renovate |
 | PPSSPP (emulator tests) | `docker/ppsspp.Dockerfile` | commit, Renovate; Debian base by digest and packages from a dated snapshot.debian.org archive (bump `SNAPSHOT` with the commit); one-line patch for `flash0:` reads, checked at build time |
 | GitHub Actions | workflows | commit SHA, Renovate |

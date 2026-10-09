@@ -39,6 +39,15 @@ if(PSP)
   set_property(TARGET skiff_cjson PROPERTY INTERFACE_LINK_LIBRARIES m)
 endif()
 
+# Nayuki's QR Code generator for the pairing address (src/ui/qr.c), built into both images from the
+# same pinned source (docker/qrcodegen/build-qrcodegen.sh) and found like cJSON.
+find_path(SKIFF_QRCODEGEN_INCLUDE_DIR qrcodegen/qrcodegen.h REQUIRED)
+find_library(SKIFF_QRCODEGEN_LIBRARY qrcodegen REQUIRED)
+add_library(skiff_qrcodegen UNKNOWN IMPORTED)
+set_target_properties(
+  skiff_qrcodegen PROPERTIES IMPORTED_LOCATION "${SKIFF_QRCODEGEN_LIBRARY}"
+                             INTERFACE_INCLUDE_DIRECTORIES "${SKIFF_QRCODEGEN_INCLUDE_DIR}")
+
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
 add_library(
   skiff_core STATIC
@@ -68,12 +77,13 @@ add_library(
   src/storage/paths.c
   src/storage/storage.c
   src/storage/whole_file.c
+  src/ui/qr.c
   src/ui/ui.c)
 target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB skiff_cjson)
+target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB skiff_cjson skiff_qrcodegen)
 skiff_set_warnings(skiff_core)
 
 # Skiff's TLS stack, built with the same profile for both targets (docker/toolchain/build-tls.sh):

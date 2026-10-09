@@ -371,7 +371,10 @@ device grant):
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
    (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path with
-   `?user_code=` (RomM 5.3.1's page reads the code only from the address, it has no field for it); a
+   `?user_code=` (RomM 5.3.1's page reads the code only from the address, it has no field for it),
+   broken before the `?` when it does not fit a line so the code stays whole, and the same address
+   as a QR code beside it (`skiff_ui_qr_encode()` in `include/skiff/ui.h`, Nayuki's QR Code
+   generator, level M, at most version 10; an address too long for that is shown as text only). A
    path that is not on the server (a full URL, `//host`) is refused, so a response cannot send the
    player to another site.
 2. The player approves on that page in RomM's web UI, where they may grant fewer scopes.

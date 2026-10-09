@@ -44,6 +44,19 @@
       "datasourceTemplate": "docker"
     },
     {
+      "description": "Nayuki's QR Code generator, built by docker/qrcodegen/build-qrcodegen.sh for the toolchain and host images. The PR fails the sha256sum check until a maintainer verifies the new archive and updates QRCODEGEN_SHA256.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^docker/qrcodegen/build-qrcodegen\\.sh$/"
+      ],
+      "matchStrings": [
+        "QRCODEGEN_VERSION=(?<currentValue>[\\d.]+)"
+      ],
+      "depNameTemplate": "nayuki/QR-Code-generator",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>[\\d.]+)$"
+    },
+    {
       "description": "Unity, pinned by commit with its tag in a trailing comment in tests/CMakeLists.txt. Renovate bumps the tag and the commit together.",
       "customType": "regex",
       "managerFilePatterns": [

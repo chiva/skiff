@@ -39,6 +39,9 @@ enum {
 #define SKIFF_PSP_UI_COLOUR_BAR_FILL 0xFF30B060U
 /* Laid over the screen while a system dialog is open, as games do, so the dialog stands out. */
 #define SKIFF_PSP_UI_COLOUR_BACKDROP 0xB0000000U
+/* A QR code is dark on light, as phones expect: never in the UI's own colours. */
+#define SKIFF_PSP_UI_COLOUR_QR_LIGHT 0xFFFFFFFFU
+#define SKIFF_PSP_UI_COLOUR_QR_DARK 0xFF000000U
 
 #define SKIFF_PSP_UI_TITLE_SIZE 0.8f
 #define SKIFF_PSP_UI_TEXT_SIZE 0.6f
@@ -93,6 +96,10 @@ float skiff_psp_ui_measure(void *style, const char *text);
 
 void skiff_psp_ui_rect(const skiff_psp_ui *ui, int x, int y, int width, int height,
                        unsigned int colour);
+/* qr with its quiet zone, scale pixels a module (skiff_ui_qr_scale()), its top left corner at
+ * (x, y): (qr->size + 2 * SKIFF_UI_QR_QUIET_ZONE) * scale pixels a side. */
+void skiff_psp_ui_qr(const skiff_psp_ui *ui, int x, int y, int scale, const skiff_ui_qr *qr);
+
 /* The dim backdrop over the whole screen, under a system dialog. */
 void skiff_psp_ui_backdrop(const skiff_psp_ui *ui);
 

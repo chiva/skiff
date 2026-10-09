@@ -187,8 +187,8 @@ line, so a run started from the XMB can be read back from the Memory Stick.
    shows how far it got. The self-test's last line, `free space ms0: <bytes> bytes (<MiB> MiB)`,
    should match the free space the XMB shows (Settings → System Settings → Memory Stick, or System
    Storage on a PSP Go) to within 1 MB: it is what downloads check before they start.
-5. Run **Skiff**: check the version on screen and that START exits; then HOME → Quit must exit
-   without freezing.
+5. Run **Skiff**: check the version on screen (Settings → About); HOME → Quit must exit without
+   freezing (START does not quit: HOME → Quit is the way out).
 6. `scripts/memstick.sh uninstall <mount>` removes the folders when done (it keeps nothing else).
 
 The **Skiff KIRK probe**, **Skiff network probe**, **Skiff benchmark**, **Skiff resume probe** and
@@ -202,7 +202,7 @@ The **Skiff KIRK probe**, **Skiff network probe**, **Skiff benchmark**, **Skiff 
 1. Set up PSPLINK ([debugging](debugging.md)) and build: `scripts/dev.sh psp`.
 2. In `pspsh`: `./build/psp/skiff_selftest.prx` → expect `SKIFF SELFTEST OK`, and
    `./build/psp/skiff_tls_probe.prx` → expect `SKIFF TLS PROBE OK`.
-3. Run the app: `./build/psp/skiff.prx`, check the version on screen, press START, and
+3. Run the app: `./build/psp/skiff.prx`, check the version on screen, quit with HOME → Quit, and
    check it returns cleanly.
 
 From the networking release on, the hardware tier adds: joining the TKIP test SSID; an HTTPS

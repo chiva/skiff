@@ -73,6 +73,9 @@ skiff_err app_ensure_client(skiff_app *app) {
 /* ---- Joining the Wi-Fi ---- */
 
 static void start_join(skiff_app *app) {
+    if (app_now(app) < app->join_retry_ms) {
+        return;
+    }
     if (!app->env.switch_on(app->env.ctx)) {
         if (!app->waiting_switch) {
             app->waiting_switch = 1;
@@ -104,13 +107,24 @@ static void start_join(skiff_app *app) {
 static void poll_join(skiff_app *app) {
     int joined = 0;
     const skiff_err err = app->env.net_poll(app->env.ctx, &joined);
+    if (err == SKIFF_ERR_NET_WIFI_JOIN && app->join_retries < SKIFF_APP_JOIN_RETRIES) {
+        app->join_retries++;
+        app->join_retry_ms = app_now(app) + SKIFF_APP_JOIN_RETRY_MS;
+        skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+                        "join: %s (%d), trying again (%d of %d)", skiff_err_name(err), (int)err,
+                        app->join_retries, SKIFF_APP_JOIN_RETRIES);
+        app->connect = CONNECT_NETWORK;
+        return;
+    }
     if (err != SKIFF_OK) {
+        app->join_retries = 0;
         skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG, "join: %s (%d)",
                         skiff_err_name(err), (int)err);
         connect_failed(app, err);
         return;
     }
     if (joined) {
+        app->join_retries = 0;
         app->net_joined = 1;
         app->connect = CONNECT_TLS;
         app->dirty = 1;

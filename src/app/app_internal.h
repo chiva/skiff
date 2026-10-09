@@ -161,6 +161,11 @@ struct skiff_app {
     int profile;
     /* Waiting for the Wi-Fi switch before joining. */
     int waiting_switch;
+    /* Joins retried since the last success or shown error, and when the next may start. */
+    int join_retries;
+    int64_t join_retry_ms;
+    /* Frames the starting screen has been drawn (SKIFF_APP_STARTING_FRAMES). */
+    int starting_frames;
     int worker_running;
     /* The connection the running worker rejoins. */
     int worker_profile;

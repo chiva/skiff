@@ -183,8 +183,15 @@ static skiff_err net_poll(void *ctx, int *joined) {
     if (!skiff_psp_net_connect_poll(&platform->net, &result)) {
         return SKIFF_OK;
     }
+    /* Read before the lock goes: the worker's rejoin may overwrite them right after. */
+    const char *failed_call = platform->net.failed_call != NULL ? platform->net.failed_call : "-";
+    const int sce_result = platform->net.sce_result;
     give_network(platform);
     *joined = result == SKIFF_OK;
+    if (result != SKIFF_OK) {
+        skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+                        "join: %s 0x%08X", failed_call, (unsigned)sce_result);
+    }
     return result;
 }
 

@@ -630,10 +630,6 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     if (app->dialog != SKIFF_APP_DIALOG_NONE) {
         actions = 0;
     }
-    if ((actions & SKIFF_UI_ACTION_START) && app->screen != SKIFF_APP_SCREEN_STARTING) {
-        app->quit = 1;
-        return;
-    }
     take_events(app);
     if (app->note[0] != '\0' && app_now(app) >= app->note_until_ms) {
         app->note[0] = '\0';
@@ -641,8 +637,8 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     }
     switch (app->screen) {
     case SKIFF_APP_SCREEN_STARTING:
-        if (!app->announced) {
-            app->announced = 1;
+        if (app->starting_frames < SKIFF_APP_STARTING_FRAMES) {
+            app->starting_frames++;
             app->dirty = 1;
         } else {
             start(app);

@@ -114,7 +114,7 @@ static void load_page(skiff_app *app) {
     app->total = page->page.total;
     if (!app->total_known) {
         app->total_known = 1;
-        skiff_ui_list_init(&app->library, (size_t)app->total, SKIFF_APP_ROWS_MAX);
+        skiff_ui_list_init(&app->library, (size_t)app->total, APP_LIBRARY_ROWS);
     } else {
         skiff_ui_list_set_count(&app->library, (size_t)app->total);
     }

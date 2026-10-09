@@ -40,11 +40,24 @@
 /* The platform the app browses and the installer it downloads with. */
 #define SKIFF_APP_PLATFORM_SLUG "psp"
 
-/* What the view holds; the PSP renderer draws it in the area between header and footer. Twelve
- * body lines of 13 pixels take 156 of its 228: room for the pairing screen beside its QR code,
- * with a network error under it. */
+/* The body, the area between header and footer, in pixels on the PSP: its height, a line or list
+ * row, the gap above the first block and between blocks (lines, progress bar, list), and the
+ * progress bar. The renderer draws with these; the app sizes its lists by them. */
+#define SKIFF_APP_BODY_HEIGHT 228
+#define SKIFF_APP_LINE_HEIGHT 13
+#define SKIFF_APP_BLOCK_GAP 4
+#define SKIFF_APP_PROGRESS_HEIGHT 8
+/* The list rows that fit under lines lines and a progress bar if progress (1) is set. */
+#define SKIFF_APP_ROWS_FIT(lines, progress)                                                        \
+    ((SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP - (lines) * SKIFF_APP_LINE_HEIGHT -              \
+      (((lines) > 0 || (progress)) ? SKIFF_APP_BLOCK_GAP : 0) -                                    \
+      ((progress) ? SKIFF_APP_BLOCK_GAP + SKIFF_APP_PROGRESS_HEIGHT : 0)) /                        \
+     SKIFF_APP_LINE_HEIGHT)
+
+/* What the view holds. Twelve body lines take 156 of the body's 228 pixels: room for the pairing
+ * screen beside its QR code, with a network error under it. A list alone fills the body. */
 #define SKIFF_APP_LINES_MAX 12
-#define SKIFF_APP_ROWS_MAX 12
+#define SKIFF_APP_ROWS_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_HINTS_MAX 5
 #define SKIFF_APP_TITLE_MAX 64
 #define SKIFF_APP_HINT_MAX 32
@@ -147,6 +160,9 @@ typedef struct skiff_app_view {
     /* A progress bar under the list or the lines. */
     int has_progress;
     unsigned percent;
+    /* The list first, at the body's top, and the lines and progress bar at its bottom: rows then
+     * stay put whether or not the details under them are shown. */
+    int lines_below;
     size_t hint_count;
     skiff_app_hint hints[SKIFF_APP_HINTS_MAX];
     /* A system dialog to show over the screen (draw the dim backdrop under it). */

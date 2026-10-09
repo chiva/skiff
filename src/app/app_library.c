@@ -52,22 +52,33 @@ static const skiff_romm_rom_summary *rom_at(skiff_app *app, size_t index, const 
     return &page->page.items[at];
 }
 
-/* The first page, or the page of a row on screen that is not loaded; 0 when every row is. */
+/* The page is on its way: a call for it runs, and its result will be kept. */
+static int page_loading(const skiff_app *app, uint64_t index) {
+    return app->call.kind == CALL_PAGE && !app->call.abandoned && app->call.page_index == index;
+}
+
+/* Asks for the first page, or the page of a row on screen that is not loaded, unless it is on its
+ * way; 0 when every row is loaded. */
 static int request_missing_page(skiff_app *app) {
     if (!app->has_platform) {
         return 0;
     }
     if (!app->total_known) {
-        app->request = REQUEST_PAGE;
-        app->request_page = 0;
+        if (!page_loading(app, 0)) {
+            app->request = REQUEST_PAGE;
+            app->request_page = 0;
+        }
         return 1;
     }
     for (size_t i = 0; i < app->library.rows && app->library.first + i < app->library.count; i++) {
         const size_t index = app->library.first + i;
-        if (cached_page(app, index / SKIFF_ROMM_PAGE_SIZE) == NULL) {
-            app->request = REQUEST_PAGE;
-            app->request_page = index / SKIFF_ROMM_PAGE_SIZE;
-            app->dirty = 1;
+        const uint64_t page = index / SKIFF_ROMM_PAGE_SIZE;
+        if (cached_page(app, page) == NULL) {
+            if (!page_loading(app, page)) {
+                app->request = REQUEST_PAGE;
+                app->request_page = page;
+                app->dirty = 1;
+            }
             return 1;
         }
     }
@@ -81,24 +92,18 @@ void app_library_open(skiff_app *app) {
 
 void app_library_refresh_markers(skiff_app *app) { app->dirty = 1; }
 
-static void load_page(skiff_app *app) {
-    app_page *page = page_to_replace(app);
-    memset(page, 0, sizeof *page);
-    skiff_err err = app_ensure_client(app);
-    if (err == SKIFF_OK) {
-        err = skiff_romm_list_roms(&app->romm, app->platform.id,
-                                   app->request_page * SKIFF_ROMM_PAGE_SIZE, SKIFF_ROMM_PAGE_SIZE,
-                                   &page->page);
-    }
+void app_page_done(skiff_app *app) {
+    const app_call *call = &app->call;
+    const skiff_err err = call->err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
                     SKIFF_APP_LOG_TAG, "page %llu: %zu of %llu: %s (%d)",
-                    (unsigned long long)app->request_page, page->page.count,
-                    (unsigned long long)page->page.total, skiff_err_name(err), (int)err);
+                    (unsigned long long)call->page_index, err == SKIFF_OK ? call->page.count : 0,
+                    (unsigned long long)(err == SKIFF_OK ? call->page.total : 0),
+                    skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
-        memset(page, 0, sizeof *page);
         app_network_failed(app, err);
         app->failed_request = REQUEST_PAGE;
-        app->failed_page = app->request_page;
+        app->failed_page = call->page_index;
         const int network = app_is_network_error(err);
         app_show_error(app, err, NULL, MESSAGE_RETRY_REQUEST,
                        network ? MESSAGE_PICK_NETWORK : MESSAGE_SETTINGS,
@@ -106,8 +111,11 @@ static void load_page(skiff_app *app) {
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
+    app_page *page = page_to_replace(app);
+    memset(page, 0, sizeof *page);
+    page->page = call->page;
     page->valid = 1;
-    page->index = app->request_page;
+    page->index = call->page_index;
     page->used = ++app->page_clock;
     fit_page(app, page);
     /* The library may have grown or shrunk since the first page. */
@@ -120,17 +128,14 @@ static void load_page(skiff_app *app) {
     }
 }
 
-static void load_rom(skiff_app *app) {
-    /* Into a copy: a failed request empties it, and a retry still needs the ROM's id. */
-    skiff_romm_rom fetched;
-    skiff_err err = app_ensure_client(app);
-    if (err == SKIFF_OK) {
-        err = skiff_romm_get_rom(&app->romm, app->rom.summary.id, &fetched);
-    }
+void app_rom_done(skiff_app *app) {
+    /* The call's copy: a failed request empties it, and a retry still needs the ROM's id. */
+    const skiff_romm_rom *fetched = &app->call.rom;
+    const skiff_err err = app->call.err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
                     SKIFF_APP_LOG_TAG, "ROM %llu: %zu file(s): %s (%d)",
-                    (unsigned long long)app->rom.summary.id,
-                    err == SKIFF_OK ? fetched.file_count : 0, skiff_err_name(err), (int)err);
+                    (unsigned long long)app->call.rom_id,
+                    err == SKIFF_OK ? fetched->file_count : 0, skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
         app->has_rom = 0;
         app_network_failed(app, err);
@@ -139,28 +144,23 @@ static void load_rom(skiff_app *app) {
                        SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
-    app->rom = fetched;
+    app->rom = *fetched;
     app->has_rom = 1;
 }
 
 void app_request_run(skiff_app *app) {
-    if (app->request == REQUEST_NONE) {
-        return;
-    }
-    /* The frame before shows what is loading. */
-    if (!app->announced) {
-        app->announced = 1;
-        app->dirty = 1;
+    if (app->request == REQUEST_NONE || app_call_busy(app)) {
         return;
     }
     const app_request request = app->request;
     app->request = REQUEST_NONE;
-    app->announced = 0;
-    app->dirty = 1;
     if (request == REQUEST_PAGE) {
-        load_page(app);
+        app->call.platform_id = app->platform.id;
+        app->call.page_index = app->request_page;
+        app_call_start(app, CALL_PAGE);
     } else {
-        load_rom(app);
+        app->call.rom_id = app->rom.summary.id;
+        app_call_start(app, CALL_ROM);
     }
 }
 
@@ -218,10 +218,7 @@ void app_rom_detail(skiff_app *app, const skiff_romm_rom_summary *rom, char *out
 /* ---- The library screen ---- */
 
 void app_library_update(skiff_app *app, unsigned actions) {
-    if (app->request != REQUEST_NONE) {
-        app_request_run(app);
-        return;
-    }
+    app_request_run(app);
     if (actions & SKIFF_UI_ACTION_EXTRA) {
         app_queue_refresh(app);
         app_set_screen(app, SKIFF_APP_SCREEN_QUEUE);
@@ -417,11 +414,15 @@ static void download(skiff_app *app) {
 }
 
 void app_details_update(skiff_app *app, unsigned actions) {
-    if (app->request != REQUEST_NONE) {
-        app_request_run(app);
-        return;
-    }
+    app_request_run(app);
     if (actions & SKIFF_UI_ACTION_BACK) {
+        /* Leaving while the ROM loads: its request is dropped, or never made. */
+        if (app->call.kind == CALL_ROM) {
+            app_call_abandon(app);
+        }
+        if (app->request == REQUEST_ROM) {
+            app->request = REQUEST_NONE;
+        }
         app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
         return;
     }

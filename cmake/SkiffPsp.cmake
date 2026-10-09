@@ -218,7 +218,7 @@ target_link_libraries(skiff_jobs_probe PRIVATE skiff_net skiff_probe_support ski
 # The app on the PSP (src/platform/psp/app_psp.h): skiff/app.h's hooks over the network stack, the
 # download worker, the system dialogs and the renderer. Linked by the app and its smoke test. Objects
 # of OBJECT libraries reach only the executables that list them, so both list them all.
-add_library(skiff_psp_app OBJECT src/platform/psp/app_psp.c)
+add_library(skiff_psp_app OBJECT src/platform/psp/app_psp.c src/platform/psp/call_psp.c)
 target_compile_options(skiff_psp_app PRIVATE ${SKIFF_PSP_SYSTEM_INCLUDES})
 target_link_libraries(skiff_psp_app PUBLIC skiff_core skiff_net)
 target_include_directories(skiff_psp_app PUBLIC src/platform/psp)

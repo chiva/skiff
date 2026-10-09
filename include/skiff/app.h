@@ -196,6 +196,9 @@ typedef struct skiff_app_worker_spec {
     skiff_log *log;
 } skiff_app_worker_spec;
 
+/* Work the app hands the platform to run off the screen's thread (call_start). */
+typedef void (*skiff_app_call_fn)(void *arg);
+
 typedef struct skiff_app_env {
     void *ctx;
     /* A monotonic clock in milliseconds. */
@@ -225,6 +228,15 @@ typedef struct skiff_app_env {
      * SKIFF_OK leaves the worker running, and nothing it uses may be changed or freed. */
     skiff_err (*start_worker)(void *ctx, const skiff_app_worker_spec *spec);
     skiff_err (*stop_worker)(void *ctx);
+    /* The app's requests to RomM, which can take seconds, run off the screen's thread: call_start()
+     * runs fn(arg) on another thread (SKIFF_OK, or why it cannot), and call_done() is asked once a
+     * frame until it returns 1, after which fn has returned and what it wrote may be read. One
+     * call at a time. call_cancel() asks the running call's transfers to stop soon; they then fail
+     * with SKIFF_ERR_CANCELLED. Before skiff_app_destroy(), the platform must have seen the last
+     * call done (or stopped the thread that runs it). */
+    skiff_err (*call_start)(void *ctx, skiff_app_call_fn fn, void *arg);
+    int (*call_done)(void *ctx);
+    void (*call_cancel)(void *ctx);
 } skiff_app_env;
 
 typedef void (*skiff_app_lock_fn)(void *ctx);

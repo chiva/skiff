@@ -66,6 +66,46 @@ typedef enum app_request {
     REQUEST_ROM,
 } app_request;
 
+/* A request to RomM, which runs off the screen's thread (env.call_start), one at a time. Its inputs
+ * are set before it starts and its results read once it is done (app_call_update()), so the thread
+ * touches nothing of the app's but app->call and the browse client, which nothing else uses
+ * meanwhile: while app_call_busy(), the client is not replaced (app_drop_client() waits). */
+typedef enum app_call_kind {
+    CALL_NONE,
+    CALL_HEARTBEAT,
+    CALL_PLATFORM,
+    CALL_PAGE,
+    CALL_ROM,
+    CALL_PAIRING_START,
+    CALL_PAIRING_POLL,
+} app_call_kind;
+
+typedef struct app_call {
+    skiff_romm_client *romm;
+    /* In: the platform and page to list, the ROM to fetch. */
+    uint64_t platform_id;
+    uint64_t page_index;
+    uint64_t rom_id;
+    /* Out: what the request returned. */
+    skiff_romm_server server;
+    skiff_romm_platform platform;
+    skiff_romm_rom_page page;
+    skiff_romm_rom rom;
+    /* In and out: a poll reads the pairing and may lengthen its interval; the approval's token.
+     * Wiped once used (skiff_romm_pairing_clear()). */
+    skiff_romm_pairing pairing;
+    skiff_romm_pairing_result pairing_result;
+    char device_identifier[SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX];
+    skiff_err err;
+    app_call_kind kind;
+    /* It could not start: err says why, and the next update applies it as the request's error. */
+    int failed_to_start;
+    /* The player left what it was for: its result is dropped. */
+    int abandoned;
+    /* The browse client is replaced once it is done (a lost connection, a new server). */
+    int drop_client;
+} app_call;
+
 typedef struct app_message {
     skiff_text_id title;
     size_t line_count;
@@ -128,10 +168,11 @@ struct skiff_app {
     skiff_install_manifest *manifest;
     const skiff_installer *installer;
 
-    /* Browsing, on this thread. */
+    /* Browsing: the client the calls use, and the call running or just done. */
     skiff_transport *transport;
     skiff_app_transport_settings transport_settings;
     skiff_romm_client romm;
+    app_call call;
 
     /* The worker's own copies: they must not change while it runs. */
     skiff_config worker_settings;
@@ -178,8 +219,6 @@ struct skiff_app {
     /* The connection the running worker rejoins. */
     int worker_profile;
     skiff_app_screen screen;
-    /* A frame has shown what the next step waits for: the step may now block. */
-    int announced;
     app_connect_step connect;
     skiff_app_dialog dialog;
     app_confirm_action confirm;
@@ -244,6 +283,26 @@ int app_is_network_error(skiff_err err);
 void app_resume_after_connect(skiff_app *app);
 /* The browse transport and RomM client, made when missing; SKIFF_OK or why not. */
 skiff_err app_ensure_client(skiff_app *app);
+/* Drops the browse transport and RomM client, now or, while a call uses them, once it is done. */
+void app_drop_client(skiff_app *app);
+/* What a finished call of theirs returned (in app->call), applied on the screen's thread. */
+void app_heartbeat_done(skiff_app *app);
+void app_platform_done(skiff_app *app);
+void app_pairing_started(skiff_app *app);
+void app_pairing_polled(skiff_app *app);
+
+/* ---- app_call.c ---- */
+
+int app_call_busy(const skiff_app *app);
+/* Runs app->call as kind, its inputs set, once the browse client is up. A call that cannot start
+ * (no client, or the platform refused) still ends through app_call_update(), with its error. Only
+ * when !app_call_busy(). */
+void app_call_start(skiff_app *app, app_call_kind kind);
+/* The player left what the running call was for: its result will be dropped, and its transfers are
+ * asked to stop. */
+void app_call_abandon(skiff_app *app);
+/* Once a frame, before anything else: applies the result of a call that has finished. */
+void app_call_update(skiff_app *app);
 
 /* ---- app_library.c ---- */
 
@@ -252,7 +311,10 @@ void app_library_update(skiff_app *app, unsigned actions);
 void app_library_refresh_markers(skiff_app *app);
 void app_details_update(skiff_app *app, unsigned actions);
 void app_download_confirmed(skiff_app *app);
+/* Starts the page or ROM request waiting in app->request, once no call runs. */
 void app_request_run(skiff_app *app);
+void app_page_done(skiff_app *app);
+void app_rom_done(skiff_app *app);
 /* Why the ROM on the details screen cannot be downloaded, or SKIFF_TEXT_COUNT when it can. */
 skiff_text_id app_details_refusal(const skiff_app *app);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */

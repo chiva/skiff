@@ -6,11 +6,13 @@
  * One object holds the network stack, the five mutexes the threads share, the download worker,
  * the system dialog and the renderer.
  *
- * Threads: the UI thread runs the app and every hook here; the worker thread
- * (src/platform/psp/jobs_psp.h) runs the download queue. The network stack is used by one thread
- * at a time: the worker takes net_lock to rejoin or reload, and the UI holds it from the start of a
- * join to its end (several frames) and while the network picker is open. The UI never waits for it:
- * while the worker rejoins (up to 30 s) it keeps drawing and tries again on the next frame.
+ * Threads: the UI thread runs the app and every hook here; the browsing thread (call_psp.h) runs
+ * the app's requests to RomM, and the worker thread (jobs_psp.h) the download queue. The network
+ * stack is used by one thread at a time: the worker takes net_lock to rejoin or reload, a request
+ * holds it for its transfer, and the UI holds it from the start of a join to its end (several
+ * frames) and while the network picker is open. Nobody on the UI side waits for it: while the
+ * worker rejoins (up to 30 s) the UI keeps drawing and tries again on the next frame, and a request
+ * fails as a lost connection.
  *
  * Teardown follows the worker: when it would not stop, nothing it may still use is freed or
  * unloaded (the queue, the log, the RomM client, TLS, the network, the mutexes); the process exit
@@ -25,6 +27,7 @@
 #include "skiff/storage_paths.h"
 #include "skiff/ui.h"
 
+#include "call_psp.h"
 #include "dialog_psp.h"
 #include "jobs_psp.h"
 #include "net_psp.h"
@@ -92,6 +95,8 @@ typedef struct skiff_psp_app {
     skiff_psp_worker worker;
     /* The worker would not stop: leave everything it may use to the process exit. */
     int worker_stuck;
+    /* The browsing thread: the app's requests to RomM. */
+    skiff_psp_caller caller;
 
     /* The system dialog the view asked for; static storage, as the system writes into it. */
     skiff_psp_dialog *dialog;

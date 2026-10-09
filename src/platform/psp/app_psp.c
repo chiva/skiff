@@ -90,12 +90,13 @@ static void count_frame(skiff_psp_app *platform) {
     skiff_log_write(
         skiff_app_log(platform->app), SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
         "stats: %d frames, mean %lld ms, longest %lld ms; heap %u KB; system free %u KB "
-        "(largest %u KB); worker stack lowest free %d bytes",
+        "(largest %u KB); worker stack lowest free %d bytes, browse %d",
         stats->frames, stats->gap_total_us / stats->frames / US_PER_MS,
         stats->gap_max_us / US_PER_MS, heap_used_kb(),
         (unsigned)(sceKernelTotalFreeMemSize() / BYTES_PER_KB),
         (unsigned)(sceKernelMaxFreeMemSize() / BYTES_PER_KB),
-        skiff_psp_worker_stack_free(&platform->worker));
+        skiff_psp_worker_stack_free(&platform->worker),
+        skiff_psp_caller_stack_free(&platform->caller));
     stats->period_start_us = now;
     stats->gap_total_us = 0;
     stats->gap_max_us = 0;
@@ -271,28 +272,45 @@ static skiff_curl_config curl_config(skiff_psp_app *platform,
     return curl;
 }
 
-/* The browse transport: each request holds net_lock, so the worker cannot disconnect or unload the
- * network under it. The lock is taken without waiting: while the worker recovers the network, the
- * request fails as a lost connection, and the player's retry joins again once it is free. */
+/* The browse transport, used on the browsing thread (call_psp.h): each request holds net_lock, so
+ * the worker cannot disconnect or unload the network under it. The lock is taken without waiting:
+ * while the worker recovers the network (or the UI joins), the request fails as a lost connection,
+ * and the player's retry joins again once it is free. A cancelled call stops its transfer. */
 typedef struct guarded_transport {
     skiff_transport base;
     skiff_transport *inner;
     skiff_psp_app *platform;
 } guarded_transport;
 
+/* The request's own stop hook, and the call's cancel before it. */
+typedef struct guarded_stop {
+    skiff_http_stop_fn inner;
+    void *inner_ctx;
+    const skiff_psp_caller *caller;
+} guarded_stop;
+
+static skiff_err guarded_should_stop(void *ctx) {
+    const guarded_stop *stop = ctx;
+    if (skiff_psp_caller_cancelled(stop->caller)) {
+        return SKIFF_ERR_CANCELLED;
+    }
+    return stop->inner != NULL ? stop->inner(stop->inner_ctx) : SKIFF_OK;
+}
+
 static skiff_err guarded_perform(skiff_transport *transport, const skiff_http_request *request,
                                  skiff_http_response *response) {
     guarded_transport *guarded = (guarded_transport *)transport;
     skiff_psp_app *platform = guarded->platform;
-    const int already_held = platform->holds_net;
-    if (!try_take_network(platform)) {
+    if (!skiff_psp_mutex_try_lock(&platform->net_lock)) {
         return SKIFF_ERR_NET_CONNECTION_LOST;
     }
+    guarded_stop stop = {request->should_stop, request->stop_ctx, &platform->caller};
+    skiff_http_request stoppable = *request;
+    stoppable.should_stop = guarded_should_stop;
+    stoppable.stop_ctx = &stop;
     const long long started_us = sceKernelGetSystemTimeWide();
-    const skiff_err err = guarded->inner->ops->perform(guarded->inner, request, response);
-    if (!already_held) {
-        give_network(platform);
-    }
+    const skiff_err err = guarded->inner->ops->perform(guarded->inner, &stoppable, response);
+    skiff_psp_mutex_unlock(&platform->net_lock);
     log_request(platform, started_us, response, err);
     return err;
 }
@@ -323,6 +341,29 @@ static skiff_err open_transport(void *ctx, const skiff_app_transport_settings *s
     guarded->platform = platform;
     *out = &guarded->base;
     return SKIFF_OK;
+}
+
+/* The browsing thread starts with the first call: no stack is taken before Skiff goes online. */
+static skiff_err call_start(void *ctx, skiff_app_call_fn fn, void *arg) {
+    skiff_psp_app *platform = ctx;
+    if (!platform->caller.started) {
+        const skiff_err err =
+            skiff_psp_caller_start(&platform->caller, skiff_app_log(platform->app));
+        if (err != SKIFF_OK) {
+            return err;
+        }
+    }
+    return skiff_psp_caller_call(&platform->caller, fn, arg);
+}
+
+static int call_done(void *ctx) {
+    skiff_psp_app *platform = ctx;
+    return skiff_psp_caller_done(&platform->caller);
+}
+
+static void call_cancel(void *ctx) {
+    skiff_psp_app *platform = ctx;
+    skiff_psp_caller_cancel(&platform->caller);
 }
 
 static skiff_err random_bytes(void *ctx, unsigned char *out, size_t size) {
@@ -369,6 +410,9 @@ skiff_app_env skiff_psp_app_env(skiff_psp_app *platform) {
         .random = random_bytes,
         .start_worker = start_worker,
         .stop_worker = stop_worker,
+        .call_start = call_start,
+        .call_done = call_done,
+        .call_cancel = call_cancel,
     };
     return env;
 }
@@ -664,6 +708,11 @@ int skiff_psp_app_finish(skiff_psp_app *platform) {
     if (skiff_psp_worker_stop(&platform->worker, SKIFF_PSP_WORKER_STOP_TIMEOUT_US) != SKIFF_OK) {
         skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                         "quit: the worker did not stop; the exit releases the rest");
+        skiff_log_flush(skiff_app_log(platform->app));
+        return 0;
+    }
+    /* A request still running uses the app's client and call: they stay to the process exit. */
+    if (skiff_psp_caller_stop(&platform->caller, SKIFF_PSP_CALLER_STOP_TIMEOUT_US) != SKIFF_OK) {
         skiff_log_flush(skiff_app_log(platform->app));
         return 0;
     }

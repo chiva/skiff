@@ -479,8 +479,9 @@ Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PR
 `skiff_app_smoke` is the app itself (`src/platform/psp/app_main.c`) built with `SKIFF_APP_SMOKE`,
 never packaged. PPSSPPHeadless has no ARK, no `config.ini` and nobody at the buttons, so the app
 must start (storage, the five mutexes, the font and renderer, `skiff.log`, the queue and
-`installed.json`), reach the screen asking for the server address, draw it for 60 frames, and
-tear down: it then ends with `SKIFF APP SMOKE OK`. It ends with `SKIFF APP SMOKE FAIL` when it
+`installed.json`), reach the screen asking for the server address, draw it for 60 frames, run a
+call on the browsing thread through the app's hooks and stop a second one with a cancel, and tear
+down (the browsing thread too): it then ends with `SKIFF APP SMOKE OK`. It ends with `SKIFF APP SMOKE FAIL` when it
 cannot start, stops on an error screen, has not reached that screen within 1800 frames, or leaves
 something to the process exit. `scripts/dev.sh app-smoke` runs it, as CI does. Pairing, browsing
 and downloads need a real PSP (see [The app on a PSP](#the-app-on-a-psp)).
@@ -527,10 +528,11 @@ the disc needs both the PSP build and the host image.
    a leak names the file and exits with 1.
 
 At `[log] level = debug`, `skiff.log` also holds what the session measures: one `request:` line
-per request the UI thread makes (time, status, body bytes, new connections, TLS version and cipher,
+per request the browsing thread makes (time, status, body bytes, new connections, TLS version and cipher,
 heap afterwards; the first one on a new connection carries the handshake and the parsing of the
 CA file), and a `stats:` line every 10 s (frames, mean and longest time between two frames, heap,
-system memory free and its largest block, the download worker's lowest free stack), and a
+system memory free and its largest block, the download worker's and the browsing thread's lowest
+free stack), and a
 `slow frame:` line for each frame that took over 100 ms, split into the app's update, drawing and
 the wait for the screen. Games Skiff installed stay in `ms0:/ISO` after `scripts/memstick.sh
 uninstall`. The seeded files are random bytes, so those with a disc extension (`.iso`) show as

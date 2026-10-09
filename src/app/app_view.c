@@ -207,7 +207,8 @@ static void pair_view(skiff_app *app) {
     const app_pairing *pairing = &app->pairing;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_PAIR));
     if (pairing->active) {
-        const char *url[] = {pairing->pairing.verification_url};
+        /* With the code in it: RomM 5.3.1's page has no field to type the code into. */
+        const char *url[] = {pairing->pairing.verification_url_complete};
         add_formatted(app, SKIFF_TEXT_PAIR_INSTRUCTIONS, url, 1);
         if (view->line_count < SKIFF_APP_LINES_MAX) {
             view->emphasis_line = (int)view->line_count;

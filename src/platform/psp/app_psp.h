@@ -38,6 +38,8 @@
 #define SKIFF_PSP_APP_DISCONNECT_TIMEOUT_US SKIFF_PSP_WORKER_DISCONNECT_TIMEOUT_US
 /* How often skiff.log gets the frame, memory and worker stack figures, at [log] level = debug. */
 #define SKIFF_PSP_APP_STATS_PERIOD_US (10LL * 1000 * 1000)
+/* A frame this long since the last one is logged with where its time went (debug level). */
+#define SKIFF_PSP_APP_SLOW_FRAME_US (100LL * 1000)
 
 /* Measurements for the hardware tier (row A1): logged at debug level, so a player's skiff.log at
  * the default level never has them. Frames are timed from one present to the next. */
@@ -47,6 +49,11 @@ typedef struct skiff_psp_app_stats {
     long long gap_total_us;
     long long gap_max_us;
     int frames;
+    /* This frame's steps, for a slow frame's line. */
+    long long input_us;
+    long long update_us;
+    long long draw_us;
+    long long present_us;
 } skiff_psp_app_stats;
 
 typedef struct skiff_psp_app {
@@ -105,13 +112,13 @@ skiff_err skiff_psp_app_start(skiff_psp_app *platform, const char *program_path,
 skiff_app_config skiff_psp_app_config(skiff_psp_app *platform);
 skiff_app_env skiff_psp_app_env(skiff_psp_app *platform);
 
-/* The actions of this frame from the buttons. */
-unsigned skiff_psp_app_read_input(skiff_psp_app *platform);
-
-/* Draws view, runs the dialog it asks for, and presents the frame; every
- * SKIFF_PSP_APP_STATS_PERIOD_US also logs the frame times, memory and the worker's stack at debug
- * level. */
-void skiff_psp_app_frame(skiff_psp_app *platform, const skiff_app_view *view);
+/*
+ * One frame: reads the buttons, runs the app (skiff_app_update()), draws its view, runs the dialog
+ * it asks for, and presents the frame. Returns the view drawn. At debug level it also logs, every
+ * SKIFF_PSP_APP_STATS_PERIOD_US, the frame times, memory and the worker's stack, and for a frame
+ * longer than SKIFF_PSP_APP_SLOW_FRAME_US where its time went.
+ */
+const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform);
 
 /* Asks an open dialog to close and runs frames until it has (or is given up on). */
 void skiff_psp_app_close_dialog(skiff_psp_app *platform);

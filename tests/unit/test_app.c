@@ -531,7 +531,8 @@ static void test_a_first_launch_asks_for_the_server_then_pairs(void) {
     run_until(SKIFF_APP_SCREEN_PAIR);
     TEST_ASSERT_TRUE(view()->emphasis_line >= 0);
     TEST_ASSERT_EQUAL_STRING(USER_CODE, view()->lines[view()->emphasis_line]);
-    TEST_ASSERT_TRUE(shows(SERVER "/pair/device"));
+    TEST_PRINTF("the address carries the code: RomM's page has no field to type it into");
+    TEST_ASSERT_TRUE(shows(SERVER "/pair/device?user_code=" USER_CODE));
     TEST_ASSERT_TRUE(shows("10 min"));
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
@@ -995,7 +996,7 @@ static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
     TEST_ASSERT_NOT_NULL(strstr(config, "url = https://other.test"));
     TEST_ASSERT_NULL(strstr(config, TOKEN));
     TEST_ASSERT_NOT_NULL(strstr(config, "device_identifier = 00112233445566778899aabbccddeeff"));
-    TEST_ASSERT_TRUE(shows("https://other.test/pair/device"));
+    TEST_ASSERT_TRUE(shows("https://other.test/pair/device?user_code=" USER_CODE));
 }
 
 static void test_a_worker_that_will_not_stop_changes_nothing(void) {

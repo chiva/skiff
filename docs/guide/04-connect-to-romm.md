@@ -19,9 +19,11 @@ You never type a password or a long token on the PSP:
 1. In Skiff, open **Settings → Server** and enter the RomM address, e.g. `http://192.168.1.20:8080`.
    The on-screen keyboard is used once for this.
 2. Choose **Pair with RomM**. Skiff shows an 8-character code of letters and digits, such as
-   `7EGGP3VE`, and the page to open: your RomM address followed by `/pair/device`, e.g.
-   `http://192.168.1.20:8080/pair/device`.
-3. On your phone or computer, sign in to RomM, open that page and enter the code. RomM lists what
+   `7EGGP3VE`, and the page to open: your RomM address followed by `/pair/device` and the code,
+   e.g. `http://192.168.1.20:8080/pair/device?user_code=7EGGP3VE`. Type it exactly: RomM's page
+   has no box to enter the code, it reads it from the address.
+3. On your phone or computer, sign in to RomM and open that page. Check that it shows the same code
+   as the PSP. RomM lists what
    Skiff asks for: reading your platforms and ROMs, to browse and download, and nothing else.
    Approve it with both ticked: Skiff cannot work without them (error 209). When save sync arrives,
    Skiff will ask you to pair again for the extra permissions it needs.

@@ -70,8 +70,9 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_NET_WAITING_SWITCH, 0, "Turn on the Wi-Fi switch to continue",                    \
       "Activa el interruptor del wifi para continuar")                                             \
     /* Pairing. */                                                                                 \
-    X(SKIFF_TEXT_PAIR_INSTRUCTIONS, 1, "On your phone or computer, open {1} and enter this code:", \
-      "En el móvil o el ordenador, abre {1} e introduce este código:")                             \
+    X(SKIFF_TEXT_PAIR_INSTRUCTIONS, 1,                                                             \
+      "On your phone or computer, sign in to RomM and open {1}, then approve this code:",          \
+      "En el móvil o el ordenador, inicia sesión en RomM y abre {1}, y aprueba este código:")      \
     X(SKIFF_TEXT_PAIR_WAITING, 0, "Waiting for approval...", "Esperando la aprobación...")         \
     X(SKIFF_TEXT_PAIR_EXPIRED, 0, "The code has expired. Ask for a new one.",                      \
       "El código ha caducado. Pide uno nuevo.")                                                    \

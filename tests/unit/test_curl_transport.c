@@ -24,6 +24,7 @@ enum { URL_MAX = 96, BODY_MAX = 64 };
 #define TEST_LONG_STALL_TIMEOUT_S 30L
 #define TEST_STOP_AFTER_MS 2000L
 #define TEST_STOP_DEADLINE_MS 10000L
+#define TEST_TOTAL_TIMEOUT_S 1L
 #define MS_PER_SECOND 1000L
 #define NS_PER_MS 1000000L
 
@@ -410,6 +411,116 @@ static void test_bad_addresses_are_configuration_errors(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
 }
 
+/* A resolve hook that answers for one name with 127.0.0.1, counting its calls. */
+#define TEST_HOST "skiff.test"
+#define TEST_ADDRESS "127.0.0.1"
+
+typedef struct resolver {
+    int calls;
+    skiff_err fail_with;
+    char last_host[SKIFF_CURL_HOST_MAX];
+} resolver;
+
+static resolver names;
+
+static skiff_err resolve_test_host(void *ctx, const char *host, char *address,
+                                   size_t address_size) {
+    resolver *state = ctx;
+    state->calls++;
+    snprintf(state->last_host, sizeof state->last_host, "%s", host);
+    TEST_PRINTF("resolve %s (call %d) -> %s", host, state->calls,
+                state->fail_with == SKIFF_OK ? TEST_ADDRESS : skiff_err_name(state->fail_with));
+    if (state->fail_with != SKIFF_OK) {
+        return state->fail_with;
+    }
+    snprintf(address, address_size, "%s", TEST_ADDRESS);
+    return SKIFF_OK;
+}
+
+/* Serves replies at http://skiff.test:<port>/, a name only the resolve hook knows. */
+static void serve_by_name(const local_http_reply *replies, size_t count) {
+    serve(replies, count, "http");
+    snprintf(url, sizeof url, "http://" TEST_HOST ":%u/api/heartbeat", (unsigned)server.port);
+    memset(&names, 0, sizeof names);
+    skiff_curl_config config = TEST_CONFIG;
+    config.resolve = resolve_test_host;
+    config.resolve_ctx = &names;
+    create(&config);
+}
+
+static void test_a_resolve_hook_gives_the_address_and_is_asked_once(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_KEEP_OPEN, 0},
+    };
+    serve_by_name(REPLIES, 2);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT(200, response.status);
+    TEST_ASSERT_EQUAL_STRING(TEST_HOST, names.last_host);
+    TEST_PRINTF("the second request reuses the pinned address: no second lookup");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT(1, names.calls);
+    stop_server();
+    TEST_ASSERT_EQUAL_size_t(2, server.request_count);
+    char host_line[64];
+    snprintf(host_line, sizeof host_line, "Host: " TEST_HOST ":%u", (unsigned)server.port);
+    assert_request_has(0, host_line);
+}
+
+static void test_a_name_that_does_not_resolve_fails_before_connecting(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve_by_name(REPLIES, 1);
+    names.fail_with = SKIFF_ERR_NET_DNS;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_DNS, perform());
+    stop_server();
+    TEST_ASSERT_EQUAL_INT(0, server.connections);
+    TEST_PRINTF("a failed lookup pins nothing: the next request asks again");
+    names.fail_with = SKIFF_OK;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECT, perform());
+    TEST_ASSERT_EQUAL_INT(2, names.calls);
+}
+
+static void test_a_failed_request_looks_the_name_up_again(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc"), LOCAL_HTTP_CLOSE, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve_by_name(REPLIES, 2);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECTION_LOST, perform());
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT(200, response.status);
+    TEST_ASSERT_EQUAL_INT(2, names.calls);
+}
+
+static void test_a_resolve_hook_never_sees_a_malformed_address(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve_by_name(REPLIES, 1);
+    snprintf(url, sizeof url, TEST_HOST "/api/heartbeat");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
+    snprintf(url, sizeof url, "http://[::1/");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CONFIG_INVALID_VALUE, perform());
+    TEST_ASSERT_EQUAL_INT(0, names.calls);
+}
+
+static void test_the_total_timeout_ends_a_request_that_keeps_trickling(void) {
+    static const local_http_reply REPLIES[] = {{"", 0, LOCAL_HTTP_STALL, 0}};
+    serve(REPLIES, 1, "http");
+    skiff_curl_config config = TEST_CONFIG;
+    config.stall_timeout_s = TEST_LONG_STALL_TIMEOUT_S;
+    config.total_timeout_s = TEST_TOTAL_TIMEOUT_S;
+    create(&config);
+    const long started_ms = milliseconds_now();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_TIMEOUT, perform());
+    const long took_ms = milliseconds_now() - started_ms;
+    TEST_PRINTF("timed out after %ld ms (total limit %ld s, stall limit %ld s)", took_ms,
+                TEST_TOTAL_TIMEOUT_S, TEST_LONG_STALL_TIMEOUT_S);
+    TEST_ASSERT_TRUE(took_ms < TEST_STOP_DEADLINE_MS);
+}
+
 static void test_create_validates_its_configuration(void) {
     static const skiff_http_header INJECTED[] = {{"X-Token", "a\r\nX-Evil: 1"}};
     skiff_curl_config config = TEST_CONFIG;
@@ -423,6 +534,9 @@ static void test_create_validates_its_configuration(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_curl_transport_create(&config, &transport));
     config = TEST_CONFIG;
     config.stall_timeout_s = -1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_curl_transport_create(&config, &transport));
+    config = TEST_CONFIG;
+    config.total_timeout_s = -1;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_curl_transport_create(&config, &transport));
 }
 
@@ -454,6 +568,11 @@ int main(void) {
     RUN_TEST(test_unreadable_client_certificate);
     RUN_TEST(test_unreadable_ca_file);
     RUN_TEST(test_bad_addresses_are_configuration_errors);
+    RUN_TEST(test_a_resolve_hook_gives_the_address_and_is_asked_once);
+    RUN_TEST(test_a_name_that_does_not_resolve_fails_before_connecting);
+    RUN_TEST(test_a_failed_request_looks_the_name_up_again);
+    RUN_TEST(test_a_resolve_hook_never_sees_a_malformed_address);
+    RUN_TEST(test_the_total_timeout_ends_a_request_that_keeps_trickling);
     RUN_TEST(test_create_validates_its_configuration);
     RUN_TEST(test_null_config_uses_the_defaults);
     const int failures = UNITY_END();

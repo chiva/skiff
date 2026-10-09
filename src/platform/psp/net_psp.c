@@ -24,6 +24,9 @@ enum {
     WLAN_SWITCH_OFF = 0,
     /* Before reading the clock back after a change. */
     CLOCK_SETTLE_US = 10 * 1000,
+    /* The work area one resolver needs (pspsdk's samples give it 1 KB). */
+    RESOLVER_BUFFER_BYTES = 1024,
+    IPV4_TEXT_MAX = 16,
 };
 
 /* Records a failed call; returns whether `result` is a success. */
@@ -274,6 +277,47 @@ skiff_err skiff_psp_net_connected_profile(skiff_psp_net *net, int *profile) {
     }
     step(net, "skiff_psp_net_connected_profile (no profile has its name)", -1);
     return SKIFF_ERR_NET_UNAVAILABLE;
+}
+
+/* Digits and three dots: an address curl can use as it is (it rejects a malformed one). */
+static int is_dotted_address(const char *host) {
+    int dots = 0;
+    for (const char *at = host; *at != '\0'; at++) {
+        if (*at == '.') {
+            dots++;
+        } else if (*at < '0' || *at > '9') {
+            return 0;
+        }
+    }
+    return dots == 3;
+}
+
+skiff_err skiff_psp_net_resolve(const char *host, unsigned timeout_s, int retries, char *address,
+                                size_t address_size) {
+    if (host == NULL || host[0] == '\0' || address == NULL || address_size < IPV4_TEXT_MAX) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    if (is_dotted_address(host)) {
+        return snprintf(address, address_size, "%s", host) < (int)address_size
+                   ? SKIFF_OK
+                   : SKIFF_ERR_INVALID_ARG;
+    }
+    unsigned char work[RESOLVER_BUFFER_BYTES];
+    int resolver = 0;
+    if (sceNetResolverCreate(&resolver, work, sizeof work) < 0) {
+        return SKIFF_ERR_NET_DNS;
+    }
+    struct in_addr found;
+    memset(&found, 0, sizeof found);
+    const int result = sceNetResolverStartNtoA(resolver, host, &found, timeout_s, retries);
+    sceNetResolverDelete(resolver);
+    if (result < 0) {
+        return SKIFF_ERR_NET_DNS;
+    }
+    /* s_addr is in network order: its bytes are the address's, first to last. */
+    const unsigned char *bytes = (const unsigned char *)&found.s_addr;
+    snprintf(address, address_size, "%u.%u.%u.%u", bytes[0], bytes[1], bytes[2], bytes[3]);
+    return SKIFF_OK;
 }
 
 skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size) {

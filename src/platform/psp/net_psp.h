@@ -137,6 +137,17 @@ skiff_err skiff_psp_net_connected_profile(skiff_psp_net *net, int *profile);
 skiff_err skiff_psp_net_ip(skiff_psp_net *net, char *ip, size_t ip_size);
 
 /*
+ * Looks host up through the firmware's resolver and writes its IPv4 address ("192.168.1.20") into
+ * address, waiting timeout_s seconds per try and trying retries more times: the bound curl's own
+ * lookup lacks on the PSP. A dotted address is written back as it is. SKIFF_ERR_NET_DNS when the
+ * name does not resolve (or no resolver could be made), SKIFF_ERR_INVALID_ARG for a NULL or empty
+ * host, a NULL address or one too small for "255.255.255.255". Safe from any thread: each call has
+ * its own resolver.
+ */
+skiff_err skiff_psp_net_resolve(const char *host, unsigned timeout_s, int retries, char *address,
+                                size_t address_size);
+
+/*
  * Whether the connection still stands, cheap enough to ask during a download: SKIFF_OK while the
  * access point has given an address, SKIFF_ERR_NET_UNAVAILABLE once the Wi-Fi switch is off,
  * SKIFF_ERR_NET_CONNECTION_LOST when the access point is gone (out of range, or after a suspend).

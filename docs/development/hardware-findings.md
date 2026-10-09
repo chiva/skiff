@@ -290,6 +290,11 @@ has no field to type the code into, so Skiff shows the address with the code in 
   or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
   costs. Watch the app's logs.
 - **Slow first request.** The 3.3 s first request after joining was seen once and not reproduced;
-  watch for it in the app's logs.
+  watch for it in the app's logs. With 0.2.0 against a real RomM over public HTTPS (2026-10-09),
+  the first request after a launch failed only after 4.5 minutes (`SKIFF_ERR_NET_TIMEOUT`), with
+  the screen frozen; the retry 24 minutes later took 1 s. The connect and stall timeouts (10 and
+  30 s) cannot add up to that; curl's name lookup, which cannot time out on the PSP, can. Lookups
+  now go through the firmware's resolver with a timeout, and `[log] level = debug` logs each
+  lookup's time (`resolve <host>: <ms> ms`), so the next occurrence names its cause.
 - **Other consoles.** No numbers yet for the PSP-2000, 3000 or Go (64 MB), or for other access
   points.

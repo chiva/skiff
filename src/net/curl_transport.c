@@ -16,12 +16,22 @@
 #define HEADER_SEPARATOR ": "
 /* An empty header removes curl's own: no "Expect: 100-continue" before a POST body. */
 #define NO_EXPECT_HEADER "Expect:"
+/* What a CURLOPT_RESOLVE entry adds to a host name: '-' or the ':' before the port, the port, and
+ * the ':' before the address. */
+#define RESOLVE_PORT_MAX 16
 
 typedef struct curl_transport {
     skiff_transport base; /* first, so a skiff_transport * is a curl_transport * */
     CURL *curl;
     struct curl_slist *default_headers;
     int client_cert_configured;
+    skiff_curl_resolve_fn resolve;
+    void *resolve_ctx;
+    /* The address the resolve hook gave for host:port, pinned in curl's name cache through
+     * CURLOPT_RESOLVE (whose list curl reads at every request); port 0 when none is. */
+    char resolved_host[SKIFF_CURL_HOST_MAX];
+    long resolved_port;
+    struct curl_slist *resolve_list;
 } curl_transport;
 
 /* State of one request, shared with curl's callbacks. */
@@ -193,12 +203,77 @@ static int set_method(CURL *curl, const skiff_http_request *request) {
                CURLE_OK;
 }
 
+/* The host and port (the scheme's default when the URL names none) of url. */
+static skiff_err url_host(const char *url, char *host, size_t host_size, long *port) {
+    CURLU *parsed = curl_url();
+    if (parsed == NULL) {
+        return SKIFF_ERR_NO_MEMORY;
+    }
+    char *name = NULL;
+    char *number = NULL;
+    skiff_err err = SKIFF_ERR_CONFIG_INVALID_VALUE;
+    if (curl_url_set(parsed, CURLUPART_URL, url, 0) == CURLUE_OK &&
+        curl_url_get(parsed, CURLUPART_HOST, &name, 0) == CURLUE_OK &&
+        curl_url_get(parsed, CURLUPART_PORT, &number, CURLU_DEFAULT_PORT) == CURLUE_OK &&
+        strlen(name) < host_size) {
+        snprintf(host, host_size, "%s", name);
+        *port = strtol(number, NULL, 10);
+        err = SKIFF_OK;
+    }
+    curl_free(name);
+    curl_free(number);
+    curl_url_cleanup(parsed);
+    return err;
+}
+
+/* Looks the request's host up through the resolve hook, unless the address is pinned already, and
+ * pins the answer: curl then connects to it without a lookup of its own. An earlier entry for the
+ * same host and port is dropped first ('-'), in case the address changed. */
+static skiff_err pin_address(curl_transport *transport, const char *url) {
+    if (transport->resolve == NULL) {
+        return SKIFF_OK;
+    }
+    char host[SKIFF_CURL_HOST_MAX];
+    long port = 0;
+    skiff_err err = url_host(url, host, sizeof host, &port);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    if (port == transport->resolved_port && strcmp(host, transport->resolved_host) == 0) {
+        return SKIFF_OK;
+    }
+    char address[SKIFF_CURL_ADDRESS_MAX];
+    err = transport->resolve(transport->resolve_ctx, host, address, sizeof address);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    char drop[SKIFF_CURL_HOST_MAX + RESOLVE_PORT_MAX];
+    char entry[SKIFF_CURL_HOST_MAX + RESOLVE_PORT_MAX + SKIFF_CURL_ADDRESS_MAX];
+    snprintf(drop, sizeof drop, "-%s:%ld", host, port);
+    snprintf(entry, sizeof entry, "%s:%ld:%s", host, port, address);
+    struct curl_slist *list = NULL;
+    if (!append_line(&list, drop) || !append_line(&list, entry) ||
+        curl_easy_setopt(transport->curl, CURLOPT_RESOLVE, list) != CURLE_OK) {
+        curl_slist_free_all(list);
+        return SKIFF_ERR_NO_MEMORY;
+    }
+    curl_slist_free_all(transport->resolve_list);
+    transport->resolve_list = list;
+    snprintf(transport->resolved_host, sizeof transport->resolved_host, "%s", host);
+    transport->resolved_port = port;
+    return SKIFF_OK;
+}
+
 static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *request,
                               skiff_http_response *response) {
     curl_transport *transport = (curl_transport *)base;
     transfer current = {transport->curl, request, response, SKIFF_OK};
+    skiff_err err = pin_address(transport, request->url);
+    if (err != SKIFF_OK) {
+        return err;
+    }
     struct curl_slist *headers = NULL;
-    skiff_err err = build_headers(transport, request, &headers);
+    err = build_headers(transport, request, &headers);
     if (err != SKIFF_OK) {
         return err;
     }
@@ -217,6 +292,10 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     curl_easy_getinfo(transport->curl, CURLINFO_NUM_CONNECTS, &connections);
     response->new_connections = connections;
     err = code == CURLE_OK ? SKIFF_OK : describe_failure(transport, request, &current, code);
+    if (err != SKIFF_OK) {
+        /* The server may have moved: the next request looks its name up again. */
+        transport->resolved_port = 0;
+    }
     /* The list and the callback state die with this call; curl must not keep pointers to them. */
     curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, NULL);
@@ -231,6 +310,7 @@ static void curl_destroy(skiff_transport *base) {
     curl_transport *transport = (curl_transport *)base;
     curl_easy_cleanup(transport->curl);
     curl_slist_free_all(transport->default_headers);
+    curl_slist_free_all(transport->resolve_list);
     free(transport);
 }
 
@@ -257,6 +337,7 @@ static int configure(curl_transport *transport, const skiff_curl_config *config)
            curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, CURL_STALL_BYTES_PER_SECOND) ==
                CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, stall_timeout) == CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_TIMEOUT, config->total_timeout_s) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, on_progress) == CURLE_OK &&
@@ -287,6 +368,7 @@ skiff_err skiff_curl_transport_create(const skiff_curl_config *config, skiff_tra
     }
     if ((config->client_key != NULL && config->client_cert == NULL) ||
         config->connect_timeout_s < 0 || config->stall_timeout_s < 0 ||
+        config->total_timeout_s < 0 ||
         !skiff_http_headers_valid(config->default_headers, config->default_header_count)) {
         return SKIFF_ERR_INVALID_ARG;
     }
@@ -296,6 +378,8 @@ skiff_err skiff_curl_transport_create(const skiff_curl_config *config, skiff_tra
     }
     transport->base.ops = &CURL_TRANSPORT_OPS;
     transport->client_cert_configured = config->client_cert != NULL;
+    transport->resolve = config->resolve;
+    transport->resolve_ctx = config->resolve_ctx;
     transport->curl = curl_easy_init();
     if (transport->curl == NULL || !configure(transport, config) ||
         !copy_default_headers(transport, config)) {

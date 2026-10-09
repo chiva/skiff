@@ -19,6 +19,16 @@
 #define BYTES_PER_KB 1024U
 /* sceWlanGetSwitchState() with the switch off (pspwlan.h names no value). */
 #define WLAN_SWITCH_OFF 0
+/* A name lookup waits this long per try, with this many more tries (about 15 s in all), against the
+ * minutes curl's unbounded lookup took on a PSP whose DNS server did not answer (0.2.0,
+ * 2026-10-09).
+ */
+#define RESOLVE_TIMEOUT_S 5U
+#define RESOLVE_RETRIES 2
+/* The most one of the screen's requests may take, the lookup aside: a page of the library or a
+ * game's details is tens of KB, seconds even on poor Wi-Fi. A request that still trickles after
+ * this ends as a timeout the player can retry, instead of holding the screen. */
+#define BROWSE_TIMEOUT_S 60L
 
 enum {
     LINE_HEIGHT = SKIFF_APP_LINE_HEIGHT,
@@ -229,13 +239,34 @@ static skiff_err tls_start(void *ctx) {
     return status != SKIFF_OK ? status : init;
 }
 
-static skiff_curl_config curl_config(const skiff_app_transport_settings *settings) {
+/* curl's lookups cannot time out on the PSP (skiff/curl_transport.h): every transport looks names
+ * up here instead, within RESOLVE_TIMEOUT_S per try and RESOLVE_RETRIES more tries. Called from the
+ * UI thread and the worker alike; the log is thread-safe. */
+static skiff_err resolve(void *ctx, const char *host, char *address, size_t address_size) {
+    skiff_psp_app *platform = ctx;
+    const long long started_us = sceKernelGetSystemTimeWide();
+    const skiff_err err =
+        skiff_psp_net_resolve(host, RESOLVE_TIMEOUT_S, RESOLVE_RETRIES, address, address_size);
+    skiff_log_write(
+        skiff_app_log(platform->app), err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_WARN,
+        SKIFF_APP_LOG_TAG, "resolve %s: %lld ms: %s (%d)", host,
+        (sceKernelGetSystemTimeWide() - started_us) / US_PER_MS, skiff_err_name(err), (int)err);
+    return err;
+}
+
+/* total_timeout_s: BROWSE_TIMEOUT_S for the screen's requests, 0 (none) for downloads. */
+static skiff_curl_config curl_config(skiff_psp_app *platform,
+                                     const skiff_app_transport_settings *settings,
+                                     long total_timeout_s) {
     const skiff_curl_config curl = {
         .ca_file = settings->ca_file[0] != '\0' ? settings->ca_file : NULL,
         .client_cert = settings->client_cert[0] != '\0' ? settings->client_cert : NULL,
         .client_key = settings->client_key[0] != '\0' ? settings->client_key : NULL,
         .default_headers = settings->headers,
         .default_header_count = settings->header_count,
+        .total_timeout_s = total_timeout_s,
+        .resolve = resolve,
+        .resolve_ctx = platform,
     };
     return curl;
 }
@@ -282,7 +313,7 @@ static skiff_err open_transport(void *ctx, const skiff_app_transport_settings *s
     if (guarded == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
-    const skiff_curl_config curl = curl_config(settings);
+    const skiff_curl_config curl = curl_config(platform, settings, BROWSE_TIMEOUT_S);
     const skiff_err err = skiff_curl_transport_create(&curl, &guarded->inner);
     if (err != SKIFF_OK) {
         free(guarded);
@@ -307,7 +338,7 @@ static skiff_err start_worker(void *ctx, const skiff_app_worker_spec *spec) {
         .romm = spec->romm,
         .net = &platform->net,
         .profile = spec->profile,
-        .curl = curl_config(spec->transport),
+        .curl = curl_config(platform, spec->transport, 0),
         .transport_status = platform->tls_started ? SKIFF_OK : SKIFF_ERR_NET_ENTROPY,
         .net_lock = &platform->net_lock,
         .log = spec->log,

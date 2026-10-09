@@ -68,9 +68,10 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
 - The PSP kernel schedules by priority without time-slicing equal priorities, so the worker runs
   at a lower priority than the UI (`SKIFF_PSP_WORKER_PRIORITY` 0x30 against the main thread's 0x20,
   `src/platform/psp/jobs_psp.h`): the UI waits for every vertical blank and draws first, and the
-  worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 64 KB) comes
+  worker downloads in the time left. The worker's stack (`SKIFF_PSP_WORKER_STACK_BYTES`, 32 KB) comes
   from the same memory as the network modules, about 148 KB once joined in blocks of at most
-  80 KB; on a PSP a download used 12 KB of it and left 84 KB free
+  80 KB; on a PSP the worker used 12 KB of it, downloads and recoveries included, in the jobs probe
+  and in the app
   ([hardware findings](hardware-findings.md#worker-thread)). The queue's two locks and the log each
   have their own semaphore-backed mutex (the queue logs while it holds its commit lock); rejoining or reloading the
   network can take a further lock other threads share. Quitting asks the runner to stop and waits
@@ -369,7 +370,8 @@ device grant):
    `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair again. RomM answers
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
-   (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path; a
+   (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path with
+   `?user_code=` (RomM 5.3.1's page reads the code only from the address, it has no field for it); a
    path that is not on the server (a full URL, `//host`) is refused, so a response cannot send the
    player to another site.
 2. The player approves on that page in RomM's web UI, where they may grant fewer scopes.

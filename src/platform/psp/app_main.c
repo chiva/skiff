@@ -108,14 +108,13 @@ int main(int argc, char *argv[]) {
 
     while (!skiff_psp_exit_requested() && !skiff_app_quit_requested(platform.app) &&
            !platform.dialog_stuck) {
-        skiff_app_update(platform.app, skiff_psp_app_read_input(&platform));
-        const skiff_app_view *view = skiff_app_view_now(platform.app);
-        skiff_psp_app_frame(&platform, view);
 #ifdef SKIFF_APP_SMOKE
-        smoke_frame(&s, view);
+        smoke_frame(&s, skiff_psp_app_step(&platform));
         if (s.done) {
             break;
         }
+#else
+        (void)skiff_psp_app_step(&platform);
 #endif
     }
 

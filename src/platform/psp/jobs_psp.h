@@ -30,8 +30,10 @@
 
 #include "net_psp.h"
 
-/* The worker's stack; must fit in one free block once Wi-Fi is joined (see above). */
-#define SKIFF_PSP_WORKER_STACK_BYTES (64 * 1024)
+/* The worker's stack; must fit in one free block once Wi-Fi is joined (see above). 11,952 bytes
+ * were used on a PSP-1000, the same in the jobs probe and in the app with every interruption
+ * (docs/development/hardware-findings.md): 32 KB keeps nearly three times that. */
+#define SKIFF_PSP_WORKER_STACK_BYTES (32 * 1024)
 /* The main (UI) thread runs at 0x20; a larger number runs only when the UI waits. */
 #define SKIFF_PSP_WORKER_PRIORITY 0x30
 /* How often an idle worker looks for a queued job. */

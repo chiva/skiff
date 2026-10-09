@@ -59,6 +59,15 @@ static void count_frame(skiff_psp_app *platform) {
         stats->gap_total_us += gap;
         stats->gap_max_us = gap > stats->gap_max_us ? gap : stats->gap_max_us;
         stats->frames++;
+        if (gap >= SKIFF_PSP_APP_SLOW_FRAME_US) {
+            /* The rest is the time between two steps (the main loop) or a suspend. */
+            skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                            "slow frame: %lld ms: buttons %lld, update %lld, draw %lld, present "
+                            "%lld ms",
+                            gap / US_PER_MS, stats->input_us / US_PER_MS,
+                            stats->update_us / US_PER_MS, stats->draw_us / US_PER_MS,
+                            stats->present_us / US_PER_MS);
+        }
     } else {
         stats->period_start_us = now;
     }
@@ -388,7 +397,7 @@ skiff_err skiff_psp_app_start(skiff_psp_app *platform, const char *program_path,
     return SKIFF_OK;
 }
 
-unsigned skiff_psp_app_read_input(skiff_psp_app *platform) {
+static unsigned read_input(skiff_psp_app *platform) {
     SceCtrlData pad;
     memset(&pad, 0, sizeof pad);
     if (sceCtrlReadBufferPositive(&pad, 1) < 0) {
@@ -522,7 +531,7 @@ static int open_dialog(skiff_psp_app *platform, const skiff_app_view *view) {
     return 1;
 }
 
-void skiff_psp_app_frame(skiff_psp_app *platform, const skiff_app_view *view) {
+static void draw_frame(skiff_psp_app *platform, const skiff_app_view *view) {
     const int dialog_open = open_dialog(platform, view);
     skiff_psp_ui_begin_frame(&platform->ui);
     draw_view(platform, view);
@@ -536,8 +545,25 @@ void skiff_psp_app_frame(skiff_psp_app *platform, const skiff_app_view *view) {
             dialog_ended(platform, state);
         }
     }
+    const long long drawn = sceKernelGetSystemTimeWide();
     skiff_psp_ui_present(&platform->ui);
+    platform->stats.present_us = sceKernelGetSystemTimeWide() - drawn;
+}
+
+const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform) {
+    skiff_psp_app_stats *stats = &platform->stats;
+    const long long started = sceKernelGetSystemTimeWide();
+    const unsigned actions = read_input(platform);
+    const long long read = sceKernelGetSystemTimeWide();
+    skiff_app_update(platform->app, actions);
+    const skiff_app_view *view = skiff_app_view_now(platform->app);
+    const long long updated = sceKernelGetSystemTimeWide();
+    draw_frame(platform, view);
+    stats->input_us = read - started;
+    stats->update_us = updated - read;
+    stats->draw_us = sceKernelGetSystemTimeWide() - updated - stats->present_us;
     count_frame(platform);
+    return view;
 }
 
 void skiff_psp_app_close_dialog(skiff_psp_app *platform) {

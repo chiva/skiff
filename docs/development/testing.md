@@ -526,8 +526,11 @@ At `[log] level = debug`, `skiff.log` also holds what the session measures: one 
 per request the UI thread makes (time, status, body bytes, new connections, TLS version and cipher,
 heap afterwards; the first one on a new connection carries the handshake and the parsing of the
 CA file), and a `stats:` line every 10 s (frames, mean and longest time between two frames, heap,
-system memory free and its largest block, the download worker's lowest free stack). Games Skiff
-installed stay in `ms0:/ISO` after `scripts/memstick.sh uninstall`.
+system memory free and its largest block, the download worker's lowest free stack), and a
+`slow frame:` line for each frame that took over 100 ms, split into the app's update, drawing and
+the wait for the screen. Games Skiff installed stay in `ms0:/ISO` after `scripts/memstick.sh
+uninstall`. The seeded files are random bytes, so those with a disc extension (`.iso`) show as
+Corrupted Data in the XMB; only the launch check's images are real discs.
 
 ## UI prototype
 

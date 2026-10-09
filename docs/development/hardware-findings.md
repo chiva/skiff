@@ -37,7 +37,8 @@ as orders of magnitude.
 | Checkpoint interval | syncs cost 0.24 s per 64 MiB | every 4 MiB |
 | Auto Sleep during a download | no suspend in 270 s with `scePowerTick()` every 5 s | keep-awake on during jobs |
 | Date for certificate checks | the C library's `time()` has no date on a PSP | Mbed TLS reads the real-time clock (`sceRtc`) |
-| Worker thread stack | 11,952 of 65,536 bytes used in every run, a module reload included; it leaves 84 KB of system memory once joined | 64 KB until the app gives the worker more to do ([worker thread](#worker-thread)) |
+| Worker thread stack | 11,952 of 65,536 bytes used in every run, a module reload included, in the jobs probe and in the app; it leaves 84 KB of system memory once joined | 32 KB ([worker thread](#worker-thread), [the app](#the-app)) |
+| Trusted CAs | the full Mozilla bundle costs about 200 ms and 280 KB of heap per new connection | ship it whole ([the app](#the-app)) |
 | Queue and the UI | the UI waited 113 ms on the queue's lock while the worker saved the queue file | two locks: the UI's reads never wait for a save |
 
 ## Entropy
@@ -256,10 +257,35 @@ runs that suspended; it is kept now.
 The power callback reaches the program about 2.2 s after the frame that spans a sleep, so a
 check that something "happened during a suspend" has to wait that long for it.
 
+## The app
+
+[The app on a PSP](testing.md#the-app-on-a-psp), 2026-10-09 (row A1): the app against the test
+RomM with a 67-ROM library, `ca_file` set to the Mozilla bundle plus the test CA, `[log] level =
+debug`. It paired, browsed all three pages, downloaded four games (64 MiB, 1 MiB, 256 KiB, 2 KiB)
+through a Wi-Fi switch test, a suspend, the HOME menu, HOME → Quit and a relaunch, and replaced an
+installed copy. The launch check it downloaded, a home-made disc image as `.iso` and `.cso`, booted
+from the XMB through ARK's ISO loader and read its whole pattern file back.
+
+| Item | Value |
+|---|---|
+| First request on a new connection (handshake, CA bundle parsed) | 805 and 761 ms; 590 ms without the bundle ([TLS](#tls)) |
+| Heap before / after the first connection | 752 / 1105 KB; 2.4–2.5 MB while the worker downloads |
+| System memory with the worker started | 84 KB free (largest block 80 KB), 148 KB before |
+| Worker stack used | 11,952 of 65,536 bytes, as in the jobs probe |
+| Library page request (25 ROMs, 40–61 KB of JSON) | 125–438 ms |
+| Time between frames | mean 16 ms; at most 266 ms while downloading; 1.0 and 2.6 s once each while library pages arrived; 1.75 s on one slow pairing check |
+| Wi-Fi switch off and on / suspend | bytes again after about 23 s (a rejoin failed, the reload worked) / 16 s |
+| HOME → Quit, relaunch | joined the saved connection without the picker in 7.5 s; the download resumed |
+
+RomM 5.3.1's pairing page reads the code only from its address (`/pair/device?user_code=`): it
+has no field to type the code into, so Skiff shows the address with the code in it.
+
 ## Open questions
 
-- **Worker stack in the app.** The 12 KB measured covers downloads only. If the app runs RomM
-  requests (JSON parsing) on the worker, measure again before shrinking the 64 KB stack.
+- **Stalls while browsing.** Two frames took 1.0 and 2.6 s in the seconds after library pages
+  arrived, though the requests took at most 438 ms: something after the request (parsing,
+  fitting the labels, drawing) is slow. `[log] level = debug` now logs where a slow frame's time
+  went.
 - **Rejoin failures.** About a third of rejoins failed (0x80410106, 0x80410D16), after a suspend
   or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
   costs. Watch the app's logs.

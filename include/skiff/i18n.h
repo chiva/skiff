@@ -70,20 +70,19 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_NET_WAITING_SWITCH, 0, "Turn on the Wi-Fi switch to continue",                    \
       "Activa el interruptor del wifi para continuar")                                             \
     /* Pairing. */                                                                                 \
-    X(SKIFF_TEXT_PAIR_INSTRUCTIONS, 0, "On your phone or computer, open this page:",               \
-      "En el móvil o el ordenador, abre esta página:")                                             \
+    X(SKIFF_TEXT_PAIR_INSTRUCTIONS, 0,                                                             \
+      "On your phone or computer, open:", "En el móvil o el ordenador, abre:")                     \
     X(SKIFF_TEXT_PAIR_INSTRUCTIONS_QR, 0,                                                          \
-      "Scan the QR code with your phone, or open this page on your phone or computer:",            \
-      "Escanea el código QR con el móvil, o abre esta página en el móvil o el ordenador:")         \
-    X(SKIFF_TEXT_PAIR_APPROVE, 0,                                                                  \
-      "Sign in to RomM and approve this code:", "Inicia sesión en RomM y aprueba este código:")    \
+      "Scan the QR code with your phone, or open:", "Escanea el código QR con el móvil, o abre:")  \
+    X(SKIFF_TEXT_PAIR_APPROVE, 0, "Sign in to RomM and approve the request.",                      \
+      "Inicia sesión en RomM y aprueba la solicitud.")                                             \
     X(SKIFF_TEXT_PAIR_WAITING, 0, "Waiting for approval...", "Esperando la aprobación...")         \
     X(SKIFF_TEXT_PAIR_EXPIRED, 0, "The code has expired. Ask for a new one.",                      \
       "El código ha caducado. Pide uno nuevo.")                                                    \
     X(SKIFF_TEXT_PAIR_DENIED, 0, "The request was denied in RomM.",                                \
       "Se ha rechazado la solicitud en RomM.")                                                     \
     X(SKIFF_TEXT_PAIR_DONE, 1, "Paired with {1}", "PSP vinculada con {1}")                         \
-    X(SKIFF_TEXT_PAIR_EXPIRES, 1, "The code expires in {1}", "El código caduca en {1}")            \
+    X(SKIFF_TEXT_PAIR_CODE, 2, "Code {1}, expires in {2}", "Código {1}, caduca en {2}")            \
     X(SKIFF_TEXT_PAIR_AGAIN, 0, "Pair again", "Volver a vincular")                                 \
     /* The server address. */                                                                      \
     X(SKIFF_TEXT_SERVER_PROMPT, 0,                                                                 \

@@ -41,8 +41,8 @@
 #define SKIFF_APP_PLATFORM_SLUG "psp"
 
 /* What the view holds; the PSP renderer draws it in the area between header and footer. Twelve
- * body lines (one emphasised: 11 of 13 pixels and one of 26) take 169 of its 228 pixels: room for
- * the pairing screen beside its QR code, with a network error under it. */
+ * body lines of 13 pixels take 156 of its 228: room for the pairing screen beside its QR code,
+ * with a network error under it. */
 #define SKIFF_APP_LINES_MAX 12
 #define SKIFF_APP_ROWS_MAX 12
 #define SKIFF_APP_HINTS_MAX 5
@@ -124,10 +124,9 @@ typedef struct skiff_app_view {
     /* Right of the title: a count, or a short message. */
     char status[SKIFF_APP_TITLE_MAX];
     /* Body text, each line within SKIFF_APP_TEXT_WIDTH (SKIFF_APP_QR_TEXT_WIDTH beside a QR code);
-     * the emphasised one (-1 for none) is drawn large, as the pairing code is. */
+     * an empty one separates blocks. */
     size_t line_count;
     char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
-    int emphasis_line;
     /* A QR code to draw in the body's top right corner, within SKIFF_APP_QR_WIDTH (the pairing
      * address); NULL for none. Points into the app, valid until its next update. */
     const skiff_ui_qr *qr;

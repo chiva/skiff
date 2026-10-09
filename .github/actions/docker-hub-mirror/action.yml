@@ -1,0 +1,19 @@
+name: Docker Hub mirror
+description: >-
+  Pull Docker Hub images through Google's mirror (mirror.gcr.io), which serves the same digests.
+  GitHub's shared runners hit Docker Hub's anonymous pull limit (429 Too Many Requests); the daemon
+  falls back to Docker Hub itself when the mirror fails. Image names, pins and Renovate are unchanged.
+runs:
+  using: composite
+  steps:
+    - name: Add the mirror to the Docker daemon
+      shell: bash
+      run: |
+        config=/etc/docker/daemon.json
+        current='{}'
+        if [[ -s "$config" ]]; then
+          current="$(sudo cat "$config")"
+        fi
+        jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' <<<"$current" | sudo tee "$config" >/dev/null
+        sudo systemctl restart docker
+        docker info --format '{{json .RegistryConfig.Mirrors}}'

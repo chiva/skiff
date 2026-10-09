@@ -46,6 +46,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-mirror
       - run: scripts/dev.sh ${{ matrix.check.command }}
       - if: matrix.check.command == 'coverage'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -66,6 +67,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-mirror
       - run: scripts/dev.sh ${{ matrix.preset }}
       # The release zip and its contents check (EBOOT, cacert.pem, licences), on every PR rather than
       # first at release time.
@@ -91,7 +93,13 @@ jobs:
         with:
           name: eboot-psp
           path: build/psp/pbp/
+      - uses: ./.github/actions/docker-hub-mirror
+      # Its own BuildKit, which reads registry mirrors from here rather than from the daemon.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       # Compiling PPSSPP takes ~15 minutes; the GHA layer cache makes every run after the first
       # (until docker/ppsspp.Dockerfile changes) a cache hit.
       - name: Build PPSSPPHeadless image
@@ -158,10 +166,14 @@ jobs:
     name: Integration server (RomM behind TLS)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      # Compose's pulls skip the daemon's mirror: scripts/dev.sh names the mirror for them.
+      SKIFF_REGISTRY_MIRROR: mirror.gcr.io
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-mirror
       - run: scripts/dev.sh romm-up romm-check romm-test
       - name: Show the server logs
         if: failure()

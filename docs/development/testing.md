@@ -107,6 +107,10 @@ the PSP's network checks:
 There is one test RomM per machine, since the ports are fixed. The commands refuse to touch one
 that another checkout (a parallel worktree) started.
 
+With `SKIFF_REGISTRY_MIRROR` set (CI sets `mirror.gcr.io`), the server's Docker Hub images are
+pulled from that mirror, same tags and digests, through `build/integration/compose.mirror.yaml`:
+Docker Hub limits anonymous pulls, which GitHub's shared runners reach.
+
 `romm-check` (CI runs it on every PR) checks:
 
 - plain HTTP and HTTPS reach RomM, at the version pinned in `compose.yaml`;

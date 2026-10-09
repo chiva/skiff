@@ -86,6 +86,11 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   (`skiff_psp_net_online()`: switch, access point) and whether a suspend happened, so an attempt
   ends soon after instead of at the 30 s stall timeout. Recovery waits for the switch, rejoins the
   profile (or reloads the network modules if that fails) and starts a new transport.
+- **Name lookups** are bounded: curl on the PSP has no resolver thread and runs without signals,
+  so its own lookup cannot time out (a 0.2.0 request waited 4.5 minutes). Every PSP transport
+  looks names up through `skiff_psp_net_resolve()` (5 s per try, 2 more tries) and hands curl the
+  address (`CURLOPT_RESOLVE`), kept until a request fails. The screen's requests also end after
+  60 s in all; downloads have only the stall timeout.
 - **Retry policy** (`src/jobs/runner.c`): an error a reconnect cannot fix (a RomM refusal, a full
   Memory Stick, a checksum mismatch) fails the job at once. With the Wi-Fi switch off the runner
   waits for it however long it takes, and that never counts against the job. Any other network

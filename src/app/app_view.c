@@ -6,8 +6,6 @@
 #include "app_internal.h"
 
 #define APP_TITLE "Skiff"
-/* The blank lines on the pairing screen: before the approval line and before the code. */
-#define PAIR_GAPS 2
 
 /* ---- Text ---- */
 
@@ -123,18 +121,11 @@ size_t skiff_app_wrap(const char *text, float width, skiff_ui_measure_fn measure
 
 /* ---- Building the view ---- */
 
-/* Wraps text onto the view's lines while it has fewer than limit (at most SKIFF_APP_LINES_MAX). */
-static void add_wrapped_upto(skiff_app *app, const char *text, float width, size_t limit) {
-    skiff_app_view *view = &app->view;
-    if (view->line_count >= limit) {
-        return;
-    }
-    view->line_count += skiff_app_wrap(text, width, app->env.measure, app->env.ctx,
-                                       &view->lines[view->line_count], limit - view->line_count);
-}
-
 static void add_wrapped_within(skiff_app *app, const char *text, float width) {
-    add_wrapped_upto(app, text, width, SKIFF_APP_LINES_MAX);
+    skiff_app_view *view = &app->view;
+    view->line_count +=
+        skiff_app_wrap(text, width, app->env.measure, app->env.ctx, &view->lines[view->line_count],
+                       SKIFF_APP_LINES_MAX - view->line_count);
 }
 
 /* The lines text takes at width. */
@@ -161,19 +152,35 @@ static void add_formatted(skiff_app *app, skiff_text_id id, const char *const *a
     add_wrapped(app, text);
 }
 
-/* An address on lines of its own, while the view has fewer than limit: whole when it fits, else
- * broken before its query ('?') so the pairing code in it stays on one line, else wrapped wherever
- * it must. */
-static void add_url_upto(skiff_app *app, const char *url, float width, size_t limit) {
+/* Where an address breaks: before its query ('?') when it does not fit one line, so the pairing
+ * code in it stays whole; NULL when it is wrapped as it comes. */
+static const char *url_break(const skiff_app *app, const char *url, float width) {
     const char *query = strchr(url, '?');
-    if (query == NULL || app->env.measure(app->env.ctx, url) <= width) {
-        add_wrapped_upto(app, url, width, limit);
+    return query != NULL && app->env.measure(app->env.ctx, url) > width ? query : NULL;
+}
+
+/* The lines add_url() gives an address. */
+static size_t url_lines(const skiff_app *app, const char *url, float width) {
+    const char *query = url_break(app, url, width);
+    if (query == NULL) {
+        return wrapped_lines(app, url, width);
+    }
+    char path[SKIFF_ROMM_URL_MAX];
+    snprintf(path, sizeof path, "%.*s", (int)(query - url), url);
+    return wrapped_lines(app, path, width) + wrapped_lines(app, query, width);
+}
+
+/* An address on lines of its own, broken as url_break() says. */
+static void add_url(skiff_app *app, const char *url, float width) {
+    const char *query = url_break(app, url, width);
+    if (query == NULL) {
+        add_wrapped_within(app, url, width);
         return;
     }
     char path[SKIFF_ROMM_URL_MAX];
     snprintf(path, sizeof path, "%.*s", (int)(query - url), url);
-    add_wrapped_upto(app, path, width, limit);
-    add_wrapped_upto(app, query, width, limit);
+    add_wrapped_within(app, path, width);
+    add_wrapped_within(app, query, width);
 }
 
 /* An empty line between blocks of text. */
@@ -281,18 +288,32 @@ static void pair_view(skiff_app *app) {
             (void)skiff_error_line(app->config.language, pairing->last_error, error, sizeof error);
         }
         const char *approve = app_text(app, SKIFF_TEXT_PAIR_APPROVE);
-        /* The address takes what the lines under it and their two gaps leave, so a long one cannot
-         * push the code or an error off the screen. */
-        const size_t below = wrapped_lines(app, approve, width) + wrapped_lines(app, code, width) +
-                             (error[0] != '\0' ? wrapped_lines(app, error, width) : 0) + PAIR_GAPS;
-        /* With the code in it: RomM 5.3.1's page has no field to type the code into. */
-        add_url_upto(app, pairing->pairing.verification_url_complete, width,
-                     SKIFF_APP_LINES_MAX > below ? SKIFF_APP_LINES_MAX - below : 0);
-        add_gap(app);
+        /* With the code in it: RomM 5.3.1's page has no field to type the code into, so without a
+         * QR code this address is the only way to pair and it always goes whole, then the approval
+         * and the code. A poll's error, then the two gaps, take what room is left (the longest
+         * address, 511 characters, still leaves the approval and the code theirs). */
+        const char *url = pairing->pairing.verification_url_complete;
+        const size_t needed = view->line_count + url_lines(app, url, width) +
+                              wrapped_lines(app, approve, width) + wrapped_lines(app, code, width);
+        size_t room = SKIFF_APP_LINES_MAX > needed ? SKIFF_APP_LINES_MAX - needed : 0;
+        const size_t error_lines = error[0] != '\0' ? wrapped_lines(app, error, width) : 0;
+        const int show_error = error_lines > 0 && error_lines <= room;
+        if (show_error) {
+            room -= error_lines;
+        }
+        add_url(app, url, width);
+        if (room > 0) {
+            add_gap(app);
+            room--;
+        }
         add_wrapped_within(app, approve, width);
-        add_gap(app);
+        if (room > 0) {
+            add_gap(app);
+        }
         add_wrapped_within(app, code, width);
-        add_wrapped_within(app, error, width);
+        if (show_error) {
+            add_wrapped_within(app, error, width);
+        }
     } else if (pairing->ended == SKIFF_ERR_ROMM_PAIRING_DENIED) {
         add_text(app, SKIFF_TEXT_PAIR_DENIED);
     } else if (pairing->ended == SKIFF_ERR_ROMM_PAIRING_EXPIRED) {

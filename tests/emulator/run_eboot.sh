@@ -24,7 +24,7 @@ readonly STDOUT_PREFIX_PATTERN='^[A-Z] stdout: '
 # PPSSPP logs this before any of the EBOOT's code runs. PPSSPPHeadless occasionally dies during its
 # own kernel start-up (seen on amd64 CI runners); a run without this line never reached our code.
 readonly KERNEL_READY_LINE='Kernel initialized.'
-readonly MAX_ATTEMPTS=2
+readonly MAX_ATTEMPTS=3
 
 if [[ ! "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "error: timeout must be a positive number of seconds, got '$TIMEOUT_SECONDS'" >&2

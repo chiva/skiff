@@ -18,7 +18,7 @@
 /*
  * The emulator smoke test (skiff_app_smoke, never packaged): PPSSPPHeadless has no ARK, no
  * config.ini and nobody at the buttons, so the app must come up on the screen asking for the server
- * address and draw it. It quits by itself then, as it would on START.
+ * address and draw it. It quits by itself then, as it would on HOME → Quit.
  */
 #define SMOKE_OK_MARKER "SKIFF APP SMOKE OK"
 #define SMOKE_FAIL_MARKER "SKIFF APP SMOKE FAIL"

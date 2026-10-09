@@ -58,6 +58,8 @@ typedef struct fake_env {
     int join_polls;
     skiff_err net_start_error;
     skiff_err net_poll_error;
+    /* Joins that fail (SKIFF_ERR_NET_WIFI_JOIN) before they work. */
+    int join_failures;
     int net_starts;
     int started_profile;
     skiff_err tls_error;
@@ -112,6 +114,10 @@ static skiff_err env_net_poll(void *ctx, int *joined) {
     fake_env *e = ctx;
     if (e->net_poll_error != SKIFF_OK) {
         return e->net_poll_error;
+    }
+    if (e->join_failures > 0) {
+        e->join_failures--;
+        return SKIFF_ERR_NET_WIFI_JOIN;
     }
     *joined = e->join_polls-- <= 0;
     return SKIFF_OK;
@@ -814,6 +820,9 @@ static void test_the_wifi_switch_and_a_failed_join(void) {
     frame(0);
     TEST_ASSERT_EQUAL_INT(3, env_state.started_profile);
     run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_PRINTF("shown after the first join and %d more: %d joins", SKIFF_APP_JOIN_RETRIES,
+                env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(1 + SKIFF_APP_JOIN_RETRIES, env_state.net_starts);
     TEST_ASSERT_TRUE(shows("[110]"));
     TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_MENU, english(SKIFF_TEXT_CHOOSE_NETWORK)));
     TEST_PRINTF("retry joins the same connection; the picker is the other choice");
@@ -824,6 +833,20 @@ static void test_the_wifi_switch_and_a_failed_join(void) {
     skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, NULL);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_EQUAL_INT(PICKED_PROFILE, env_state.spec.profile);
+}
+
+static void test_a_refused_join_is_tried_again_before_the_player_sees_it(void) {
+    TEST_PRINTF("about a third of joins fail once on a PSP-1000 (J1, A1); the next one works");
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(1);
+    env_state.join_failures = SKIFF_APP_JOIN_RETRIES;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("joins: %d", env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(1 + SKIFF_APP_JOIN_RETRIES, env_state.net_starts);
+    char log[TEXT_MAX];
+    read_app_file(SKIFF_APP_LOG_FILE_NAME, log, sizeof log);
+    TEST_ASSERT_NOT_NULL(strstr(log, "trying again (2 of 2)"));
 }
 
 /* ---- Browsing ---- */
@@ -1628,8 +1651,10 @@ static void test_bad_arguments_and_locks(void) {
     TEST_ASSERT_FALSE(skiff_app_quit_requested(NULL));
     TEST_ASSERT_NULL(skiff_app_log(NULL));
     skiff_app_dialog_done(NULL, SKIFF_APP_DIALOG_ACCEPTED, "x");
+    TEST_PRINTF("START does not quit: HOME -> Quit (the platform) is the way out");
     frame(SKIFF_UI_ACTION_START);
-    TEST_ASSERT_TRUE(skiff_app_quit_requested(app));
+    TEST_ASSERT_FALSE(skiff_app_quit_requested(app));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_QUIT)));
 }
 
 int main(void) {
@@ -1647,6 +1672,7 @@ int main(void) {
     RUN_TEST(test_a_bad_config_names_its_line_and_quits);
     RUN_TEST(test_without_ark_tls_refuses_and_says_why);
     RUN_TEST(test_the_wifi_switch_and_a_failed_join);
+    RUN_TEST(test_a_refused_join_is_tried_again_before_the_player_sees_it);
     RUN_TEST(test_pages_load_as_the_player_scrolls);
     RUN_TEST(test_a_library_without_psp_games_says_so);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);

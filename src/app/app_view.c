@@ -254,7 +254,6 @@ static void server_view(skiff_app *app) {
     add_text(app, SKIFF_TEXT_SERVER_PROMPT);
     add_text(app, SKIFF_TEXT_SERVER_NONE);
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_EDIT);
-    add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_QUIT);
 }
 
 static void pair_view(skiff_app *app) {
@@ -330,7 +329,6 @@ static void pair_view(skiff_app *app) {
         add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
     }
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
-    add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_QUIT);
 }
 
 static void library_view(skiff_app *app) {
@@ -375,7 +373,6 @@ static void library_view(skiff_app *app) {
     }
     add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
-    add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_QUIT);
 }
 
 static void details_view(skiff_app *app) {
@@ -555,7 +552,6 @@ static void settings_view(skiff_app *app) {
     view->row_count = 2;
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
-    add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_QUIT);
 }
 
 static skiff_text_id action_label(app_message_action action) {

@@ -185,6 +185,12 @@ static skiff_err net_poll(void *ctx, int *joined) {
     }
     give_network(platform);
     *joined = result == SKIFF_OK;
+    if (result != SKIFF_OK) {
+        skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+                        "join: %s 0x%08X",
+                        platform->net.failed_call != NULL ? platform->net.failed_call : "-",
+                        (unsigned)platform->net.sce_result);
+    }
     return result;
 }
 

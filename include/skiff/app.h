@@ -63,6 +63,15 @@
 #define SKIFF_APP_QR_GAP 8.0f
 #define SKIFF_APP_QR_TEXT_WIDTH (SKIFF_APP_TEXT_WIDTH - SKIFF_APP_QR_WIDTH - SKIFF_APP_QR_GAP)
 
+/* Frames the starting screen is drawn before startup's blocking work (the first free-space query
+ * takes 3 s on a 64 GB Memory Stick): with one, a PSP-1000 kept a half-drawn frame on screen. */
+#define SKIFF_APP_STARTING_FRAMES 3
+/* A Wi-Fi join the access point refused is tried this many more times, SKIFF_APP_JOIN_RETRY_MS
+ * apart, before the player sees the error: on a PSP-1000 about a third of joins failed once and a
+ * later one worked (hardware rows J1 and A1). */
+#define SKIFF_APP_JOIN_RETRIES 2
+#define SKIFF_APP_JOIN_RETRY_MS 1000
+
 /* ROM pages kept in memory while browsing: the one on screen and its neighbours. */
 #define SKIFF_APP_CACHED_PAGES 3
 /* How long a short message ("Added to downloads") stays in the header. */

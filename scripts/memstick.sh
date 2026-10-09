@@ -352,6 +352,8 @@ install_eboots() {
     echo "installed ${TARGETS[$i]} -> PSP/GAME/${FOLDERS[$i]}"
   done
   install_app_config
+  # Again: macOS can leave "._" files beside the CA bundle and config.ini written just above.
+  remove_macos_metadata "$APP_FOLDER"
   install_probe_configs
   sync
   echo "Eject the Memory Stick, then run each Skiff entry from Game > Memory Stick."

@@ -171,8 +171,24 @@ run_host_in_romm_network() {
   docker run --rm --network "$COMPOSE_NETWORK" "${SOURCE_MOUNTS[@]}" -w /src "$HOST_IMAGE" bash -c "$1"
 }
 
+# SKIFF_REGISTRY_MIRROR (CI sets mirror.gcr.io): the test RomM's Docker Hub images are pulled from
+# that mirror instead, same tags and digests, through an override file made from compose.yaml.
+# Compose's pulls ignore the daemon's registry-mirrors, and Docker Hub limits anonymous pulls.
+readonly MIRROR_OVERRIDE="$INTEGRATION_DIR/compose.mirror.yaml"
+
 compose() {
-  docker compose --progress quiet -f "$COMPOSE_FILE" --env-file "$REPO_ROOT/$INTEGRATION_DIR/romm.env" "$@"
+  local files=(-f "$COMPOSE_FILE")
+  local env_file="$REPO_ROOT/$INTEGRATION_DIR/romm.env"
+  if [[ -n "${SKIFF_REGISTRY_MIRROR:-}" ]]; then
+    # JSON is YAML: each service's image with the mirror in front of its Docker Hub name.
+    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" config --format json |
+      jq --arg mirror "$SKIFF_REGISTRY_MIRROR" '{services: (.services | map_values(
+        select(.image != null) | {image: (.image | if test("^[^/]+[.:][^/]*/") then .
+          elif test("/") then "\($mirror)/\(.)" else "\($mirror)/library/\(.)" end)}))}' \
+        >"$REPO_ROOT/$MIRROR_OVERRIDE"
+    files+=(-f "$REPO_ROOT/$MIRROR_OVERRIDE")
+  fi
+  docker compose --progress quiet "${files[@]}" --env-file "$env_file" "$@"
 }
 
 random_hex() {

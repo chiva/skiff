@@ -1,7 +1,8 @@
-# 6. Secure connections and client certificates (mTLS)
+# 5. Secure connections and client certificates (mTLS)
 
 > [!NOTE]
-> **Coming in the first release.** The server-side setup below works today. You can prepare it now.
+> Connecting needs Skiff **0.2.0** or newer. The server-side setup below does not depend on the
+> PSP: you can prepare it now.
 
 This page is optional. Read it if your RomM server uses HTTPS, especially if it is reachable from
 the internet.

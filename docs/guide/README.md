@@ -13,5 +13,4 @@ do if it did not.
 When something goes wrong: [Troubleshooting](troubleshooting.md) · [FAQ](faq.md)
 
 > [!NOTE]
-> Skiff is in early development. Pages 1–3 work today. Pages 4 and 5 describe the first release
-> and are marked where a feature is not available yet.
+> Skiff is in early development. Connecting to RomM (pages 4 and 5) needs Skiff 0.2.0 or newer.

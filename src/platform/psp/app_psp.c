@@ -19,14 +19,10 @@
 #define BYTES_PER_KB 1024U
 /* sceWlanGetSwitchState() with the switch off (pspwlan.h names no value). */
 #define WLAN_SWITCH_OFF 0
-/* The pairing code, drawn large. */
-#define EMPHASIS_SIZE 1.2f
 
 enum {
     LINE_HEIGHT = SKIFF_PSP_UI_ROW_HEIGHT,
-    EMPHASIS_HEIGHT = 26,
     LINE_BASELINE = 10,
-    EMPHASIS_BASELINE = 22,
     BLOCK_GAP = 4,
     PROGRESS_HEIGHT = 8,
 };
@@ -438,12 +434,9 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
     }
     int y = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
     for (size_t i = 0; i < view->line_count; i++) {
-        const int emphasis = (int)i == view->emphasis_line;
-        skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN,
-                          y + (emphasis ? EMPHASIS_BASELINE : LINE_BASELINE),
-                          emphasis ? EMPHASIS_SIZE : SKIFF_PSP_UI_TEXT_SIZE,
+        skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, y + LINE_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
                           SKIFF_PSP_UI_COLOUR_TEXT, view->lines[i]);
-        y += emphasis ? EMPHASIS_HEIGHT : LINE_HEIGHT;
+        y += LINE_HEIGHT;
     }
     if (view->has_progress) {
         y += BLOCK_GAP;

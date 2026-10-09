@@ -338,7 +338,7 @@ static void print_view(void) {
     const skiff_app_view *v = view();
     TEST_PRINTF("[%s] %s | %s", screen_name(v->screen), v->title, v->status);
     for (size_t i = 0; i < v->line_count; i++) {
-        TEST_PRINTF("  %s%s", (int)i == v->emphasis_line ? "*" : " ", v->lines[i]);
+        TEST_PRINTF("   %s", v->lines[i]);
     }
     for (size_t i = 0; i < v->row_count; i++) {
         TEST_PRINTF("  %c %s | %s%s", v->list.first + i == v->list.selected ? '>' : ' ',
@@ -534,8 +534,9 @@ static void test_a_first_launch_asks_for_the_server_then_pairs(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_DIALOG_NETWORK, view()->dialog);
     skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, NULL);
     run_until(SKIFF_APP_SCREEN_PAIR);
-    TEST_ASSERT_TRUE(view()->emphasis_line >= 0);
-    TEST_ASSERT_EQUAL_STRING(USER_CODE, view()->lines[view()->emphasis_line]);
+    TEST_PRINTF("the code in small text, to check against RomM's page; the wait in the header");
+    TEST_ASSERT_TRUE(shows("Code " USER_CODE ", expires in 10 min"));
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_PAIR_WAITING), view()->status);
     TEST_PRINTF("the address carries the code (RomM's page has no field to type it into), broken "
                 "before it so the code stays whole");
     TEST_ASSERT_TRUE(shows(SERVER "/pair/device"));
@@ -545,12 +546,9 @@ static void test_a_first_launch_asks_for_the_server_then_pairs(void) {
     TEST_ASSERT_TRUE(view()->qr->size > 0);
     TEST_ASSERT_TRUE(shows("Scan the QR code"));
     for (size_t i = 0; i < view()->line_count; i++) {
-        if ((int)i != view()->emphasis_line) {
-            TEST_ASSERT_TRUE_MESSAGE(env_measure(NULL, view()->lines[i]) <= SKIFF_APP_QR_TEXT_WIDTH,
-                                     view()->lines[i]);
-        }
+        TEST_ASSERT_TRUE_MESSAGE(env_measure(NULL, view()->lines[i]) <= SKIFF_APP_QR_TEXT_WIDTH,
+                                 view()->lines[i]);
     }
-    TEST_ASSERT_TRUE(shows("10 min"));
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
     TEST_PRINTF("config.ini:\n%s", config);
@@ -606,6 +604,19 @@ static void test_a_slow_down_waits_five_seconds_more(void) {
     TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
     wait_ms(200);
     TEST_ASSERT_EQUAL_size_t(requests + 1, transport.request_count);
+}
+
+static void test_the_first_free_space_query_is_made_while_starting(void) {
+    TEST_PRINTF("the first query counts the whole Memory Stick (2.6 s on a PSP): made at startup, "
+                "not when a screen that shows free space first opens");
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_PRINTF("free space queries before any screen showed it: %d", storage.free_space_queries);
+    TEST_ASSERT_EQUAL_INT(1, storage.free_space_queries);
 }
 
 static void test_a_denied_or_expired_pairing_offers_a_new_code(void) {
@@ -1565,6 +1576,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
     RUN_TEST(test_a_slow_down_waits_five_seconds_more);
+    RUN_TEST(test_the_first_free_space_query_is_made_while_starting);
     RUN_TEST(test_a_denied_or_expired_pairing_offers_a_new_code);
     RUN_TEST(test_an_address_too_long_for_a_qr_code_is_shown_as_text_only);
     RUN_TEST(test_a_code_that_runs_out_on_the_psp_ends_the_pairing);

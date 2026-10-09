@@ -165,6 +165,14 @@ static void add_url_within(skiff_app *app, const char *url, float width) {
     add_wrapped_within(app, query, width);
 }
 
+/* An empty line between blocks of text. */
+static void add_gap(skiff_app *app) {
+    skiff_app_view *view = &app->view;
+    if (view->line_count > 0 && view->line_count < SKIFF_APP_LINES_MAX) {
+        view->lines[view->line_count++][0] = '\0';
+    }
+}
+
 static void add_error_within(skiff_app *app, skiff_err err, float width) {
     char text[SKIFF_TEXT_MAX];
     (void)skiff_error_line(app->config.language, err, text, sizeof text);
@@ -244,17 +252,14 @@ static void pair_view(skiff_app *app) {
         const int has_qr = pairing->qr.size > 0;
         const float width = has_qr ? SKIFF_APP_QR_TEXT_WIDTH : SKIFF_APP_TEXT_WIDTH;
         view->qr = has_qr ? &pairing->qr : NULL;
+        set_status(app, app_text(app, SKIFF_TEXT_PAIR_WAITING));
         add_text_within(
             app, has_qr ? SKIFF_TEXT_PAIR_INSTRUCTIONS_QR : SKIFF_TEXT_PAIR_INSTRUCTIONS, width);
         /* With the code in it: RomM 5.3.1's page has no field to type the code into. */
         add_url_within(app, pairing->pairing.verification_url_complete, width);
+        add_gap(app);
         add_text_within(app, SKIFF_TEXT_PAIR_APPROVE, width);
-        if (view->line_count < SKIFF_APP_LINES_MAX) {
-            view->emphasis_line = (int)view->line_count;
-            snprintf(view->lines[view->line_count], SKIFF_TEXT_MAX, "%s",
-                     pairing->pairing.user_code);
-            view->line_count++;
-        }
+        add_gap(app);
         const int64_t left_ms = pairing->started_ms +
                                 (int64_t)pairing->pairing.expires_in_s * APP_MS_PER_S -
                                 app_now(app);
@@ -263,9 +268,10 @@ static void pair_view(skiff_app *app) {
                                      sizeof left) != SKIFF_OK) {
             left[0] = '\0';
         }
-        const char *args[] = {left};
-        add_formatted_within(app, SKIFF_TEXT_PAIR_EXPIRES, args, 1, width);
-        add_text_within(app, SKIFF_TEXT_PAIR_WAITING, width);
+        /* Small: the address carries it. RomM's page shows it too, so the player can check they
+         * approve this PSP. */
+        const char *args[] = {pairing->pairing.user_code, left};
+        add_formatted_within(app, SKIFF_TEXT_PAIR_CODE, args, 2, width);
         if (pairing->last_error != SKIFF_OK) {
             add_error_within(app, pairing->last_error, width);
         }
@@ -562,7 +568,6 @@ void app_view_build(skiff_app *app) {
     skiff_app_view *view = &app->view;
     memset(view, 0, sizeof *view);
     view->screen = app->screen;
-    view->emphasis_line = -1;
     switch (app->screen) {
     case SKIFF_APP_SCREEN_STARTING:
         set_title(app, APP_TITLE);

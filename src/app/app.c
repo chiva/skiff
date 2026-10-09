@@ -24,13 +24,26 @@ void app_unlock_manifest(skiff_app *app) {
     }
 }
 
+/* The free space of the Skiff folder's device, for the screens that show it. The first query after
+ * a launch counts the whole Memory Stick (2.6 s on a 64 GB one, hardware row A1); later ones are
+ * quick, so start() makes it while the starting screen is up, not in the middle of browsing. */
+static void refresh_free_space(skiff_app *app) {
+    const int64_t started_ms = app_now(app);
+    const skiff_err err =
+        skiff_storage_free_space(app->config.storage, app->config.roots.app, &app->free_bytes);
+    app->free_known = err == SKIFF_OK;
+    skiff_log_write(app->log, SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                    "free space: %llu MiB in %lld ms: %s (%d)",
+                    (unsigned long long)(app->free_known ? app->free_bytes / APP_BYTES_PER_MIB : 0),
+                    (long long)(app_now(app) - started_ms), skiff_err_name(err), (int)err);
+}
+
 void app_set_screen(skiff_app *app, skiff_app_screen screen) {
     app->screen = screen;
     app->announced = 0;
     app->dirty = 1;
     if (screen == SKIFF_APP_SCREEN_DETAILS || screen == SKIFF_APP_SCREEN_SETTINGS) {
-        app->free_known = skiff_storage_free_space(app->config.storage, app->config.roots.app,
-                                                   &app->free_bytes) == SKIFF_OK;
+        refresh_free_space(app);
     }
 }
 
@@ -321,6 +334,7 @@ static void start(skiff_app *app) {
                         app->settings.first_unknown.section, app->settings.first_unknown.key);
     }
     register_secrets(app);
+    refresh_free_space(app);
     app->profile = app->settings.network_profile;
     err = start_queue(app);
     if (err == SKIFF_OK) {

@@ -12,6 +12,7 @@
 #define APP_LOG_FILE "app:/" SKIFF_APP_LOG_FILE_NAME
 #define APP_MANIFEST_FILE "app:/" SKIFF_INSTALL_MANIFEST_NAME
 #define APP_MS_PER_S 1000
+#define APP_BYTES_PER_MIB (1024ULL * 1024ULL)
 /* What the keyboard starts with when there is no address yet. */
 #define APP_URL_PREFILL "https://"
 

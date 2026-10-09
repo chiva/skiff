@@ -40,7 +40,6 @@ static void refresh_free_space(skiff_app *app) {
 
 void app_set_screen(skiff_app *app, skiff_app_screen screen) {
     app->screen = screen;
-    app->announced = 0;
     app->dirty = 1;
     if (screen == SKIFF_APP_SCREEN_DETAILS || screen == SKIFF_APP_SCREEN_SETTINGS) {
         refresh_free_space(app);
@@ -416,9 +415,9 @@ int app_stop_worker(skiff_app *app) {
 skiff_err app_reset_server(skiff_app *app) {
     skiff_jobs_destroy(app->jobs);
     app->jobs = NULL;
-    skiff_romm_client_clear(&app->romm);
-    skiff_transport_destroy(app->transport);
-    app->transport = NULL;
+    /* What a running request brings back belongs to the old server. */
+    app_call_abandon(app);
+    app_drop_client(app);
     app->has_server = 0;
     app->has_platform = 0;
     app->total_known = 0;
@@ -437,7 +436,8 @@ static int env_valid(const skiff_app_env *env) {
     return env->now_ms != NULL && env->measure != NULL && env->switch_on != NULL &&
            env->net_start != NULL && env->net_poll != NULL && env->net_profile != NULL &&
            env->net_profile_name != NULL && env->tls_start != NULL && env->open_transport != NULL &&
-           env->random != NULL && env->start_worker != NULL && env->stop_worker != NULL;
+           env->random != NULL && env->start_worker != NULL && env->stop_worker != NULL &&
+           env->call_start != NULL && env->call_done != NULL && env->call_cancel != NULL;
 }
 
 static int locks_valid(const skiff_app_config *config) {
@@ -492,6 +492,7 @@ void skiff_app_destroy(skiff_app *app) {
         return;
     }
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
+    skiff_romm_pairing_clear(&app->call.pairing, &app->call.pairing_result);
     skiff_romm_client_clear(&app->romm);
     skiff_romm_client_clear(&app->worker_romm);
     skiff_transport_destroy(app->transport);
@@ -631,6 +632,7 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
         actions = 0;
     }
     take_events(app);
+    app_call_update(app);
     if (app->note[0] != '\0' && app_now(app) >= app->note_until_ms) {
         app->note[0] = '\0';
         app->dirty = 1;

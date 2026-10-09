@@ -71,6 +71,17 @@ typedef struct fake_env {
     skiff_err stop_error;
     skiff_err start_error;
     skiff_app_worker_spec spec;
+    /* The browsing thread: a call runs when the app first asks whether it is done, unless held
+     * (a request that takes long); call_start_error refuses to start one. */
+    skiff_app_call_fn call_fn;
+    void *call_arg;
+    int call_pending;
+    int hold_calls;
+    /* The call runs inside call_start(), as a thread that finishes before it returns would. */
+    int run_at_start;
+    int calls_started;
+    int cancels;
+    skiff_err call_start_error;
 } fake_env;
 
 static char dir[TEMP_DIR_PATH_MAX];
@@ -176,6 +187,34 @@ static skiff_err env_stop_worker(void *ctx) {
     return e->stop_error;
 }
 
+static skiff_err env_call_start(void *ctx, skiff_app_call_fn fn, void *arg) {
+    fake_env *e = ctx;
+    TEST_ASSERT_FALSE_MESSAGE(e->call_pending, "a call started while another ran");
+    if (e->call_start_error != SKIFF_OK) {
+        return e->call_start_error;
+    }
+    e->call_fn = fn;
+    e->call_arg = arg;
+    e->call_pending = 1;
+    e->calls_started++;
+    if (e->run_at_start) {
+        fn(arg);
+        e->call_pending = 0;
+    }
+    return SKIFF_OK;
+}
+
+static int env_call_done(void *ctx) {
+    fake_env *e = ctx;
+    if (e->call_pending && !e->hold_calls) {
+        e->call_fn(e->call_arg);
+        e->call_pending = 0;
+    }
+    return !e->call_pending;
+}
+
+static void env_call_cancel(void *ctx) { ((fake_env *)ctx)->cancels++; }
+
 static skiff_app_env make_env(void) {
     const skiff_app_env env = {
         .ctx = &env_state,
@@ -191,6 +230,9 @@ static skiff_app_env make_env(void) {
         .random = env_random,
         .start_worker = env_start_worker,
         .stop_worker = env_stop_worker,
+        .call_start = env_call_start,
+        .call_done = env_call_done,
+        .call_cancel = env_call_cancel,
     };
     return env;
 }
@@ -359,7 +401,7 @@ static void run_until(skiff_app_screen screen) {
         const int pairing_settled = screen != SKIFF_APP_SCREEN_PAIR || app->pairing.active ||
                                     app->pairing.ended != SKIFF_OK;
         if (view()->screen == screen && view()->dialog == SKIFF_APP_DIALOG_NONE &&
-            app->request == REQUEST_NONE && !app->announced && pairing_settled) {
+            app->request == REQUEST_NONE && !app_call_busy(app) && pairing_settled) {
             print_view();
             return;
         }
@@ -411,6 +453,14 @@ static void wait_ms(int64_t ms) {
     while (env_state.now_ms < until) {
         frame(0);
     }
+}
+
+/* Frames until the request a frame started has come back and been applied. */
+static void finish_call(void) {
+    for (int i = 0; i < FRAMES_MAX && app_call_busy(app); i++) {
+        frame(0);
+    }
+    TEST_ASSERT_FALSE(app_call_busy(app));
 }
 
 static void open_details(unsigned id) {
@@ -601,6 +651,7 @@ static void test_a_slow_down_waits_five_seconds_more(void) {
     create_app();
     run_until(SKIFF_APP_SCREEN_PAIR);
     wait_ms(5000);
+    finish_call();
     TEST_ASSERT_EQUAL_INT(1, slow->uses);
     TEST_ASSERT_EQUAL_UINT32(10, app->pairing.pairing.interval_s);
     const size_t requests = transport.request_count;
@@ -1304,6 +1355,178 @@ static void test_a_failed_page_can_be_retried(void) {
     TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
 }
 
+/* ---- Requests off the screen's thread ---- */
+
+static void test_the_library_answers_while_a_page_loads(void) {
+    open_paired_library(30);
+    serve_page(25, 5, 30);
+    env_state.hold_calls = 1;
+    const int calls = env_state.calls_started;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_PRINTF("the second page's request is held: the screen still moves");
+    const size_t selected = view()->list.selected;
+    frame(SKIFF_UI_ACTION_UP);
+    TEST_ASSERT_EQUAL_size_t(selected - 1, view()->list.selected);
+    TEST_ASSERT_EQUAL_INT(calls + 1, env_state.calls_started);
+    TEST_PRINTF("Settings opens, but changing the server waits for the request");
+    frame(SKIFF_UI_ACTION_MENU);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_DIALOG_NONE, view()->dialog);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    env_state.hold_calls = 0;
+    finish_call();
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Game 30"));
+    TEST_ASSERT_EQUAL_INT(0, env_state.cancels);
+}
+
+static void test_leaving_a_game_while_it_loads_drops_its_details(void) {
+    open_paired_library(2);
+    serve_rom(1);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_LIBRARY_LOADING)));
+    TEST_PRINTF("Back while the game loads: its request is told to stop, the library is back");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_PRINTF("the answer that came anyway is dropped");
+    TEST_ASSERT_FALSE(app->has_rom);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(2);
+    TEST_ASSERT_TRUE(shows("Game 2.iso"));
+}
+
+static void test_a_lost_connection_under_a_dropped_request_still_counts(void) {
+    open_paired_library(2);
+    fake_route *lost = serve_raw("/api/roms/1", JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_NOT_NULL(app->transport);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_PRINTF("the connection is given up and the Wi-Fi joined again before the next request");
+    TEST_ASSERT_NULL(app->transport);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_DOWN);
+    serve_rom(2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_TRUE(shows("Game 2.iso"));
+}
+
+static void test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen(void) {
+    open_paired_library(80);
+    serve_page(25, 25, 80);
+    serve_page(50, 25, 80);
+    serve_page(75, 5, 80);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, app->call.kind);
+    TEST_ASSERT_EQUAL_UINT64(1, app->call.page_index);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    TEST_PRINTF("page 2 waits for page 1's request; then the player goes back to the top");
+    TEST_ASSERT_EQUAL_INT(REQUEST_PAGE, app->request);
+    TEST_ASSERT_EQUAL_UINT64(2, app->request_page);
+    for (int i = 0; i < 6; i++) {
+        frame(SKIFF_UI_ACTION_PAGE_UP);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, view()->list.first);
+    const size_t requests = transport.request_count;
+    env_state.hold_calls = 0;
+    finish_call();
+    wait_ms(500);
+    TEST_PRINTF("%zu request(s) after page 1's: page 2 is no longer on screen",
+                transport.request_count - requests - 1);
+    TEST_ASSERT_EQUAL_size_t(requests + 1, transport.request_count);
+    TEST_ASSERT_FALSE(app_call_busy(app));
+}
+
+static void test_a_new_server_drops_what_the_old_one_was_still_sending(void) {
+    open_paired_library(30);
+    serve_page(25, 5, 30);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, app->call.kind);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_reset_server(app));
+    TEST_PRINTF("reset under a running page request: the request is dropped, the client after it");
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    TEST_ASSERT_NOT_NULL(app->transport);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_ASSERT_NULL(app->transport);
+    for (size_t i = 0; i < SKIFF_APP_CACHED_PAGES; i++) {
+        TEST_ASSERT_FALSE(app->pages[i].valid);
+    }
+}
+
+static void test_a_request_done_before_its_start_returns_keeps_its_error(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_raw("/api/heartbeat", "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    env_state.run_at_start = 1;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows(skiff_error_text(SKIFF_LANGUAGE_ENGLISH, SKIFF_ERR_ROMM_SERVER)));
+}
+
+static void test_a_request_that_cannot_start_shows_why(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    env_state.call_start_error = SKIFF_ERR_NO_MEMORY;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows(skiff_error_text(SKIFF_LANGUAGE_ENGLISH, SKIFF_ERR_NO_MEMORY)));
+    TEST_ASSERT_EQUAL_INT(0, env_state.calls_started);
+    TEST_ASSERT_FALSE(app_call_busy(app));
+}
+
+static void test_leaving_a_pairing_drops_its_poll_and_wipes_its_codes(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_TOKEN, "romm/device-token.http"));
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    env_state.hold_calls = 1;
+    wait_ms(5000);
+    TEST_ASSERT_EQUAL_INT(CALL_PAIRING_POLL, app->call.kind);
+    TEST_PRINTF("Settings during the poll: the pairing ends and its answer is not used");
+    frame(SKIFF_UI_ACTION_MENU);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_ASSERT_EQUAL_STRING("", app->call.pairing.device_code);
+    TEST_ASSERT_EQUAL_STRING("", app->call.pairing_result.token);
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NULL(strstr(config, "token"));
+}
+
 static void test_a_lost_network_is_joined_again_before_retrying(void) {
     open_paired_library(30);
     char path[256];
@@ -1712,6 +1935,9 @@ static void test_bad_arguments_and_locks(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
     TEST_ASSERT_NULL(other);
     env = make_env();
+    env.call_cancel = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
+    env = make_env();
     int mutexes[4];
     config.lock = count_lock;
     config.unlock = no_unlock;
@@ -1774,6 +2000,14 @@ int main(void) {
     RUN_TEST(test_an_address_without_a_scheme_is_refused);
     RUN_TEST(test_a_new_server_cancels_the_old_downloads);
     RUN_TEST(test_a_failed_page_can_be_retried);
+    RUN_TEST(test_the_library_answers_while_a_page_loads);
+    RUN_TEST(test_leaving_a_game_while_it_loads_drops_its_details);
+    RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);
+    RUN_TEST(test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen);
+    RUN_TEST(test_a_new_server_drops_what_the_old_one_was_still_sending);
+    RUN_TEST(test_a_request_done_before_its_start_returns_keeps_its_error);
+    RUN_TEST(test_a_request_that_cannot_start_shows_why);
+    RUN_TEST(test_leaving_a_pairing_drops_its_poll_and_wipes_its_codes);
     RUN_TEST(test_a_lost_network_is_joined_again_before_retrying);
     RUN_TEST(test_cancelling_pair_again_returns_to_the_library);
     RUN_TEST(test_a_server_change_that_cannot_be_saved_keeps_the_old_server);

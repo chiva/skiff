@@ -54,6 +54,14 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   while it keeps drawing; the worker's blocking `skiff_psp_net_connect()` is a loop over the same
   two calls. The profile to join is the one the network picker last connected through, found by
   its name (`skiff_psp_net_connected_profile()`; with two profiles of the same name, the first).
+- **Browsing thread**: runs the app's requests to RomM (connection check, platform, library pages,
+  a game's details, pairing), one at a time (`src/platform/psp/call_psp.h`), so a slow network
+  never freezes the screen. The app copies a request's inputs into its call before it starts and
+  reads the results once the UI sees it done (`src/app/app_call.c`); the thread touches nothing
+  else but the browse client, which is not replaced while a call runs. Leaving what a request was
+  for (Back from a game's details, a pairing given up) drops its result and asks its transfer to
+  stop. Settings that would replace the client (a new server, pairing again) wait for the call.
+  It starts with the first request, at the worker's priority, with a 32 KB stack.
 - **Worker thread**: runs one job at a time (download, save sync) from a persistent queue
   (`include/skiff/jobs.h`, `skiff_jobs_run_one()`), and posts progress and results to the UI as
   events: a small ring of state and recovery events, oldest dropped if the UI falls behind, and
@@ -123,10 +131,11 @@ screen and Settings, plus an error or notice screen and a confirmation. The plat
 buttons, draws the view the app describes (text already fitted and wrapped), runs the system
 dialogs and the network, and reaches it through `skiff_app_env`.
 
-- **One blocking step per frame, announced first.** Requests to RomM run on the UI thread, since a
-  second thread's stack would come out of the ~84 KB left once the worker runs; each is made on the
-  frame after the one that showed what is being waited for ("Contacting RomM..."). Joining the
-  Wi-Fi (7 to 13 s) is polled instead.
+- **Nothing blocks a frame on the network.** Requests to RomM run on the browsing thread (see
+  [Threads](#threads-power-and-suspend)) and joining the Wi-Fi (7 to 13 s) is polled, so the
+  screen keeps answering: the library scrolls while a page loads, and Back leaves a game whose
+  details are still on their way. The browsing thread became affordable once the worker's stack
+  shrank from 64 to 32 KB (0.2.0 measured 12 KB used).
 - **The Wi-Fi connection** is picked once with the system's network picker and saved as
   `[network] profile`; later launches join it without asking, and a failed join offers the picker
   again. The network stays up until Skiff quits.

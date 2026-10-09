@@ -25,6 +25,10 @@
 /* Frames drawn on the first screen before the run counts as up, and frames allowed to get there. */
 #define SMOKE_FRAMES_SHOWN 60
 #define SMOKE_FRAMES_MAX 1800
+/* The browsing thread's check: how often to ask whether a call is done or cancelled, and for how
+ * long at most (2 s). */
+#define SMOKE_POLL_US (10LL * 1000)
+#define SMOKE_POLLS_MAX 200
 
 typedef struct smoke {
     skiff_psp_report report;
@@ -56,6 +60,55 @@ static void smoke_frame(smoke *s, const skiff_app_view *view) {
         skiff_psp_report_line_offscreen(&s->report, line);
         s->done = 1;
     }
+}
+
+/* A call that counts that it ran. */
+static void smoke_count(void *arg) { (*(int *)arg)++; }
+
+/* A call that runs until it is cancelled, as a transfer's stop hook would see. */
+typedef struct smoke_wait {
+    const skiff_psp_caller *caller;
+    int saw_cancel;
+} smoke_wait;
+
+static void smoke_wait_for_cancel(void *arg) {
+    smoke_wait *wait = arg;
+    for (int i = 0; i < SMOKE_POLLS_MAX && !skiff_psp_caller_cancelled(wait->caller); i++) {
+        sceKernelDelayThread((SceUInt)SMOKE_POLL_US);
+    }
+    wait->saw_cancel = skiff_psp_caller_cancelled(wait->caller);
+}
+
+static int smoke_wait_done(const skiff_app_env *env) {
+    for (int i = 0; i < SMOKE_POLLS_MAX; i++) {
+        if (env->call_done(env->ctx)) {
+            return 1;
+        }
+        sceKernelDelayThread((SceUInt)SMOKE_POLL_US);
+    }
+    return 0;
+}
+
+/* The browsing thread through the hooks the app uses: a call runs, and a cancelled one stops. */
+static int smoke_calls(smoke *s, skiff_psp_app *platform) {
+    const skiff_app_env env = skiff_psp_app_env(platform);
+    int ran = 0;
+    skiff_err err = env.call_start(env.ctx, smoke_count, &ran);
+    const int counted = err == SKIFF_OK && smoke_wait_done(&env) && ran == 1;
+    smoke_wait wait = {&platform->caller, 0};
+    if (err == SKIFF_OK) {
+        err = env.call_start(env.ctx, smoke_wait_for_cancel, &wait);
+    }
+    if (err == SKIFF_OK) {
+        env.call_cancel(env.ctx);
+    }
+    const int cancelled = err == SKIFF_OK && smoke_wait_done(&env) && wait.saw_cancel;
+    char line[SKIFF_TEXT_MAX];
+    snprintf(line, sizeof line, "browse thread: call %s, cancel %s: %s (%d)",
+             counted ? "ran" : "FAILED", cancelled ? "stopped it" : "FAILED", skiff_err_name(err),
+             (int)err);
+    skiff_psp_report_line_offscreen(&s->report, line);
+    return counted && cancelled;
 }
 #endif
 
@@ -118,6 +171,11 @@ int main(int argc, char *argv[]) {
 #endif
     }
 
+#ifdef SKIFF_APP_SMOKE
+    if (s.ok) {
+        s.ok = smoke_calls(&s, &platform);
+    }
+#endif
     const int released = skiff_psp_app_finish(&platform);
 #ifdef SKIFF_APP_SMOKE
     pspDebugScreenInit();

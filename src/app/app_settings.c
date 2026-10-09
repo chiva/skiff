@@ -28,7 +28,8 @@ void app_settings_update(skiff_app *app, unsigned actions) {
     if (skiff_ui_list_apply(&app->settings_list, actions)) {
         app->dirty = 1;
     }
-    if (!(actions & SKIFF_UI_ACTION_CONFIRM)) {
+    /* A new server or pairing replaces the browse client: not under a running request. */
+    if (!(actions & SKIFF_UI_ACTION_CONFIRM) || app_call_busy(app)) {
         return;
     }
     if (app->settings_list.selected == SETTINGS_SERVER) {

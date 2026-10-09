@@ -52,6 +52,7 @@ set_target_properties(
 add_library(
   skiff_core STATIC
   src/app/app.c
+  src/app/app_call.c
   src/app/app_connect.c
   src/app/app_library.c
   src/app/app_queue.c

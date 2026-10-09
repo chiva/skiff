@@ -16,6 +16,14 @@ void app_network_failed(skiff_app *app, skiff_err err) {
     }
     /* A connection kept from before is likely dead too. */
     app->net_joined = 0;
+    app_drop_client(app);
+}
+
+void app_drop_client(skiff_app *app) {
+    if (app_call_busy(app)) {
+        app->call.drop_client = 1;
+        return;
+    }
     skiff_romm_client_clear(&app->romm);
     skiff_transport_destroy(app->transport);
     app->transport = NULL;
@@ -185,11 +193,9 @@ static int notice_needed(const skiff_app *app) {
     return strcmp(seen, app->settings.romm_notice) != 0;
 }
 
-static void heartbeat(skiff_app *app) {
-    skiff_err err = app_ensure_client(app);
-    if (err == SKIFF_OK) {
-        err = skiff_romm_heartbeat(&app->romm, &app->server);
-    }
+void app_heartbeat_done(skiff_app *app) {
+    const skiff_err err = app->call.err;
+    app->server = app->call.server;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "RomM %s: %s (%d)", app->server.version, skiff_err_name(err), (int)err);
     if (err == SKIFF_ERR_ROMM_UNSUPPORTED_VERSION) {
@@ -214,11 +220,9 @@ static void heartbeat(skiff_app *app) {
     }
 }
 
-static void find_platform(skiff_app *app) {
-    skiff_err err = app_ensure_client(app);
-    if (err == SKIFF_OK) {
-        err = skiff_romm_find_platform(&app->romm, SKIFF_APP_PLATFORM_SLUG, &app->platform);
-    }
+void app_platform_done(skiff_app *app) {
+    skiff_err err = app->call.err;
+    app->platform = app->call.platform;
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG, "platform %s: %s (%d)",
                     SKIFF_APP_PLATFORM_SLUG, skiff_err_name(err), (int)err);
     if (err != SKIFF_OK && err != SKIFF_ERR_ROMM_NOT_FOUND) {
@@ -264,22 +268,13 @@ void app_connect_update(skiff_app *app, unsigned actions) {
             app->tls_started = 1;
         }
         app->connect = CONNECT_HEARTBEAT;
-        app->announced = 0;
         app->dirty = 1;
         return;
     case CONNECT_HEARTBEAT:
     case CONNECT_PLATFORM:
-        /* A request blocks this thread: show what is coming first. */
-        if (!app->announced) {
-            app->announced = 1;
-            app->dirty = 1;
-            return;
-        }
-        app->announced = 0;
-        if (app->connect == CONNECT_HEARTBEAT) {
-            heartbeat(app);
-        } else {
-            find_platform(app);
+        /* The step's request runs off this thread; its result moves the walk on. */
+        if (!app_call_busy(app)) {
+            app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT : CALL_PLATFORM);
         }
         return;
     case CONNECT_PAIRING:
@@ -287,7 +282,6 @@ void app_connect_update(skiff_app *app, unsigned actions) {
             app_pair_begin(app);
         } else {
             app->connect = CONNECT_PLATFORM;
-            app->announced = 0;
             app->dirty = 1;
         }
         return;
@@ -301,6 +295,10 @@ void app_connect_update(skiff_app *app, unsigned actions) {
 
 void app_pair_begin(skiff_app *app) {
     app->pairing_requested = 0;
+    /* A request of the pairing this replaces must not land in the new one. */
+    if (app->call.kind == CALL_PAIRING_START || app->call.kind == CALL_PAIRING_POLL) {
+        app_call_abandon(app);
+    }
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
     memset(&app->pairing, 0, sizeof app->pairing);
     app_set_screen(app, SKIFF_APP_SCREEN_PAIR);
@@ -324,13 +322,21 @@ static skiff_err ensure_device_identifier(skiff_app *app) {
 }
 
 static void start_pairing(skiff_app *app) {
-    skiff_err err = ensure_device_identifier(app);
-    if (err == SKIFF_OK) {
-        err = app_ensure_client(app);
+    const skiff_err err = ensure_device_identifier(app);
+    if (err != SKIFF_OK) {
+        app_show_error(app, err, NULL, MESSAGE_NEW_PAIRING, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
+                       SKIFF_APP_SCREEN_PAIR);
+        return;
     }
+    snprintf(app->call.device_identifier, sizeof app->call.device_identifier, "%s",
+             app->settings.device_identifier);
+    app_call_start(app, CALL_PAIRING_START);
+}
+
+void app_pairing_started(skiff_app *app) {
+    const skiff_err err = app->call.err;
     if (err == SKIFF_OK) {
-        err = skiff_romm_pairing_start(&app->romm, app->settings.device_identifier,
-                                       &app->pairing.pairing);
+        app->pairing.pairing = app->call.pairing;
     }
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "pairing start: %s (%d), expires in %u s, poll every %u s", skiff_err_name(err),
@@ -349,7 +355,6 @@ static void start_pairing(skiff_app *app) {
                     "pairing address as a QR code: %d modules a side: %s (%d)",
                     app->pairing.qr.size, skiff_err_name(qr), (int)qr);
     const int64_t now = app_now(app);
-    app->announced = 0;
     app->pairing.active = 1;
     app->pairing.started_ms = now;
     app->pairing.next_poll_ms = now + (int64_t)app->pairing.pairing.interval_s * APP_MS_PER_S;
@@ -357,6 +362,9 @@ static void start_pairing(skiff_app *app) {
 }
 
 static void end_pairing(skiff_app *app, skiff_err err) {
+    if (app->call.kind == CALL_PAIRING_START || app->call.kind == CALL_PAIRING_POLL) {
+        app_call_abandon(app);
+    }
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
     app->pairing.qr.size = 0;
     app->pairing.active = 0;
@@ -418,17 +426,25 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     app_connect_begin(app, CONNECT_PLATFORM);
 }
 
-static void poll_pairing(skiff_app *app, int64_t now) {
-    skiff_romm_pairing_result result;
-    memset(&result, 0, sizeof result);
-    const skiff_err err = skiff_romm_pairing_poll(&app->romm, &app->pairing.pairing, &result);
+static void poll_pairing(skiff_app *app) {
+    app->call.pairing = app->pairing.pairing;
+    memset(&app->call.pairing_result, 0, sizeof app->call.pairing_result);
+    app_call_start(app, CALL_PAIRING_POLL);
+}
+
+void app_pairing_polled(skiff_app *app) {
+    const int64_t now = app_now(app);
+    const skiff_err err = app->call.err;
+    skiff_romm_pairing_result *result = &app->call.pairing_result;
+    /* A poll may lengthen the interval (slow_down). */
+    app->pairing.pairing.interval_s = app->call.pairing.interval_s;
     if (err == SKIFF_ERR_ROMM_PAIRING_DENIED || err == SKIFF_ERR_ROMM_PAIRING_EXPIRED ||
         err == SKIFF_ERR_ROMM_PAIRING_SCOPES) {
         end_pairing(app, err);
         return;
     }
-    if (err == SKIFF_OK && result.state == SKIFF_ROMM_PAIRING_APPROVED) {
-        paired(app, &result);
+    if (err == SKIFF_OK && result->state == SKIFF_ROMM_PAIRING_APPROVED) {
+        paired(app, result);
         return;
     }
     /* Pending, slowed down, or a poll the network or RomM failed: try again after the interval,
@@ -458,12 +474,9 @@ void app_pair_update(skiff_app *app, unsigned actions) {
             }
             return;
         }
-        if (!app->announced) {
-            app->announced = 1;
-            app->dirty = 1;
-            return;
+        if (!app_call_busy(app)) {
+            start_pairing(app);
         }
-        start_pairing(app);
         return;
     }
     const int64_t now = app_now(app);
@@ -473,8 +486,8 @@ void app_pair_update(skiff_app *app, unsigned actions) {
         end_pairing(app, SKIFF_ERR_ROMM_PAIRING_EXPIRED);
         return;
     }
-    if (now >= app->pairing.next_poll_ms) {
-        poll_pairing(app, now);
+    if (now >= app->pairing.next_poll_ms && !app_call_busy(app)) {
+        poll_pairing(app);
         return;
     }
     /* The countdown changes once a second. */

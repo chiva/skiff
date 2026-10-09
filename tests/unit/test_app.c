@@ -77,6 +77,8 @@ typedef struct fake_env {
     void *call_arg;
     int call_pending;
     int hold_calls;
+    /* The call runs inside call_start(), as a thread that finishes before it returns would. */
+    int run_at_start;
     int calls_started;
     int cancels;
     skiff_err call_start_error;
@@ -195,6 +197,10 @@ static skiff_err env_call_start(void *ctx, skiff_app_call_fn fn, void *arg) {
     e->call_arg = arg;
     e->call_pending = 1;
     e->calls_started++;
+    if (e->run_at_start) {
+        fn(arg);
+        e->call_pending = 0;
+    }
     return SKIFF_OK;
 }
 
@@ -1477,6 +1483,15 @@ static void test_a_new_server_drops_what_the_old_one_was_still_sending(void) {
     }
 }
 
+static void test_a_request_done_before_its_start_returns_keeps_its_error(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_raw("/api/heartbeat", "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    env_state.run_at_start = 1;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows(skiff_error_text(SKIFF_LANGUAGE_ENGLISH, SKIFF_ERR_ROMM_SERVER)));
+}
+
 static void test_a_request_that_cannot_start_shows_why(void) {
     write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
     serve_heartbeat("5.3.1");
@@ -1990,6 +2005,7 @@ int main(void) {
     RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);
     RUN_TEST(test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen);
     RUN_TEST(test_a_new_server_drops_what_the_old_one_was_still_sending);
+    RUN_TEST(test_a_request_done_before_its_start_returns_keeps_its_error);
     RUN_TEST(test_a_request_that_cannot_start_shows_why);
     RUN_TEST(test_leaving_a_pairing_drops_its_poll_and_wipes_its_codes);
     RUN_TEST(test_a_lost_network_is_joined_again_before_retrying);

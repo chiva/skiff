@@ -16,17 +16,15 @@ static void run(void *arg) {
         call->err = skiff_romm_find_platform(call->romm, SKIFF_APP_PLATFORM_SLUG, &call->platform);
         break;
     case CALL_PAGE:
-        call->err =
-            skiff_romm_list_roms(call->romm, call->platform_id,
-                                 call->page_index * SKIFF_ROMM_PAGE_SIZE, SKIFF_ROMM_PAGE_SIZE,
-                                 &call->page);
+        call->err = skiff_romm_list_roms(call->romm, call->platform_id,
+                                         call->page_index * SKIFF_ROMM_PAGE_SIZE,
+                                         SKIFF_ROMM_PAGE_SIZE, &call->page);
         break;
     case CALL_ROM:
         call->err = skiff_romm_get_rom(call->romm, call->rom_id, &call->rom);
         break;
     case CALL_PAIRING_START:
-        call->err =
-            skiff_romm_pairing_start(call->romm, call->device_identifier, &call->pairing);
+        call->err = skiff_romm_pairing_start(call->romm, call->device_identifier, &call->pairing);
         break;
     case CALL_PAIRING_POLL:
         call->err = skiff_romm_pairing_poll(call->romm, &call->pairing, &call->pairing_result);
@@ -46,15 +44,19 @@ void app_call_start(skiff_app *app, app_call_kind kind) {
     call->kind = kind;
     call->abandoned = 0;
     call->failed_to_start = 0;
-    call->err = app_ensure_client(app);
-    if (call->err == SKIFF_OK) {
-        call->romm = &app->romm;
-        call->err = app->env.call_start(app->env.ctx, run, call);
+    call->err = SKIFF_OK;
+    call->romm = &app->romm;
+    /* Kept apart from call->err: once started, the thread may write that before call_start()
+     * returns. */
+    skiff_err launch = app_ensure_client(app);
+    if (launch == SKIFF_OK) {
+        launch = app->env.call_start(app->env.ctx, run, call);
     }
-    if (call->err != SKIFF_OK) {
+    if (launch != SKIFF_OK) {
+        call->err = launch;
         call->failed_to_start = 1;
-        skiff_log_write(app->log, SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG, "call %d: %s (%d)",
-                        (int)kind, skiff_err_name(call->err), (int)call->err);
+        skiff_log_write(app->log, SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG, "call %d: %s (%d)", (int)kind,
+                        skiff_err_name(launch), (int)launch);
     }
     app->dirty = 1;
 }
@@ -98,8 +100,7 @@ static void apply(skiff_app *app, app_call_kind kind) {
 
 void app_call_update(skiff_app *app) {
     app_call *call = &app->call;
-    if (!app_call_busy(app) ||
-        (!call->failed_to_start && !app->env.call_done(app->env.ctx))) {
+    if (!app_call_busy(app) || (!call->failed_to_start && !app->env.call_done(app->env.ctx))) {
         return;
     }
     const app_call_kind kind = call->kind;

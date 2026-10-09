@@ -280,12 +280,29 @@ from the XMB through ARK's ISO loader and read its whole pattern file back.
 RomM 5.3.1's pairing page reads the code only from its address (`/pair/device?user_code=`): it
 has no field to type the code into, so Skiff shows the address with the code in it.
 
+### A real RomM, with the browsing thread
+
+2026-10-10, the same PSP-1000: `main` after #65–#67, unzipped over 0.2.0 as a player updates,
+against the maintainer's own RomM 5.3.1 over public HTTPS with the bundled `cacert.pem` (no
+`ca_file`), `[log] level = debug`. Browsing, scrolling past loaded rows, Back from a game still
+loading, a download, all as expected.
+
+| Item | Value |
+|---|---|
+| Time between frames while browsing | mean 16 ms, longest 16 ms, in every 10 s window with requests |
+| Library page request (25 ROMs, 150–171 KB of JSON) | 395–691 ms; the first request on a new connection 2.3 s |
+| Name lookup (`skiff_psp_net_resolve()`) | 4–11 ms |
+| System memory with the worker and the browsing thread | 84 KB free (largest block 80 KB) |
+| Browsing thread stack used | 9,328 of 32,768 bytes |
+| Worker stack used | 12,424 of 32,768 bytes |
+| Frames still over 100 ms | 3.2 s at launch (the first free-space query); 467 ms while TLS starts; 116–233 ms around queueing a download |
+
 ## Open questions
 
-- **Stalls while browsing.** Two frames took 1.0 and 2.6 s in the seconds after library pages
-  arrived, though the requests took at most 438 ms: something after the request (parsing,
-  fitting the labels, drawing) is slow. `[log] level = debug` now logs where a slow frame's time
-  went.
+- ~~**Stalls while browsing.**~~ Answered: the 2.6 s frame was the first free-space query (now at
+  launch, #59), and requests to RomM now run on the browsing thread (#67): no frame over 16 ms
+  while browsing on 2026-10-10. Left: the launch's free-space query, TLS start (467 ms) and
+  queueing a download (up to 233 ms) still block a frame.
 - **Rejoin failures.** About a third of rejoins failed (0x80410106, 0x80410D16), after a suspend
   or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
   costs. Watch the app's logs.
@@ -295,6 +312,7 @@ has no field to type the code into, so Skiff shows the address with the code in 
   the screen frozen; the retry 24 minutes later took 1 s. The connect and stall timeouts (10 and
   30 s) cannot add up to that; curl's name lookup, which cannot time out on the PSP, can. Lookups
   now go through the firmware's resolver with a timeout, and `[log] level = debug` logs each
-  lookup's time (`resolve <host>: <ms> ms`), so the next occurrence names its cause.
+  lookup's time (`resolve <host>: <ms> ms`), so the next occurrence names its cause. Not seen again
+  on 2026-10-10 (lookups 4–11 ms).
 - **Other consoles.** No numbers yet for the PSP-2000, 3000 or Go (64 MB), or for other access
   points.

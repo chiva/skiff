@@ -57,7 +57,10 @@ De-risk, on a real PSP-1000, what an emulator cannot test, and settle the open d
 The numbers and the decisions they settle are in [Hardware findings](hardware-findings.md), with
 the questions carried into Phase 2.
 
-## Phase 2: First usable release (PSP games)
+## Phase 2: First usable release (PSP games) ✅
+
+Released as 0.2.0 (2026-10-09), checked on a PSP-1000 against a real RomM; requests to RomM run
+on their own thread since (#67).
 
 - Pairing with RomM, version check.
 - PSP library with installed status (manifest), game details.

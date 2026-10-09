@@ -661,6 +661,29 @@ static void test_an_address_too_long_for_a_qr_code_is_shown_as_text_only(void) {
     TEST_ASSERT_NULL(view()->qr);
     TEST_ASSERT_FALSE(shows("Scan the QR code"));
     TEST_ASSERT_TRUE(shows("user_code=" USER_CODE));
+    TEST_ASSERT_TRUE(shows("Code " USER_CODE));
+}
+
+static void test_the_longest_address_leaves_room_for_the_code_and_an_error(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    TEST_PRINTF("an address of about 470 characters: seven full-width lines on its own");
+    serve_raw(PATH_INIT, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n\r\n"
+                         "{\"device_code\":\"skiff-device-code\",\"user_code\":\"" USER_CODE "\","
+                         "\"verification_path\":\"/pair/device\",\"verification_path_complete\":"
+                         "\"/pair/device?user_code=" USER_CODE "&pad=" LONG_PAD LONG_PAD
+                         "\",\"expires_in\":600,\"interval\":5}");
+    fake_route *down = serve_raw(PATH_TOKEN, JSON_OK "{}");
+    down->fail_before_response = SKIFF_ERR_NET_CONNECT;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    wait_ms(5100);
+    print_view();
+    TEST_PRINTF("a failed poll adds an error: the address gives up lines, the code and error stay");
+    TEST_ASSERT_TRUE(view()->line_count <= SKIFF_APP_LINES_MAX);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_PAIR_APPROVE)));
+    TEST_ASSERT_TRUE(shows("Code " USER_CODE));
+    TEST_ASSERT_TRUE(shows("[102]"));
 }
 
 static void test_a_code_that_runs_out_on_the_psp_ends_the_pairing(void) {
@@ -1579,6 +1602,7 @@ int main(void) {
     RUN_TEST(test_the_first_free_space_query_is_made_while_starting);
     RUN_TEST(test_a_denied_or_expired_pairing_offers_a_new_code);
     RUN_TEST(test_an_address_too_long_for_a_qr_code_is_shown_as_text_only);
+    RUN_TEST(test_the_longest_address_leaves_room_for_the_code_and_an_error);
     RUN_TEST(test_a_code_that_runs_out_on_the_psp_ends_the_pairing);
     RUN_TEST(test_an_old_romm_is_refused);
     RUN_TEST(test_a_newer_romm_is_noticed_once);

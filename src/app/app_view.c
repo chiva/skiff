@@ -6,6 +6,8 @@
 #include "app_internal.h"
 
 #define APP_TITLE "Skiff"
+/* The blank lines on the pairing screen: before the approval line and before the code. */
+#define PAIR_GAPS 2
 
 /* ---- Text ---- */
 
@@ -121,11 +123,24 @@ size_t skiff_app_wrap(const char *text, float width, skiff_ui_measure_fn measure
 
 /* ---- Building the view ---- */
 
-static void add_wrapped_within(skiff_app *app, const char *text, float width) {
+/* Wraps text onto the view's lines while it has fewer than limit (at most SKIFF_APP_LINES_MAX). */
+static void add_wrapped_upto(skiff_app *app, const char *text, float width, size_t limit) {
     skiff_app_view *view = &app->view;
-    view->line_count +=
-        skiff_app_wrap(text, width, app->env.measure, app->env.ctx, &view->lines[view->line_count],
-                       SKIFF_APP_LINES_MAX - view->line_count);
+    if (view->line_count >= limit) {
+        return;
+    }
+    view->line_count += skiff_app_wrap(text, width, app->env.measure, app->env.ctx,
+                                       &view->lines[view->line_count], limit - view->line_count);
+}
+
+static void add_wrapped_within(skiff_app *app, const char *text, float width) {
+    add_wrapped_upto(app, text, width, SKIFF_APP_LINES_MAX);
+}
+
+/* The lines text takes at width. */
+static size_t wrapped_lines(const skiff_app *app, const char *text, float width) {
+    char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
+    return skiff_app_wrap(text, width, app->env.measure, app->env.ctx, lines, SKIFF_APP_LINES_MAX);
 }
 
 static void add_wrapped(skiff_app *app, const char *text) {
@@ -140,29 +155,25 @@ static void add_text(skiff_app *app, skiff_text_id id) {
     add_text_within(app, id, SKIFF_APP_TEXT_WIDTH);
 }
 
-static void add_formatted_within(skiff_app *app, skiff_text_id id, const char *const *args,
-                                 size_t count, float width) {
+static void add_formatted(skiff_app *app, skiff_text_id id, const char *const *args, size_t count) {
     char text[SKIFF_TEXT_MAX];
     app_format(app, id, args, count, text);
-    add_wrapped_within(app, text, width);
+    add_wrapped(app, text);
 }
 
-static void add_formatted(skiff_app *app, skiff_text_id id, const char *const *args, size_t count) {
-    add_formatted_within(app, id, args, count, SKIFF_APP_TEXT_WIDTH);
-}
-
-/* An address on lines of its own: whole when it fits, else broken before its query ('?') so the
- * pairing code in it stays on one line, else wrapped wherever it must. */
-static void add_url_within(skiff_app *app, const char *url, float width) {
+/* An address on lines of its own, while the view has fewer than limit: whole when it fits, else
+ * broken before its query ('?') so the pairing code in it stays on one line, else wrapped wherever
+ * it must. */
+static void add_url_upto(skiff_app *app, const char *url, float width, size_t limit) {
     const char *query = strchr(url, '?');
     if (query == NULL || app->env.measure(app->env.ctx, url) <= width) {
-        add_wrapped_within(app, url, width);
+        add_wrapped_upto(app, url, width, limit);
         return;
     }
     char path[SKIFF_ROMM_URL_MAX];
     snprintf(path, sizeof path, "%.*s", (int)(query - url), url);
-    add_wrapped_within(app, path, width);
-    add_wrapped_within(app, query, width);
+    add_wrapped_upto(app, path, width, limit);
+    add_wrapped_upto(app, query, width, limit);
 }
 
 /* An empty line between blocks of text. */
@@ -173,14 +184,10 @@ static void add_gap(skiff_app *app) {
     }
 }
 
-static void add_error_within(skiff_app *app, skiff_err err, float width) {
+static void add_error(skiff_app *app, skiff_err err) {
     char text[SKIFF_TEXT_MAX];
     (void)skiff_error_line(app->config.language, err, text, sizeof text);
-    add_wrapped_within(app, text, width);
-}
-
-static void add_error(skiff_app *app, skiff_err err) {
-    add_error_within(app, err, SKIFF_APP_TEXT_WIDTH);
+    add_wrapped(app, text);
 }
 
 static void add_hint(skiff_app *app, unsigned action, skiff_text_id label) {
@@ -255,11 +262,6 @@ static void pair_view(skiff_app *app) {
         set_status(app, app_text(app, SKIFF_TEXT_PAIR_WAITING));
         add_text_within(
             app, has_qr ? SKIFF_TEXT_PAIR_INSTRUCTIONS_QR : SKIFF_TEXT_PAIR_INSTRUCTIONS, width);
-        /* With the code in it: RomM 5.3.1's page has no field to type the code into. */
-        add_url_within(app, pairing->pairing.verification_url_complete, width);
-        add_gap(app);
-        add_text_within(app, SKIFF_TEXT_PAIR_APPROVE, width);
-        add_gap(app);
         const int64_t left_ms = pairing->started_ms +
                                 (int64_t)pairing->pairing.expires_in_s * APP_MS_PER_S -
                                 app_now(app);
@@ -271,10 +273,26 @@ static void pair_view(skiff_app *app) {
         /* Small: the address carries it. RomM's page shows it too, so the player can check they
          * approve this PSP. */
         const char *args[] = {pairing->pairing.user_code, left};
-        add_formatted_within(app, SKIFF_TEXT_PAIR_CODE, args, 2, width);
+        char code[SKIFF_TEXT_MAX];
+        app_format(app, SKIFF_TEXT_PAIR_CODE, args, 2, code);
+        char error[SKIFF_TEXT_MAX];
+        error[0] = '\0';
         if (pairing->last_error != SKIFF_OK) {
-            add_error_within(app, pairing->last_error, width);
+            (void)skiff_error_line(app->config.language, pairing->last_error, error, sizeof error);
         }
+        const char *approve = app_text(app, SKIFF_TEXT_PAIR_APPROVE);
+        /* The address takes what the lines under it and their two gaps leave, so a long one cannot
+         * push the code or an error off the screen. */
+        const size_t below = wrapped_lines(app, approve, width) + wrapped_lines(app, code, width) +
+                             (error[0] != '\0' ? wrapped_lines(app, error, width) : 0) + PAIR_GAPS;
+        /* With the code in it: RomM 5.3.1's page has no field to type the code into. */
+        add_url_upto(app, pairing->pairing.verification_url_complete, width,
+                     SKIFF_APP_LINES_MAX > below ? SKIFF_APP_LINES_MAX - below : 0);
+        add_gap(app);
+        add_wrapped_within(app, approve, width);
+        add_gap(app);
+        add_wrapped_within(app, code, width);
+        add_wrapped_within(app, error, width);
     } else if (pairing->ended == SKIFF_ERR_ROMM_PAIRING_DENIED) {
         add_text(app, SKIFF_TEXT_PAIR_DENIED);
     } else if (pairing->ended == SKIFF_ERR_ROMM_PAIRING_EXPIRED) {

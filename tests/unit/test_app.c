@@ -1618,6 +1618,29 @@ static void test_leaving_a_game_while_its_cover_loads_drops_the_cover(void) {
     TEST_ASSERT_LESS_OR_EQUAL_INT(1, cover->uses);
 }
 
+static void test_a_cover_that_lands_under_a_confirmation_is_kept(void) {
+    record_installed(1, body_crc);
+    open_paired_library(1);
+    serve_rom_with_cover(1, COVER_PATH(1));
+    serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_COVER, app->call.kind);
+    TEST_PRINTF("Download on an installed game asks to replace it while the cover loads");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_PRINTF("No: back on the game, with its cover");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+}
+
 static void test_a_cover_lost_with_the_network_shows_no_error(void) {
     open_paired_library(2);
     serve_rom_with_cover(1, COVER_PATH(1));
@@ -2237,6 +2260,7 @@ int main(void) {
     RUN_TEST(test_a_game_without_a_usable_cover_keeps_its_placeholder);
     RUN_TEST(test_long_names_beside_the_cover_leave_room_for_the_details);
     RUN_TEST(test_leaving_a_game_while_its_cover_loads_drops_the_cover);
+    RUN_TEST(test_a_cover_that_lands_under_a_confirmation_is_kept);
     RUN_TEST(test_a_cover_lost_with_the_network_shows_no_error);
     RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);
     RUN_TEST(test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen);

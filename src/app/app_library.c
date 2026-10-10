@@ -205,8 +205,10 @@ void app_cover_done(skiff_app *app) {
         app_network_failed(app, err);
         return;
     }
+    /* Kept while a confirmation or message covers the details screen, which it returns to; leaving
+     * the details abandons the call, so only another cover of the ROM can come back here. */
     const skiff_cover_key key = current_cover_key(app);
-    if (app->screen != SKIFF_APP_SCREEN_DETAILS || !same_cover(&call->cover_key, &key)) {
+    if (!same_cover(&call->cover_key, &key)) {
         return;
     }
     skiff_cover *shown = app->cover;

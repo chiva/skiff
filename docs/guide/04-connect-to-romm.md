@@ -66,6 +66,12 @@ installed. The games themselves stay on the Memory Stick.
   **Changed in RomM** means RomM now has a different file for that game.
 - Select a game to see its size and the free space on the Memory Stick, then choose **Download**.
   For a game already installed, Skiff asks before replacing your copy.
+- A game with cover art in RomM shows it beside its details, a moment after the text (0.5 to 0.8
+  seconds the first time). Skiff keeps the covers you have seen on the Memory Stick
+  (`PSP/GAME/Skiff/covers/`, at most about 4.5 MB), so they come back at once; delete that folder
+  to free the space. Covers come from RomM's own copy, which is a PNG for every cover RomM
+  downloads; artwork you uploaded to RomM as a JPEG or WebP shows as a grey box. The guide's
+  [troubleshooting](troubleshooting.md) codes 210 and 211 explain covers that do not show.
 - **Downloads** shows each download's progress, speed and time left. Downloads carry on while you
   browse. A failed download can be retried or cancelled, and **Clear finished** tidies the list.
 - Games go to the `ISO/` folder of the Memory Stick. Play them from Game → Memory Stick, like any

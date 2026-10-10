@@ -502,19 +502,24 @@ static unsigned read_input(skiff_psp_app *platform) {
     return skiff_ui_input_update(&platform->input, buttons);
 }
 
-/* The backlight-off time for downloading or not, logged when it changes. */
-static void update_backlight(skiff_psp_app *platform, int downloading) {
-    const int result = skiff_psp_backlight_update(&platform->backlight, downloading);
+/* A change of the backlight-off time (skiff_psp_backlight_update() or _restore()), logged. */
+static void log_backlight(skiff_psp_app *platform, int result) {
     if (result > 0) {
         skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
-                        "backlight: off after %d s %s (the player's: %d s)",
-                        platform->backlight.set_s, downloading ? "while downloading" : "again",
+                        "backlight: off after %d s (the player's: %d s)", platform->backlight.set_s,
                         platform->backlight.player_s);
     } else if (result < 0) {
         skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
                         "backlight: the firmware refused a new off time (0x%08x); left alone",
                         (unsigned)result);
     }
+}
+
+/* The system dialogs read the buttons themselves, past skiff_ui_wake_filter(): the press that lit
+ * the screen would reach them. While one is asked for or open, the player's time stays. */
+static int dialog_shown(const skiff_psp_app *platform, const skiff_app_view *view) {
+    return view->dialog != SKIFF_APP_DIALOG_NONE ||
+           (platform->dialog != NULL && platform->dialog->state == SKIFF_PSP_DIALOG_RUNNING);
 }
 
 /* ---- Drawing ---- */
@@ -708,8 +713,9 @@ const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform) {
     const unsigned actions = read_input(platform);
     const long long read = sceKernelGetSystemTimeWide();
     skiff_app_update(platform->app, actions);
-    update_backlight(platform, skiff_app_downloading(platform->app));
     const skiff_app_view *view = skiff_app_view_now(platform->app);
+    const int downloading = skiff_app_downloading(platform->app) && !dialog_shown(platform, view);
+    log_backlight(platform, skiff_psp_backlight_update(&platform->backlight, downloading));
     const long long updated = sceKernelGetSystemTimeWide();
     draw_frame(platform, view);
     stats->input_us = read - started;
@@ -744,7 +750,7 @@ void skiff_psp_app_close_dialog(skiff_psp_app *platform) {
 /* ---- Ending ---- */
 
 int skiff_psp_app_finish(skiff_psp_app *platform) {
-    update_backlight(platform, 0);
+    log_backlight(platform, skiff_psp_backlight_restore(&platform->backlight));
     skiff_psp_app_close_dialog(platform);
     if (platform->dialog_stuck) {
         return 0;

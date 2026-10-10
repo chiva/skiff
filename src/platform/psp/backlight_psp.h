@@ -11,7 +11,7 @@
  * row B4), so a crash leaves the short time only until then.
  */
 
-/* player_s when the firmware could not say, or refused a change: the backlight is left alone. */
+/* player_s when the firmware could not say: the backlight is left alone. */
 #define SKIFF_PSP_BACKLIGHT_UNKNOWN (-1)
 
 typedef struct skiff_psp_backlight {
@@ -19,6 +19,9 @@ typedef struct skiff_psp_backlight {
     int player_s;
     /* The off time in force: what Skiff set, or the player's. */
     int set_s;
+    /* The firmware refused a change: nothing more is changed, but the player's time is still put
+     * back at quit (skiff_psp_backlight_restore()). */
+    int refused;
 } skiff_psp_backlight;
 
 /* Reads the player's off time. */
@@ -26,10 +29,16 @@ void skiff_psp_backlight_start(skiff_psp_backlight *backlight);
 
 /*
  * Sets the off time for a download running or not, calling the firmware only when it changes:
- * 1 when it changed it, 0 when nothing was to change, or the firmware's negative error, after which
- * the backlight is left alone.
+ * 1 when it changed it, 0 when nothing was to change (or a change was refused before), or the
+ * firmware's negative error, after which nothing more is changed.
  */
 int skiff_psp_backlight_update(skiff_psp_backlight *backlight, int downloading);
+
+/*
+ * Puts the player's off time back if Skiff changed it, even after a refusal (at quit): 1 when it
+ * did, 0 when nothing was to put back, or the firmware's negative error.
+ */
+int skiff_psp_backlight_restore(skiff_psp_backlight *backlight);
 
 /* The off time in force in milliseconds, 0 when it is never or unknown. */
 uint32_t skiff_psp_backlight_off_ms(const skiff_psp_backlight *backlight);

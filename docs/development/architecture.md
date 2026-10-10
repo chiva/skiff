@@ -98,10 +98,13 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   when Skiff quits. A crash can leave the short time until the next power cycle, which brings the
   player's back ([hardware findings](hardware-findings.md#backlight)). The button that lights the
   screen again reaches Skiff too, so `skiff_ui_wake_filter()` holds back a press that comes after
-  the off time without one, until every button is up: X never confirms on a dark screen. A power
-  callback on the same thread as the HOME-menu callback counts suspends and resumes
-  (`src/platform/psp/lifecycle.c`): on resume the Wi-Fi connection is gone, so the job reconnects
-  and resumes from the `.part` file instead of failing.
+  the off time without one, until every button is up: X never confirms on a dark screen. The
+  system dialogs (keyboard, network picker) read the buttons themselves, past that filter, so while
+  one is open the player's time stays. A refused change leaves the time alone from then on, but
+  quitting still tries to put the player's back. A power callback on the same thread as the
+  HOME-menu callback counts suspends and resumes (`src/platform/psp/lifecycle.c`): on resume the
+  Wi-Fi connection is gone, so the job reconnects and resumes from the `.part` file instead of
+  failing.
 - The Wi-Fi switch and the HOME menu are ordinary interruptions with the same resume path. A
   download's stop hook asks the network layer whether the connection still stands
   (`skiff_psp_net_online()`: switch, access point) and whether a suspend happened, so an attempt

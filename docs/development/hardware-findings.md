@@ -199,7 +199,7 @@ what a user-mode program can change about that.
 
 | Question | Answer |
 |---|---|
-| Off times shorter than the XMB's 2 min (`sceImposeSetBacklightOffTime()`) | 30, 60 and 120 s all accepted and read back |
+| Off times down to 30 s, below the XMB's shortest (2 min) (`sceImposeSetBacklightOffTime()`) | 30, 60 and 120 s all accepted and read back |
 | 60 s and no input, on battery | the screen went dark after about a minute (X pressed at 66 s), with no dimmed step first |
 | The same on AC power | dark too (X at 64 s): the charger does not keep the backlight on |
 | The press that lights the screen again | reaches the program as an ordinary button press |

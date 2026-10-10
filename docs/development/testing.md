@@ -596,8 +596,10 @@ Corrupted Data in the XMB; only the launch check's images are real discs.
 admin who approves the pairing owns them): press SELECT and check the title says Favourites with 36
 games, scroll to the end (the second page loads as it comes on screen), open a favourite and press
 Back (back on the favourites, same row), then SELECT again (every game). On the favourites, press
-START and then Back while the header says "Checking favourites" (no error; on a LAN the check
-takes 0.5–1.3 s, so press Back straight away). Press START again and read the confirmation: 2
+START and then Back straight away, while the header says "Checking favourites" (no error). On a
+LAN the check takes 0.5–1.3 s and can end before Back lands; the unit tests cover Back during the
+check, so a confirmation coming up first is no failure (Back there queues nothing). Press START
+again and read the confirmation: 2
 can't be installed (the `.zip` and the BEL name; the long name downloads under a shortened name),
 34 to download, 64.3 MB in all; OK adds them ("Added 34 downloads"), in name order on the
 Downloads screen. Press START once more while they download: games already in Downloads are left

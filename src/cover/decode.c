@@ -22,18 +22,27 @@
 #define GREEN_SHIFT 5
 #define BLUE_SHIFT 11
 
-/* Area averaging into one output row at a time: each source pixel adds to the output pixel it
- * falls in, and the row is written once the source moves past it. */
+/*
+ * Area averaging (a box filter) into one output row at a time. Measured in units where a source
+ * pixel is width (or height) wide and an output pixel source_width (or source_height), each source
+ * pixel overlaps at most two output pixels per axis while scaling down; it adds to each in
+ * proportion to the overlap, so every output pixel weighs exactly source_width x source_height
+ * units of picture and averages keep their brightness at any ratio.
+ */
 typedef struct scaler {
     uint32_t source_width;
     uint32_t source_height;
     uint32_t width;
     uint32_t height;
-    /* The output row being gathered, and how many source rows have been added. */
+    /* Per source column: the first output column it overlaps, and the overlap there (the rest,
+     * width minus it, goes to the next column). */
+    uint16_t first_column[SKIFF_COVER_SOURCE_MAX];
+    uint16_t first_overlap[SKIFF_COVER_SOURCE_MAX];
+    /* One source row's colour per output column, weighted horizontally. */
+    uint32_t row_sums[SKIFF_COVER_WIDTH][RGB_CHANNELS];
+    /* The output row being gathered and the next one, weighted both ways. */
     uint32_t row;
-    uint32_t rows_added;
-    uint32_t sums[SKIFF_COVER_WIDTH][RGB_CHANNELS];
-    uint32_t counts[SKIFF_COVER_WIDTH];
+    uint32_t sums[2][SKIFF_COVER_WIDTH][RGB_CHANNELS];
 } scaler;
 
 /* Everything one decode owns, on the heap: the browsing thread's stack is 32 KB, and nothing the
@@ -79,45 +88,77 @@ static void fit(scaler *scale) {
     scale->height = scale->height == 0 ? 1 : scale->height;
 }
 
+/* Where each source column falls among the output columns (see scaler). */
+static void map_columns(scaler *scale) {
+    const uint64_t source_width = scale->source_width;
+    const uint64_t width = scale->width;
+    for (uint32_t x = 0; x < scale->source_width; x++) {
+        const uint64_t start = x * width;
+        const uint64_t column = start / source_width;
+        const uint64_t column_end = (column + 1) * source_width;
+        const uint64_t end = start + width;
+        scale->first_column[x] = (uint16_t)column;
+        scale->first_overlap[x] = (uint16_t)((end < column_end ? end : column_end) - start);
+    }
+}
+
 /* One colour channel drawn over the background with its alpha. */
 static uint32_t over_background(uint32_t channel, uint32_t alpha, uint32_t background) {
     return (channel * alpha + background * (CHANNEL_MAX - alpha) + CHANNEL_MAX / 2) / CHANNEL_MAX;
 }
 
+/* Writes the gathered row and starts the next one. */
 static void write_row(scaler *scale, skiff_cover *out) {
+    /* libpng refuses an empty picture, so the weight is never 0; the guard tells the analyzer. */
+    const uint32_t weight = scale->source_width * scale->source_height;
+    const uint32_t divisor = weight == 0 ? 1 : weight;
     uint16_t *pixels = out->pixels + (size_t)scale->row * SKIFF_COVER_WIDTH;
     for (uint32_t x = 0; x < scale->width; x++) {
-        const uint32_t count = scale->counts[x];
-        uint8_t channels[RGB_CHANNELS] = {0, 0, 0};
-        for (int c = 0; c < RGB_CHANNELS && count > 0; c++) {
-            channels[c] = (uint8_t)((scale->sums[x][c] + count / 2) / count);
+        uint8_t channels[RGB_CHANNELS];
+        for (int c = 0; c < RGB_CHANNELS; c++) {
+            channels[c] = (uint8_t)((scale->sums[0][x][c] + divisor / 2) / divisor);
         }
         pixels[x] = skiff_cover_rgb565(channels[0], channels[1], channels[2]);
     }
-    memset(scale->sums, 0, sizeof scale->sums);
-    memset(scale->counts, 0, sizeof scale->counts);
-    scale->rows_added = 0;
+    memcpy(scale->sums[0], scale->sums[1], sizeof scale->sums[0]);
+    memset(scale->sums[1], 0, sizeof scale->sums[1]);
+    scale->row++;
 }
 
-/* Adds source row y (8-bit RGBA) to the output row it falls in, writing out the one before. */
+/* Spreads source row y (8-bit RGBA) over the output columns, then over the output rows it
+ * overlaps, writing out each row the source has moved past. */
 static void add_row(scaler *scale, skiff_cover *out, uint32_t y, png_const_bytep rgba) {
     static const uint32_t BACKGROUND[RGB_CHANNELS] = {
         SKIFF_COVER_BACKGROUND_RED, SKIFF_COVER_BACKGROUND_GREEN, SKIFF_COVER_BACKGROUND_BLUE};
-    const uint32_t row = (uint32_t)((uint64_t)y * scale->height / scale->source_height);
-    if (row != scale->row && scale->rows_added > 0) {
+    memset(scale->row_sums, 0, sizeof scale->row_sums);
+    for (uint32_t x = 0; x < scale->source_width; x++) {
+        png_const_bytep pixel = rgba + (size_t)x * RGBA_CHANNELS;
+        const uint32_t column = scale->first_column[x];
+        const uint32_t overlap = scale->first_overlap[x];
+        const uint32_t rest = scale->width - overlap;
+        for (int c = 0; c < RGB_CHANNELS; c++) {
+            const uint32_t value = over_background(pixel[c], pixel[RGB_CHANNELS], BACKGROUND[c]);
+            scale->row_sums[column][c] += value * overlap;
+            if (rest > 0) {
+                scale->row_sums[column + 1][c] += value * rest;
+            }
+        }
+    }
+    const uint64_t start = (uint64_t)y * scale->height;
+    const uint32_t first_row = (uint32_t)(start / scale->source_height);
+    while (scale->row < first_row) {
         write_row(scale, out);
     }
-    scale->row = row;
-    for (uint32_t x = 0; x < scale->source_width; x++) {
-        const uint32_t column = (uint32_t)((uint64_t)x * scale->width / scale->source_width);
-        png_const_bytep pixel = rgba + (size_t)x * RGBA_CHANNELS;
-        const uint32_t alpha = pixel[RGB_CHANNELS];
+    const uint64_t row_end = (uint64_t)(first_row + 1) * scale->source_height;
+    const uint64_t end = start + scale->height;
+    const uint32_t overlap = (uint32_t)((end < row_end ? end : row_end) - start);
+    const uint32_t rest = scale->height - overlap;
+    for (uint32_t x = 0; x < scale->width; x++) {
         for (int c = 0; c < RGB_CHANNELS; c++) {
-            scale->sums[column][c] += over_background(pixel[c], alpha, BACKGROUND[c]);
+            scale->sums[0][x][c] += scale->row_sums[x][c] * overlap;
+            scale->sums[1][x][c] += scale->row_sums[x][c] * rest;
         }
-        scale->counts[column]++;
     }
-    scale->rows_added++;
 }
 
 /* ---- libpng ---- */
@@ -237,6 +278,7 @@ skiff_err skiff_cover_decode_png(const unsigned char *data, size_t size, skiff_c
         decode->scale.source_width = png_get_image_width(png, info);
         decode->scale.source_height = png_get_image_height(png, info);
         fit(&decode->scale);
+        map_columns(&decode->scale);
         request_rgba(png, info);
         read_rows(png, info, decode);
         out->width = (uint16_t)decode->scale.width;

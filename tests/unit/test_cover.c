@@ -100,6 +100,9 @@ static void stripes(uint32_t x, uint32_t y, png_byte rgba[4]) {
     rgba[3] = CHANNEL_MAX;
 }
 
+/* Black and white rows, one pixel high. */
+static void row_stripes(uint32_t x, uint32_t y, png_byte rgba[4]) { stripes(y, x, rgba); }
+
 /* Noise, so the PNG compresses about as badly as a photograph. */
 static void noise(uint32_t x, uint32_t y, png_byte rgba[4]) {
     const uint32_t mixed = (x * 2654435761U) ^ (y * 40503U);
@@ -362,6 +365,44 @@ static void test_scaling_averages_the_pixels_it_folds_together(void) {
     TEST_ASSERT_EQUAL_HEX16(0xFFFF, pixel_at(1, 1));
 }
 
+/* The mean of the cover's green channel (6 bits, the most precise one), in hundredths. */
+static uint32_t mean_green_x100(void) {
+    uint32_t total = 0;
+    for (uint32_t y = 0; y < cover->height; y++) {
+        for (uint32_t x = 0; x < cover->width; x++) {
+            total += (pixel_at(x, y) >> 5) & 0x3F;
+        }
+    }
+    const uint32_t count = (uint32_t)cover->width * cover->height;
+    return count == 0 ? 0 : total * 100U / count;
+}
+
+static void test_scaling_by_a_fraction_keeps_the_average_brightness(void) {
+    /* 240 -> 160 is 1.5 source pixels per output pixel: each output column takes one whole stripe
+     * and half of the next, so the columns run 85, 85, 170, 170 and average mid grey. */
+    const picture columns = rgb(SMALL_COVER_WIDTH, SMALL_COVER_HEIGHT, stripes);
+    make_png(&columns);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, decode());
+    const uint16_t dark = skiff_cover_rgb565(85, 85, 85);
+    const uint16_t light = skiff_cover_rgb565(170, 170, 170);
+    const uint16_t expected[] = {dark, dark, light, light, dark, dark, light, light};
+    for (uint32_t y = 0; y < cover->height; y += cover->height - 1) {
+        for (uint32_t x = 0; x < sizeof expected / sizeof expected[0]; x++) {
+            TEST_ASSERT_EQUAL_HEX16(expected[x], pixel_at(x, y));
+        }
+    }
+    uint32_t mean = mean_green_x100();
+    TEST_PRINTF("columns: mean green %u/100 of 63", mean);
+    TEST_ASSERT_UINT32_WITHIN(100, 3150, mean);
+    TEST_PRINTF("rows, 320 -> 213: an uneven ratio");
+    const picture rows = rgb(SMALL_COVER_WIDTH, SMALL_COVER_HEIGHT, row_stripes);
+    make_png(&rows);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, decode());
+    mean = mean_green_x100();
+    TEST_PRINTF("rows: mean green %u/100 of 63", mean);
+    TEST_ASSERT_UINT32_WITHIN(100, 3150, mean);
+}
+
 static void test_a_picture_too_large_is_refused(void) {
     picture spec = rgb(SKIFF_COVER_SOURCE_MAX + 1, 8, teal);
     make_png(&spec);
@@ -503,6 +544,7 @@ int main(void) {
     RUN_TEST(test_grey_pictures_become_grey_pixels);
     RUN_TEST(test_transparency_is_drawn_over_the_background);
     RUN_TEST(test_scaling_averages_the_pixels_it_folds_together);
+    RUN_TEST(test_scaling_by_a_fraction_keeps_the_average_brightness);
     RUN_TEST(test_a_picture_too_large_is_refused);
     RUN_TEST(test_what_is_not_a_png_is_another_format);
     RUN_TEST(test_a_cut_png_is_damaged);

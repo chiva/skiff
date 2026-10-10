@@ -508,6 +508,8 @@ network is back.
   is queued again on the next launch and resumes from its `.part` file; a damaged queue file is not
   used (the queue starts empty, and the log says so), and an unusable job in it is dropped alone.
   The same file of the same ROM is never queued twice. At most 64 jobs: finished ones make room.
+  Many downloads are queued with one save (`skiff_jobs_add_many()`): every request is checked
+  before any is queued, and a batch that would pass 64 unfinished jobs queues only those that fit.
   When a download finishes, the runner hands the job to the app (`skiff_jobs_config.downloaded`,
   on the worker thread, with neither queue lock held) before it saves the job as done, so the
   installer records the file in `installed.json` before the UI can show the job finished; the

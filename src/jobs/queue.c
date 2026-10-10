@@ -198,13 +198,19 @@ static char ascii_lower(char c) {
     return c;
 }
 
-static int equals_ignoring_case(const char *a, const char *b) {
-    for (; *a != '\0' && *b != '\0'; a++, b++) {
-        if (ascii_lower(*a) != ascii_lower(*b)) {
-            return 0;
-        }
+/* How many leading bytes a and b share, ignoring case. */
+static size_t shared_prefix(const char *a, const char *b) {
+    size_t length = 0;
+    while (a[length] != '\0' && b[length] != '\0' &&
+           ascii_lower(a[length]) == ascii_lower(b[length])) {
+        length++;
     }
-    return *a == *b;
+    return length;
+}
+
+static int equals_ignoring_case(const char *a, const char *b) {
+    const size_t length = shared_prefix(a, b);
+    return a[length] == b[length];
 }
 
 /* The paths a download owns besides its target. */
@@ -216,6 +222,11 @@ enum { OWNED_SUFFIX_COUNT = sizeof OWNED_SUFFIXES / sizeof OWNED_SUFFIXES[0] };
 /* Whether two downloads would touch a common file: a target, a .part or a .resume file of one is a
  * target, .part or .resume file of the other (FAT ignores case). */
 static int paths_collide(const char *a, const char *b) {
+    /* Equal with suffixes only if one is a prefix of the other: a batch compares every pair. */
+    const size_t prefix = shared_prefix(a, b);
+    if (a[prefix] != '\0' && b[prefix] != '\0') {
+        return 0;
+    }
     char a_path[SKIFF_DOWNLOAD_PATH_MAX];
     char b_path[SKIFF_DOWNLOAD_PATH_MAX];
     for (int i = 0; i < OWNED_SUFFIX_COUNT; i++) {
@@ -548,14 +559,48 @@ skiff_err skiff_jobs_create(const skiff_jobs_config *config, skiff_jobs **out) {
 
 void skiff_jobs_destroy(skiff_jobs *jobs) { free(jobs); }
 
+static int same_rom_file(uint64_t rom_id, const char *file_name, uint64_t other_rom_id,
+                         const char *other_file_name) {
+    return rom_id == other_rom_id && strcmp(file_name, other_file_name) == 0;
+}
+
 /* Another job not yet finished owns one of target's files: two jobs sharing a .part file would
  * overwrite or delete each other's progress. The job for the same file is not another. */
 static int target_taken(const jobs_table *table, uint64_t rom_id, const char *file_name,
                         const char *target) {
     for (size_t i = 0; i < table->count; i++) {
         const skiff_job *job = &table->jobs[i];
-        const int same_file = job->rom_id == rom_id && strcmp(job->file_name, file_name) == 0;
-        if (!same_file && !finished(job->state) && paths_collide(job->target, target)) {
+        if (!same_rom_file(job->rom_id, job->file_name, rom_id, file_name) &&
+            !finished(job->state) && paths_collide(job->target, target)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Every request is usable and none would share a file with another of the batch, by
+ * target_taken()'s rule: each would be an unfinished job once added. */
+static int requests_valid(const skiff_job_request *requests, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (!request_valid(&requests[i])) {
+            return 0;
+        }
+        for (size_t j = 0; j < i; j++) {
+            if (!same_rom_file(requests[j].rom_id, requests[j].file_name, requests[i].rom_id,
+                               requests[i].file_name) &&
+                paths_collide(requests[j].target, requests[i].target)) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* Commit lock held: a request whose files an unfinished job in table owns. */
+static int requests_taken(const jobs_table *table, const skiff_job_request *requests,
+                          size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (target_taken(table, requests[i].rom_id, requests[i].file_name, requests[i].target)) {
             return 1;
         }
     }
@@ -565,7 +610,7 @@ static int target_taken(const jobs_table *table, uint64_t rom_id, const char *fi
 static skiff_job *find_same_file(jobs_table *table, const skiff_job_request *request) {
     for (size_t i = 0; i < table->count; i++) {
         skiff_job *job = &table->jobs[i];
-        if (job->rom_id == request->rom_id && strcmp(job->file_name, request->file_name) == 0) {
+        if (same_rom_file(job->rom_id, job->file_name, request->rom_id, request->file_name)) {
             return job;
         }
     }
@@ -589,11 +634,17 @@ static void fill_job(skiff_job *job, uint32_t id, const skiff_job_request *reque
     job->state = SKIFF_JOB_QUEUED;
 }
 
-/* Commit lock held: puts the request in staged; its id goes to *id. */
-static skiff_err stage_request(skiff_jobs *jobs, const skiff_job_request *request,
-                               const skiff_job *same, uint32_t *id) {
-    jobs_table *staged = jobs_stage(jobs);
-    skiff_job *job = same != NULL ? jobs_table_find(staged, same->id) : NULL;
+/* Commit lock held: puts the request in staged and its id in *id. *queued is 1 when that queued a
+ * job (a new one, or one that ended queued again), 0 when a queued or active job already has the
+ * file. SKIFF_ERR_BUFFER_TOO_SMALL when SKIFF_JOBS_MAX jobs are unfinished. */
+static skiff_err stage_request(jobs_table *staged, const skiff_job_request *request, uint32_t *id,
+                               int *queued) {
+    skiff_job *job = find_same_file(staged, request);
+    *queued = 0;
+    if (job != NULL && (job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE)) {
+        *id = job->id;
+        return SKIFF_OK;
+    }
     if (job != NULL) {
         fill_job(job, job->id, request);
     } else if (staged->count == SKIFF_JOBS_MAX && !drop_oldest_finished(staged)) {
@@ -603,43 +654,85 @@ static skiff_err stage_request(skiff_jobs *jobs, const skiff_job_request *reques
         fill_job(job, staged->next_id++, request);
     }
     *id = job->id;
+    *queued = 1;
     return SKIFF_OK;
 }
 
-skiff_err skiff_jobs_add(skiff_jobs *jobs, const skiff_job_request *request, uint32_t *id) {
-    if (jobs == NULL || request == NULL || id == NULL || !request_valid(request)) {
+/* Commit lock held, staged saved: staged becomes table, and each job the batch queued (by its
+ * index in requests) tells the UI and the log. */
+static void publish_queued(skiff_jobs *jobs, const skiff_job_request *requests, const uint32_t *ids,
+                           const size_t *queued, size_t queued_count) {
+    jobs_lock(jobs);
+    jobs_publish(jobs);
+    for (size_t i = 0; i < queued_count; i++) {
+        jobs_push_state_event(jobs, jobs_table_find(&jobs->table, ids[queued[i]]));
+    }
+    jobs_unlock(jobs);
+    for (size_t i = 0; i < queued_count; i++) {
+        const skiff_job_request *request = &requests[queued[i]];
+        skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG,
+                        "queued job %u: rom %llu, %llu bytes", (unsigned)ids[queued[i]],
+                        (unsigned long long)request->rom_id, (unsigned long long)request->size);
+    }
+}
+
+skiff_err skiff_jobs_add_many(skiff_jobs *jobs, const skiff_job_request *requests, size_t count,
+                              uint32_t *ids, size_t *added) {
+    if (jobs == NULL || added == NULL || (count > 0 && (requests == NULL || ids == NULL))) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    *added = 0;
+    if (count == 0) {
+        return SKIFF_OK;
+    }
+    if (!requests_valid(requests, count)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     jobs_commit_lock(jobs);
-    if (target_taken(&jobs->table, request->rom_id, request->file_name, request->target)) {
+    if (requests_taken(&jobs->table, requests, count)) {
         jobs_commit_unlock(jobs);
         return SKIFF_ERR_INVALID_ARG;
     }
-    const skiff_job *same = find_same_file(&jobs->table, request);
-    if (same != NULL && (same->state == SKIFF_JOB_QUEUED || same->state == SKIFF_JOB_ACTIVE)) {
-        *id = same->id;
-        jobs_commit_unlock(jobs);
-        return SKIFF_OK;
+    /* Staged only: the queue keeps the batch only once the file holds it. Each queued job is a
+     * distinct unfinished one in staged, so there are at most SKIFF_JOBS_MAX. */
+    jobs_table *staged = jobs_stage(jobs);
+    size_t queued[SKIFF_JOBS_MAX];
+    size_t queued_count = 0;
+    size_t satisfied = 0;
+    int job_queued = 0;
+    while (satisfied < count &&
+           stage_request(staged, &requests[satisfied], &ids[satisfied], &job_queued) == SKIFF_OK) {
+        if (job_queued) {
+            queued[queued_count++] = satisfied;
+        }
+        satisfied++;
     }
-    /* Staged only: the queue keeps it only once the file holds it. */
-    uint32_t added = 0;
-    skiff_err err = stage_request(jobs, request, same, &added);
+    const skiff_err err = queued_count > 0 ? jobs_save_staged(jobs) : SKIFF_OK;
     if (err == SKIFF_OK) {
-        err = jobs_save_staged(jobs);
-    }
-    if (err == SKIFF_OK) {
-        jobs_lock(jobs);
-        jobs_publish(jobs);
-        const skiff_job *job = jobs_table_find(&jobs->table, added);
-        jobs_push_state_event(jobs, job);
-        jobs_unlock(jobs);
-        *id = added;
-        skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG,
-                        "queued job %u: rom %llu, %llu bytes", (unsigned)added,
-                        (unsigned long long)request->rom_id, (unsigned long long)request->size);
+        if (queued_count > 0) {
+            publish_queued(jobs, requests, ids, queued, queued_count);
+        }
+        *added = satisfied;
     }
     jobs_commit_unlock(jobs);
     return err;
+}
+
+skiff_err skiff_jobs_add(skiff_jobs *jobs, const skiff_job_request *request, uint32_t *id) {
+    if (id == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    uint32_t queued_id = 0;
+    size_t added = 0;
+    const skiff_err err = skiff_jobs_add_many(jobs, request, 1, &queued_id, &added);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    if (added == 0) {
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    *id = queued_id;
+    return SKIFF_OK;
 }
 
 /* The active job is cancelled by a flag the runner's stop hook reads, under the state lock alone:

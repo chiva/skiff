@@ -252,9 +252,11 @@ static int is_cover_path(const char *path) {
         !is_printable_text(path)) {
         return 0;
     }
-    const size_t path_end = strcspn(path, "?#");
+    /* Only '?' ends the path: skiff_romm_cover_url() encodes a '#' as "%23", so what follows one is
+     * still path and a request would climb with its ".." segments. */
+    const size_t path_end = strcspn(path, "?");
     for (size_t start = 0; start < path_end;) {
-        const size_t segment = strcspn(path + start, "/?#");
+        const size_t segment = strcspn(path + start, "/?");
         if (is_dot_segment(path + start, segment)) {
             return 0;
         }

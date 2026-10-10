@@ -979,6 +979,8 @@ static void test_a_cover_path_skiff_would_not_request_is_no_cover(void) {
         "\"" COVER_PREFIX "../../api/roms\"",
         "\"" COVER_PREFIX "roms/..\"",
         "\"" COVER_PREFIX "roms/./1/small.png\"",
+        "\"" COVER_PREFIX "a#/../../api/heartbeat\"",
+        "\"" COVER_PREFIX "a#b/..\"",
         "\"" COVER_PREFIX "roms\\\\1\\\\small.png\"",
         "\"" COVER_PREFIX "small.png\\u0007\"",
         "\"" COVER_PREFIX "small.png?ts=\\u009b\"",
@@ -1044,6 +1046,7 @@ static void test_a_cover_url_is_refused_when_it_would_lead_elsewhere_or_not_fit(
         "/api/heartbeat",
         "//example.invalid" COVER_PREFIX "a.png",
         COVER_PREFIX "../api/heartbeat",
+        COVER_PREFIX "a#/../../api/heartbeat",
         COVER_PREFIX "a\\b.png",
         COVER_PREFIX "a\x01.png",
     };

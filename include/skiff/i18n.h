@@ -106,6 +106,32 @@ typedef enum skiff_language {
     /* SELECT on the library: the list it switches to. */                                          \
     X(SKIFF_TEXT_SHOW_FAVOURITES, 0, "Favourites", "Favoritos")                                    \
     X(SKIFF_TEXT_SHOW_ALL_GAMES, 0, "All games", "Todos")                                          \
+    /* "Download all favourites". */                                                               \
+    X(SKIFF_TEXT_DOWNLOAD_ALL, 0, "Download all", "Descargar todo")                                \
+    X(SKIFF_TEXT_BATCH_CHECKING, 2, "Checking favourites... {1}/{2}",                              \
+      "Revisando favoritos... {1}/{2}")                                                            \
+    X(SKIFF_TEXT_BATCH_ADDING, 0, "Adding downloads...", "Añadiendo descargas...")                 \
+    X(SKIFF_TEXT_BATCH_QUESTION, 2, "Download {1} favourites ({2})?",                              \
+      "¿Descargar {1} favoritos ({2})?")                                                           \
+    X(SKIFF_TEXT_BATCH_NOTHING, 0, "Nothing to download.", "No hay nada que descargar.")           \
+    X(SKIFF_TEXT_BATCH_INSTALLED, 1, "{1} already installed", "{1} ya instalados")                 \
+    X(SKIFF_TEXT_BATCH_QUEUED, 1, "{1} already in Downloads", "{1} ya están en Descargas")         \
+    X(SKIFF_TEXT_BATCH_CHANGED, 1, "{1} changed in RomM: open each one to replace it",             \
+      "{1} han cambiado en RomM: abre cada uno para sustituirlo")                                  \
+    X(SKIFF_TEXT_BATCH_REFUSED, 1, "{1} can't be installed", "{1} no se pueden instalar")          \
+    X(SKIFF_TEXT_BATCH_OVER_QUEUE, 2, "{1} don't fit in Downloads ({2} at most)",                  \
+      "{1} no caben en Descargas ({2} como máximo)")                                               \
+    X(SKIFF_TEXT_BATCH_OVER_RECORDS, 2,                                                            \
+      "{1} don't fit: Skiff keeps track of {2} installed games at most",                           \
+      "{1} no caben: Skiff lleva la cuenta de {2} juegos instalados como máximo")                  \
+    X(SKIFF_TEXT_BATCH_OVER_SPACE, 2, "{1} don't fit on the Memory Stick ({2} free)",              \
+      "{1} no caben en el Memory Stick ({2} libres)")                                              \
+    X(SKIFF_TEXT_BATCH_ADDED, 1, "Added {1} downloads", "Añadidas {1} descargas")                  \
+    X(SKIFF_TEXT_BATCH_ADDED_SOME, 2, "Added {1} of {2} downloads.",                               \
+      "Añadidas {1} de {2} descargas.")                                                            \
+    X(SKIFF_TEXT_BATCH_LEFT_FULL, 1, "{1} weren't added: Downloads is full",                       \
+      "{1} no se han añadido: Descargas está lleno")                                               \
+    X(SKIFF_TEXT_BATCH_LEFT_ERROR, 2, "{1} weren't added: {2}", "{1} no se han añadido: {2}")      \
     X(SKIFF_TEXT_INSTALLED, 0, "Installed", "Instalado")                                           \
     X(SKIFF_TEXT_DETAILS_SIZE, 1, "Size: {1}", "Tamaño: {1}")                                      \
     X(SKIFF_TEXT_NAME_UNSUPPORTED, 0,                                                              \

@@ -63,6 +63,7 @@ set_property(TARGET skiff_png PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB m)
 add_library(
   skiff_core STATIC
   src/app/app.c
+  src/app/app_batch.c
   src/app/app_call.c
   src/app/app_connect.c
   src/app/app_library.c

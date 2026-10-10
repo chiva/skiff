@@ -43,10 +43,12 @@ static void run(void *arg) {
     case CALL_PLATFORM:
         call->err = skiff_romm_find_platform(call->romm, SKIFF_APP_PLATFORM_SLUG, &call->platform);
         break;
-    case CALL_PAGE: {
+    case CALL_PAGE:
+    case CALL_BATCH_PAGE: {
         const skiff_romm_list_query query = {.platform_id = call->platform_id,
                                              .filter = call->favourites ? SKIFF_ROMM_LIST_FAVOURITES
-                                                                        : SKIFF_ROMM_LIST_ALL};
+                                                                        : SKIFF_ROMM_LIST_ALL,
+                                             .with_files = call->with_files};
         call->err =
             skiff_romm_list_roms(call->romm, &query, call->page_index * SKIFF_ROMM_PAGE_SIZE,
                                  SKIFF_ROMM_PAGE_SIZE, &call->page);
@@ -63,6 +65,12 @@ static void run(void *arg) {
         break;
     case CALL_COVER:
         call->err = fetch_cover(call);
+        break;
+    case CALL_BATCH_SPACE:
+        call->err = skiff_storage_free_space(call->storage, call->roots.app, &call->free_bytes);
+        break;
+    case CALL_BATCH_QUEUE:
+        call->err = app_batch_queue_run(call);
         break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
@@ -130,6 +138,15 @@ static void apply(skiff_app *app, app_call_kind kind) {
         break;
     case CALL_COVER:
         app_cover_done(app);
+        break;
+    case CALL_BATCH_PAGE:
+        app_batch_page_done(app);
+        break;
+    case CALL_BATCH_SPACE:
+        app_batch_space_done(app);
+        break;
+    case CALL_BATCH_QUEUE:
+        app_batch_queued(app);
         break;
     case CALL_NONE:
         break;

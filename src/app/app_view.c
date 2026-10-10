@@ -350,6 +350,19 @@ static void library_view(skiff_app *app) {
         app_format(app, SKIFF_TEXT_LIBRARY_COUNT, args, 1, text);
         set_status(app, text);
     }
+    const app_batch *batch = &app->batch;
+    if (batch->step == BATCH_SCANNING || batch->step == BATCH_SPACE) {
+        char seen[24];
+        char total[24];
+        snprintf(seen, sizeof seen, "%llu", (unsigned long long)batch->seen);
+        snprintf(total, sizeof total, "%llu", (unsigned long long)app->total);
+        const char *args[] = {seen, total};
+        char text[SKIFF_TEXT_MAX];
+        app_format(app, SKIFF_TEXT_BATCH_CHECKING, args, 2, text);
+        set_status(app, text);
+    } else if (batch->step == BATCH_QUEUEING) {
+        set_status(app, app_text(app, SKIFF_TEXT_BATCH_ADDING));
+    }
     if (app->has_platform && app->favourites && app->total_known && app->total == 0) {
         add_text(app, SKIFF_TEXT_FAVOURITES_EMPTY);
     } else if (!app->has_platform || (app->total_known && app->total == 0)) {
@@ -379,7 +392,19 @@ static void library_view(skiff_app *app) {
             app_rom_detail(app, &page->page.items[at], row->detail, sizeof row->detail);
             row->dim = !app_rom_downloadable(app, &page->page.items[at]);
         }
-        add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
+        if (batch->step == BATCH_NONE) {
+            add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
+        }
+    }
+    if (batch->step != BATCH_NONE) {
+        /* While the favourites are checked, Back stops it; while it queues, nothing waits. */
+        if (batch->step != BATCH_QUEUEING) {
+            add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_CANCEL);
+        }
+        return;
+    }
+    if (app->favourites && app->total_known && app->total > 0) {
+        add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_DOWNLOAD_ALL);
     }
     add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
@@ -646,7 +671,15 @@ static void message_view(skiff_app *app) {
 
 static void confirm_view(skiff_app *app) {
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_CONFIRM));
-    add_text(app, app->confirm_text);
+    if (app->confirm == CONFIRM_DOWNLOAD_ALL) {
+        char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
+        const size_t count = app_batch_lines(app, lines, SKIFF_APP_LINES_MAX);
+        for (size_t i = 0; i < count; i++) {
+            add_wrapped_within(app, lines[i], SKIFF_APP_TEXT_WIDTH);
+        }
+    } else {
+        add_text(app, app->confirm_text);
+    }
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_OK);
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_CANCEL);
 }

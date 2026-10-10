@@ -3,22 +3,43 @@
 
 #include "app_internal.h"
 
-static int unfinished(const skiff_job *job) {
+int app_job_unfinished(const skiff_job *job) {
     return job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE ||
            job->state == SKIFF_JOB_FAILED;
+}
+
+int app_same_path(const char *a, const char *b) {
+    for (; *a != '\0' && *b != '\0'; a++, b++) {
+        const char lower_a = (char)(*a >= 'A' && *a <= 'Z' ? *a - 'A' + 'a' : *a);
+        const char lower_b = (char)(*b >= 'A' && *b <= 'Z' ? *b - 'A' + 'a' : *b);
+        if (lower_a != lower_b) {
+            return 0;
+        }
+    }
+    return *a == *b;
 }
 
 size_t app_queue_unfinished(const skiff_app *app) {
     size_t count = 0;
     for (size_t i = 0; i < app->queue.count; i++) {
-        count += (size_t)unfinished(&app->queue.jobs[i]);
+        count += (size_t)app_job_unfinished(&app->queue.jobs[i]);
     }
     return count;
 }
 
+uint64_t app_queue_unfinished_bytes(const skiff_app *app) {
+    uint64_t bytes = 0;
+    for (size_t i = 0; i < app->queue.count; i++) {
+        if (app_job_unfinished(&app->queue.jobs[i])) {
+            bytes += app->queue.jobs[i].size;
+        }
+    }
+    return bytes;
+}
+
 const skiff_job *app_queue_job_for(const skiff_app *app, uint64_t rom_id) {
     for (size_t i = 0; i < app->queue.count; i++) {
-        if (app->queue.jobs[i].rom_id == rom_id && unfinished(&app->queue.jobs[i])) {
+        if (app->queue.jobs[i].rom_id == rom_id && app_job_unfinished(&app->queue.jobs[i])) {
             return &app->queue.jobs[i];
         }
     }
@@ -115,7 +136,7 @@ void app_queue_update(skiff_app *app, unsigned actions) {
     if (job == NULL) {
         return;
     }
-    if ((actions & SKIFF_UI_ACTION_EXTRA) && unfinished(job)) {
+    if ((actions & SKIFF_UI_ACTION_EXTRA) && app_job_unfinished(job)) {
         app_confirm(app, SKIFF_TEXT_CONFIRM_CANCEL, CONFIRM_CANCEL_JOB, job->id);
         return;
     }

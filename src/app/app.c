@@ -72,6 +72,11 @@ static void message_begin(skiff_app *app, skiff_text_id title, app_message_actio
     app->message.back = back;
 }
 
+void app_message_add(skiff_app *app, const char *text) {
+    (void)wrap_into(app, text);
+    app->dirty = 1;
+}
+
 void app_show_text(skiff_app *app, skiff_text_id title, const char *text, app_message_action ok,
                    skiff_app_screen back) {
     message_begin(app, title, ok, MESSAGE_NONE, SKIFF_TEXT_OK, back);
@@ -427,6 +432,7 @@ skiff_err app_reset_server(skiff_app *app) {
     app->request = REQUEST_NONE;
     app->failed_request = REQUEST_NONE;
     memset(app->pages, 0, sizeof app->pages);
+    app->batch.step = BATCH_NONE;
     const skiff_err err = start_queue(app);
     app_queue_refresh(app);
     return err;
@@ -608,6 +614,11 @@ static void message_update(skiff_app *app, unsigned actions) {
 
 static void confirm_update(skiff_app *app, unsigned actions) {
     if (actions & SKIFF_UI_ACTION_BACK) {
+        if (app->confirm == CONFIRM_DOWNLOAD_ALL) {
+            app_batch_cancel(app);
+            app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
+            return;
+        }
         app_set_screen(app, app->confirm == CONFIRM_REPLACE      ? SKIFF_APP_SCREEN_DETAILS
                             : app->confirm == CONFIRM_CANCEL_JOB ? SKIFF_APP_SCREEN_QUEUE
                                                                  : app->keyboard_from);
@@ -625,6 +636,9 @@ static void confirm_update(skiff_app *app, unsigned actions) {
         break;
     case CONFIRM_SERVER_CHANGE:
         app_server_change_confirmed(app);
+        break;
+    case CONFIRM_DOWNLOAD_ALL:
+        app_batch_confirmed(app);
         break;
     }
 }
@@ -646,6 +660,7 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     }
     take_events(app);
     app_call_update(app);
+    app_batch_update(app);
     if (app->note[0] != '\0' && app_now(app) >= app->note_until_ms) {
         app->note[0] = '\0';
         app->dirty = 1;

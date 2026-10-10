@@ -290,13 +290,16 @@ static void serve_platforms(void) {
         fake_transport_add_fixture(&transport, "/api/platforms", "romm/platforms.http"));
 }
 
-/* ROM id's list item: "Game <id>.iso", or an unusable name when id is 13. */
+/* ROM id's list item: "Game <id>.iso", or an unusable name when id ends in 13 (13 in the library,
+ * 113 among the favourites). */
+#define UNUSABLE_ID_END 13
+#define ID_END_MODULUS 100
 static int rom_item(char *out, size_t size, unsigned id) {
-    if (id == 13) {
+    if (id % ID_END_MODULUS == UNUSABLE_ID_END) {
         return snprintf(out, size,
-                        "{\"id\":13,\"platform_id\":1,\"name\":\"Bad\\u0007Name\",\"fs_name\":"
+                        "{\"id\":%u,\"platform_id\":1,\"name\":\"Bad\\u0007Name\",\"fs_name\":"
                         "\"Bad\\u0007Name.iso\",\"fs_size_bytes\":%u}",
-                        BODY_BYTES);
+                        id, BODY_BYTES);
     }
     return snprintf(out, size,
                     "{\"id\":%u,\"platform_id\":1,\"name\":\"Game %u\",\"fs_name\":\"Game %u.iso\","
@@ -304,15 +307,29 @@ static int rom_item(char *out, size_t size, unsigned id) {
                     id, id, id, BODY_BYTES, (unsigned)body_crc);
 }
 
+/* ROM id's list item with its file, as a list asked with_files gives it. */
+static int rom_item_with_file(char *out, size_t size, unsigned id) {
+    char item[512];
+    rom_item(item, sizeof item, id);
+    item[strlen(item) - 1] = '\0';
+    return snprintf(out, size,
+                    "%s,\"files\":[{\"rom_id\":%u,\"file_name\":\"Game %u.iso\","
+                    "\"file_size_bytes\":%u,\"crc_hash\":\"%08x\"}]}",
+                    item, id, id, BODY_BYTES, (unsigned)body_crc);
+}
+
 /* A page of a list of total ROMs (the list's query ends with filter), from offset: ids from
- * first_id + offset + 1. */
+ * first_id + offset + 1, with their files when the filter asks for them. */
 static void serve_list_page(const char *filter, unsigned first_id, unsigned offset, unsigned count,
                             unsigned total) {
     static char raw[RAW_MAX];
+    const int with_files = strstr(filter, "with_files=true") != NULL;
     int used = snprintf(raw, sizeof raw, JSON_OK "{\"items\":[");
     for (unsigned i = 0; i < count; i++) {
         used += snprintf(raw + used, sizeof raw - (size_t)used, i > 0 ? "," : "");
-        used += rom_item(raw + used, sizeof raw - (size_t)used, first_id + offset + i + 1);
+        const unsigned id = first_id + offset + i + 1;
+        used += with_files ? rom_item_with_file(raw + used, sizeof raw - (size_t)used, id)
+                           : rom_item(raw + used, sizeof raw - (size_t)used, id);
     }
     snprintf(raw + used, sizeof raw - (size_t)used, "],\"total\":%u,\"limit\":%d,\"offset\":%u}",
              total, SKIFF_ROMM_PAGE_SIZE, offset);
@@ -333,6 +350,16 @@ static void serve_page(unsigned offset, unsigned count, unsigned total) {
 static void serve_favourites(unsigned total) {
     serve_list_page(FAVOURITES_FILTER, FAVOURITE_ID_BASE, 0,
                     total < SKIFF_ROMM_PAGE_SIZE ? total : SKIFF_ROMM_PAGE_SIZE, total);
+}
+
+/* What "Download all favourites" reads: every page of the favourites, with their files. */
+#define BATCH_FILTER FAVOURITES_FILTER "&with_files=true"
+static void serve_batch_favourites(unsigned total) {
+    for (unsigned offset = 0; offset < total || offset == 0; offset += SKIFF_ROMM_PAGE_SIZE) {
+        const unsigned left = total - offset;
+        serve_list_page(BATCH_FILTER, FAVOURITE_ID_BASE, offset,
+                        left < SKIFF_ROMM_PAGE_SIZE ? left : SKIFF_ROMM_PAGE_SIZE, total);
+    }
 }
 
 /* ROM id's details, with RomM's cover path when cover_path is not NULL. */
@@ -525,30 +552,35 @@ static void open_details_failing(void) {
     run_until(SKIFF_APP_SCREEN_MESSAGE);
 }
 
-static void record_installed(unsigned id, uint32_t crc) {
-    char iso[TEMP_DIR_PATH_MAX];
-    char name[64];
-    snprintf(name, sizeof name, "ISO/Game %u.iso", id);
-    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", iso, sizeof iso));
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, iso));
-    TEST_ASSERT_TRUE(temp_dir_path(dir, name, iso, sizeof iso));
-    write_file(iso, (const char *)body, BODY_BYTES);
+/* installed.json holding "Game <id>.iso" for each of ids, recorded with crcs. */
+static void record_installs(const unsigned *ids, const uint32_t *crcs, size_t count) {
     skiff_install_manifest *manifest = NULL;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_create(&manifest));
-    skiff_install_record record;
-    memset(&record, 0, sizeof record);
-    record.rom_id = id;
-    snprintf(record.file_name, sizeof record.file_name, "Game %u.iso", id);
-    snprintf(record.path, sizeof record.path, "games:/Game %u.iso", id);
-    record.size = BODY_BYTES;
-    record.has_crc32 = 1;
-    record.crc32 = crc;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    for (size_t i = 0; i < count; i++) {
+        char iso[TEMP_DIR_PATH_MAX];
+        char name[64];
+        snprintf(name, sizeof name, "ISO/Game %u.iso", ids[i]);
+        TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", iso, sizeof iso));
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, iso));
+        TEST_ASSERT_TRUE(temp_dir_path(dir, name, iso, sizeof iso));
+        write_file(iso, (const char *)body, BODY_BYTES);
+        skiff_install_record record;
+        memset(&record, 0, sizeof record);
+        record.rom_id = ids[i];
+        snprintf(record.file_name, sizeof record.file_name, "Game %u.iso", ids[i]);
+        snprintf(record.path, sizeof record.path, "games:/Game %u.iso", ids[i]);
+        record.size = BODY_BYTES;
+        record.has_crc32 = 1;
+        record.crc32 = crcs[i];
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    }
     char path[TEMP_DIR_PATH_MAX];
     app_file(SKIFF_INSTALL_MANIFEST_NAME, path, sizeof path);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_save(manifest, posix, path));
     skiff_install_manifest_destroy(manifest);
 }
+
+static void record_installed(unsigned id, uint32_t crc) { record_installs(&id, &crc, 1); }
 
 static size_t list_jobs(skiff_job *out) { return skiff_jobs_list(app->jobs, out, SKIFF_JOBS_MAX); }
 
@@ -1099,6 +1131,312 @@ static void test_a_library_without_psp_games_offers_no_favourites(void) {
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_LIBRARY_EMPTY)));
 }
 
+/* ---- Download all favourites ---- */
+
+static void write_full_queue(void);
+
+static int queue_file_opens;
+
+static void count_queue_opens(void *ctx, const char *call, const char *path) {
+    (void)ctx;
+    queue_file_opens += strcmp(call, "open") == 0 && strstr(path, SKIFF_JOBS_FILE_NAME) != NULL;
+}
+
+/* The library on the favourites, total of them. */
+static void open_favourites(unsigned total) {
+    open_paired_library(2);
+    serve_favourites(total);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
+/* START, then frames until the batch asks (confirmation) or tells (notice). */
+static void start_download_all(skiff_app_screen expected) {
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_DOWNLOAD_ALL)));
+    frame(SKIFF_UI_ACTION_START);
+    run_until(expected);
+}
+
+static void test_download_all_queues_every_favourite_with_one_save(void) {
+    open_paired_library(2);
+    TEST_PRINTF("one game queued from its details: what one save of the queue opens");
+    open_details(1);
+    queue_file_opens = 0;
+    storage.on_call = count_queue_opens;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const int opens_per_save = queue_file_opens;
+    TEST_PRINTF("one save opens queue.json %d time(s)", opens_per_save);
+    TEST_ASSERT_GREATER_THAN_INT(0, opens_per_save);
+
+    serve_favourites(30);
+    serve_batch_favourites(30);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 29 favourites (84 KB)?"));
+    TEST_PRINTF("both pages read, with their files");
+    queue_file_opens = 0;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    storage.on_call = NULL;
+    TEST_ASSERT_TRUE(shows("Added 29 downloads"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(30, list_jobs(jobs));
+    TEST_PRINTF("29 games (113's name is unusable), one save: queue.json opened %d time(s)",
+                queue_file_opens);
+    TEST_ASSERT_EQUAL_INT(opens_per_save, queue_file_opens);
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 1, jobs[1].rom_id);
+    TEST_ASSERT_EQUAL_STRING("Game 101", jobs[1].title);
+    TEST_ASSERT_EQUAL_STRING("Game 101.iso", jobs[1].file_name);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, jobs[1].size);
+    TEST_ASSERT_EQUAL_HEX32(body_crc, jobs[1].crc32);
+    TEST_ASSERT_NOT_NULL(strstr(jobs[1].target, "ISO/Game 101.iso"));
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 30, jobs[29].rom_id);
+    TEST_ASSERT_EQUAL_INT(1, env_state.worker_starts);
+}
+
+static void test_download_all_leaves_out_installed_queued_changed_and_refused_games(void) {
+    open_paired_library(2);
+    TEST_PRINTF("102 queued from its details; 101 installed; 103 changed in RomM; 113 unusable");
+    serve_favourites(14);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(FAVOURITE_ID_BASE + 2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const unsigned installed[] = {FAVOURITE_ID_BASE + 1, FAVOURITE_ID_BASE + 3};
+    const uint32_t crcs[] = {body_crc, body_crc ^ 1U};
+    record_installs(installed, crcs, 2);
+    skiff_app_destroy(app);
+    app = NULL;
+    create_app();
+    serve_favourites(14);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    serve_batch_favourites(14);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 10 favourites"));
+    TEST_ASSERT_TRUE(shows("1 already installed"));
+    TEST_ASSERT_TRUE(shows("1 already in Downloads"));
+    TEST_ASSERT_TRUE(shows("1 changed in RomM"));
+    TEST_ASSERT_TRUE(shows("1 can't be installed"));
+    TEST_PRINTF("Back: nothing queued");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+}
+
+static void test_download_all_with_a_full_queue_queues_nothing_and_says_why(void) {
+    write_full_queue();
+    open_favourites(3);
+    serve_batch_favourites(3);
+    start_download_all(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_BATCH_NOTHING)));
+    TEST_ASSERT_TRUE(shows("3 don't fit in Downloads (64 at most)"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX, list_jobs(jobs));
+}
+
+static void test_download_all_takes_what_fits_the_free_space_in_name_order(void) {
+    open_favourites(5);
+    serve_batch_favourites(5);
+    TEST_PRINTF("room for two games past the 8 MiB margin");
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)2 * BODY_BYTES + BODY_BYTES / 2;
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 2 favourites"));
+    TEST_ASSERT_TRUE(shows("3 don't fit on the Memory Stick"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 1, jobs[0].rom_id);
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 2, jobs[1].rom_id);
+}
+
+static void test_a_download_that_ends_while_favourites_are_checked_frees_its_room(void) {
+    open_paired_library(2);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    serve_favourites(3);
+    serve_batch_favourites(3);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("room for three favourites, or two while Game 1's download is still to come");
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)3 * BODY_BYTES + BODY_BYTES / 2;
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_START);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(app->jobs, jobs[0].id));
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 3 favourites"));
+}
+
+static void test_download_all_keeps_room_for_installed_records(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    TEST_PRINTF("installed.json one record short of full");
+    app_lock_manifest(app);
+    app->manifest->count = SKIFF_INSTALL_RECORDS_MAX - 1;
+    app_unlock_manifest(app);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 1 favourites"));
+    TEST_ASSERT_TRUE(shows("2 don't fit: Skiff keeps track of 512 installed games at most"));
+    app_lock_manifest(app);
+    app->manifest->count = 0;
+    app_unlock_manifest(app);
+}
+
+static void test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    TEST_PRINTF("Game 101's name and its [101] fallback are both taken by hand-copied files");
+    char iso[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", iso, sizeof iso));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, iso));
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Game 101.iso", iso, sizeof iso));
+    write_file(iso, "copy", 4);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Game 101 [101].iso", iso, sizeof iso));
+    write_file(iso, "copy", 4);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("Added 2 of 3 downloads."));
+    TEST_ASSERT_TRUE(shows("1 weren't added:"));
+    TEST_ASSERT_FALSE(shows("Downloads is full"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 2, jobs[0].rom_id);
+}
+
+static void test_a_favourite_repeated_across_pages_is_taken_once(void) {
+    open_favourites(26);
+    TEST_PRINTF("the favourites changed between pages: page 1 starts with page 0's last game");
+    serve_list_page(BATCH_FILTER, FAVOURITE_ID_BASE, 0, SKIFF_ROMM_PAGE_SIZE, 26);
+    serve_list_page(BATCH_FILTER, FAVOURITE_ID_BASE - 1, SKIFF_ROMM_PAGE_SIZE, 1, 26);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_PRINTF("25 games: 113's name is unusable, 125 comes twice");
+    TEST_ASSERT_TRUE(shows("Download 24 favourites"));
+}
+
+static void test_nothing_else_runs_while_download_all_queues(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(BATCH_QUEUEING, (int)app->batch.step);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_BATCH_ADDING)));
+    TEST_PRINTF("Downloads, Settings, SELECT and Back wait until the batch is queued");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_SELECT);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, (int)view()->screen);
+    TEST_ASSERT_TRUE(app->favourites);
+    TEST_ASSERT_EQUAL_size_t(0, view()->hint_count);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Added 3 downloads"));
+}
+
+static void test_download_all_drops_a_library_page_still_loading(void) {
+    open_paired_library(2);
+    serve_favourites(30);
+    serve_page(25, 5, 30);
+    serve_batch_favourites(30);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("scroll to the favourites' second page, held on its way, then START");
+    serve_raw("/api/roms?platform_ids=1&limit=25&offset=25" LIST_QUERY FAVOURITES_FILTER,
+              "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, (int)app->call.kind);
+    frame(SKIFF_UI_ACTION_START);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_PRINTF("the page's failure showed no error; the batch asks as usual");
+    TEST_ASSERT_TRUE(shows("Download 29 favourites"));
+}
+
+static void test_an_empty_favourite_cannot_be_installed_and_spoils_nothing(void) {
+    open_favourites(2);
+    TEST_PRINTF("Game 101's only file is empty: the queue would refuse the whole batch");
+    serve_raw("/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY BATCH_FILTER,
+              JSON_OK "{\"items\":[{\"id\":101,\"platform_id\":1,\"name\":\"Game 101\","
+                      "\"fs_name\":\"Game 101.iso\",\"fs_size_bytes\":0,\"files\":[{\"rom_id\":"
+                      "101,\"file_name\":\"Game 101.iso\",\"file_size_bytes\":0}]},"
+                      "{\"id\":102,\"platform_id\":1,\"name\":\"Game 102\",\"fs_name\":"
+                      "\"Game 102.iso\",\"fs_size_bytes\":3000,\"files\":[{\"rom_id\":102,"
+                      "\"file_name\":\"Game 102.iso\",\"file_size_bytes\":3000}]}],"
+                      "\"total\":2,\"limit\":25,\"offset\":0}");
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 1 favourites"));
+    TEST_ASSERT_TRUE(shows("1 can't be installed"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Added 1 downloads"));
+}
+
+static void test_back_while_favourites_are_checked_stops_download_all(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_START);
+    frame(0);
+    TEST_ASSERT_TRUE(shows("Checking favourites... 0/3"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_CANCEL)));
+    frame(SKIFF_UI_ACTION_BACK);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    TEST_ASSERT_FALSE(shows("Checking favourites"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+}
+
+static void test_download_all_is_offered_only_on_favourites_with_games(void) {
+    open_paired_library(2);
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_DOWNLOAD_ALL)));
+    frame(SKIFF_UI_ACTION_START);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+    serve_favourites(0);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_DOWNLOAD_ALL)));
+    frame(SKIFF_UI_ACTION_START);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+}
+
+static void test_a_failed_favourites_page_ends_download_all_with_its_error(void) {
+    open_favourites(3);
+    serve_raw("/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY BATCH_FILTER,
+              "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    frame(SKIFF_UI_ACTION_START);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
 /* ---- Downloading ---- */
 
 static void test_a_download_is_queued_into_the_iso_folder(void) {
@@ -1183,12 +1521,14 @@ static void test_a_changed_game_and_a_hand_copy(void) {
     TEST_ASSERT_NOT_NULL(strstr(jobs[0].target, "Game 2 [2].iso"));
 }
 
+/* Clear of every ROM id the library and the favourites use. */
+#define QUEUED_ID_BASE 1000
 static void write_full_queue(void) {
     static skiff_job jobs[SKIFF_JOBS_MAX];
     memset(jobs, 0, sizeof jobs);
     for (unsigned i = 0; i < SKIFF_JOBS_MAX; i++) {
         jobs[i].id = i + 1;
-        jobs[i].rom_id = 100 + i;
+        jobs[i].rom_id = QUEUED_ID_BASE + i;
         jobs[i].size = 1;
         jobs[i].state = SKIFF_JOB_QUEUED;
         snprintf(jobs[i].title, sizeof jobs[i].title, "Queued %u", i);
@@ -2349,6 +2689,20 @@ int main(void) {
     RUN_TEST(test_a_page_of_the_list_left_behind_is_dropped);
     RUN_TEST(test_back_from_a_favourites_details_returns_to_the_favourites);
     RUN_TEST(test_a_library_without_psp_games_offers_no_favourites);
+    RUN_TEST(test_download_all_queues_every_favourite_with_one_save);
+    RUN_TEST(test_download_all_leaves_out_installed_queued_changed_and_refused_games);
+    RUN_TEST(test_download_all_with_a_full_queue_queues_nothing_and_says_why);
+    RUN_TEST(test_download_all_takes_what_fits_the_free_space_in_name_order);
+    RUN_TEST(test_download_all_keeps_room_for_installed_records);
+    RUN_TEST(test_a_download_that_ends_while_favourites_are_checked_frees_its_room);
+    RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
+    RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
+    RUN_TEST(test_nothing_else_runs_while_download_all_queues);
+    RUN_TEST(test_download_all_drops_a_library_page_still_loading);
+    RUN_TEST(test_an_empty_favourite_cannot_be_installed_and_spoils_nothing);
+    RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
+    RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
+    RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);
     RUN_TEST(test_a_finished_download_shows_as_installed);
     RUN_TEST(test_a_changed_game_and_a_hand_copy);

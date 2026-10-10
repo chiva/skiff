@@ -60,6 +60,8 @@ typedef enum app_confirm_action {
     CONFIRM_REPLACE,
     CONFIRM_CANCEL_JOB,
     CONFIRM_SERVER_CHANGE,
+    /* "Download all favourites": the confirmation lists what the batch found (app->batch). */
+    CONFIRM_DOWNLOAD_ALL,
 } app_confirm_action;
 
 /* A request to RomM, made on the frame after the one that said it was coming. */
@@ -85,13 +87,75 @@ typedef enum app_call_kind {
     CALL_PAIRING_POLL,
     /* The details screen's cover, from the Memory Stick cache or RomM (decoded and cached). */
     CALL_COVER,
+    /* "Download all favourites" (app_batch.c): a page of favourites with their files, the Memory
+     * Stick's free space, then planning and queueing the chosen games with one save. */
+    CALL_BATCH_PAGE,
+    CALL_BATCH_SPACE,
+    CALL_BATCH_QUEUE,
 } app_call_kind;
+
+/* The most games one "Download all favourites" queues: the queue holds no more unfinished ones. */
+#define APP_BATCH_MAX SKIFF_JOBS_MAX
+
+typedef enum app_batch_step {
+    BATCH_NONE,
+    /* Favourites pages, one call each, classified as they arrive. */
+    BATCH_SCANNING,
+    /* The free space, then the confirmation. */
+    BATCH_SPACE,
+    BATCH_CONFIRMING,
+    /* Planning and queueing, on the browsing thread. */
+    BATCH_QUEUEING,
+} app_batch_step;
+
+/* "Download all favourites": what the favourites hold, and the games chosen to queue, in name
+ * order. While it queues (BATCH_QUEUEING), the browsing thread reads it and fills plans,
+ * requests and ids; the screen's thread leaves it alone until the call is done. */
+typedef struct app_batch {
+    uint64_t next_page;
+    uint64_t total;
+    uint64_t seen;
+    /* What will not be queued, and why. */
+    size_t installed;
+    size_t changed;
+    size_t queued;
+    size_t refused;
+    size_t over_queue;
+    size_t over_records;
+    size_t over_space;
+    /* Room when the batch started: unfinished jobs, and installed.json records. */
+    size_t queue_room;
+    size_t record_room;
+    /* Chosen while scanning; count is cut down to what fits the free space. */
+    size_t count;
+    uint64_t bytes;
+    /* The Memory Stick's free space, and what unfinished downloads still need of it. */
+    uint64_t free_bytes;
+    uint64_t pending_bytes;
+    int free_known;
+    app_batch_step step;
+    skiff_romm_rom_summary games[APP_BATCH_MAX];
+    /* Out of the queue call: each game's plan (planned[i] when it has one), the requests made of
+     * them, the queue as it was, and what was queued. */
+    int planned[APP_BATCH_MAX];
+    skiff_install_plan plans[APP_BATCH_MAX];
+    skiff_job_request requests[APP_BATCH_MAX];
+    uint32_t ids[APP_BATCH_MAX];
+    skiff_job listed[SKIFF_JOBS_MAX];
+    size_t listed_count;
+    size_t request_count;
+    size_t added;
+    /* Games whose target could not be planned, and the first one's error. */
+    size_t plan_failures;
+    skiff_err plan_error;
+} app_batch;
 
 typedef struct app_call {
     skiff_romm_client *romm;
-    /* In: the platform, list and page to list, the ROM to fetch. */
+    /* In: the platform, list and page to list (with each ROM's files), the ROM to fetch. */
     uint64_t platform_id;
     int favourites;
+    int with_files;
     uint64_t page_index;
     uint64_t rom_id;
     /* Out: what the request returned. */
@@ -119,6 +183,11 @@ typedef struct app_call {
     int64_t cover_decode_ms;
     skiff_err cover_cache_err;
     skiff_err cover_store_err;
+    /* "Download all favourites": out, the free space (CALL_BATCH_SPACE); in, the app whose batch
+     * CALL_BATCH_QUEUE plans and queues (its installer, manifest under its lock, roots and queue:
+     * none of them changes while a call runs). */
+    uint64_t free_bytes;
+    skiff_app *app;
     skiff_err err;
     app_call_kind kind;
     /* It could not start: err says why, and the next update applies it as the request's error. */
@@ -204,6 +273,7 @@ struct skiff_app {
 
     app_message message;
     app_pairing pairing;
+    app_batch batch;
 
     /* The library. */
     skiff_romm_platform platform;
@@ -287,6 +357,8 @@ void app_show_error(skiff_app *app, skiff_err err, const skiff_config_issue *iss
 void app_show_text(skiff_app *app, skiff_text_id title, const char *text, app_message_action ok,
                    skiff_app_screen back);
 void app_confirm(skiff_app *app, skiff_text_id question, app_confirm_action action, uint32_t job);
+/* Adds text, wrapped, under the message on screen. */
+void app_message_add(skiff_app *app, const char *text);
 /* Sets key in section of config.ini, saves the file and parses it again. */
 skiff_err app_config_set(skiff_app *app, const char *section, const char *key, const char *value,
                          skiff_config_issue *issue);
@@ -359,6 +431,28 @@ int app_rom_downloadable(const skiff_app *app, const skiff_romm_rom_summary *rom
 /* installed.json can still record rom_id's file_name, counting the records queued downloads will
  * need (takes the manifest lock). */
 int app_installed_room(skiff_app *app, uint64_t rom_id, const char *file_name);
+/* Records installed.json can still take, the ones queued downloads will need counted (takes the
+ * manifest lock). */
+size_t app_installed_records_free(skiff_app *app);
+/* The name a ROM shows: its title, or its file name without one. */
+const char *app_rom_name(const skiff_romm_rom_summary *rom);
+
+/* ---- app_batch.c ---- */
+
+/* START on the favourites: checks them, then asks to download what fits. */
+void app_batch_start(skiff_app *app);
+/* Once a frame, after app_call_update(): starts the batch's next call when none runs. */
+void app_batch_update(skiff_app *app);
+/* Back while the favourites are checked: the batch ends, its call dropped. */
+void app_batch_cancel(skiff_app *app);
+void app_batch_confirmed(skiff_app *app);
+/* The confirmation's lines (CONFIRM_DOWNLOAD_ALL), for the view. */
+size_t app_batch_lines(const skiff_app *app, char lines[][SKIFF_TEXT_MAX], size_t capacity);
+/* On the browsing thread: plans and queues app->batch's games (CALL_BATCH_QUEUE). */
+skiff_err app_batch_queue_run(app_call *call);
+void app_batch_page_done(skiff_app *app);
+void app_batch_space_done(skiff_app *app);
+void app_batch_queued(skiff_app *app);
 
 /* ---- app_queue.c ---- */
 
@@ -370,6 +464,13 @@ void app_cancel_confirmed(skiff_app *app, uint32_t id);
 size_t app_queue_unfinished(const skiff_app *app);
 /* The unfinished job for rom_id, or NULL. */
 const skiff_job *app_queue_job_for(const skiff_app *app, uint64_t rom_id);
+/* The bytes unfinished jobs will write: their whole sizes (a partial file's progress is not known
+ * here, so this errs on the side of room). */
+uint64_t app_queue_unfinished_bytes(const skiff_app *app);
+/* Whether two real paths name the same file on FAT (ASCII letters ignoring case). */
+int app_same_path(const char *a, const char *b);
+/* Whether a job is queued, active or failed. */
+int app_job_unfinished(const skiff_job *job);
 
 /* ---- app_settings.c ---- */
 

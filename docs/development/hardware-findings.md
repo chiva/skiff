@@ -40,6 +40,7 @@ as orders of magnitude.
 | Worker thread stack | 11,952 of 65,536 bytes used in every run, a module reload included, in the jobs probe and in the app; it leaves 84 KB of system memory once joined | 32 KB ([worker thread](#worker-thread), [the app](#the-app)) |
 | Trusted CAs | the full Mozilla bundle costs about 200 ms and 280 KB of heap per new connection | ship it whole ([the app](#the-app)) |
 | Queue and the UI | the UI waited 113 ms on the queue's lock while the worker saved the queue file | two locks: the UI's reads never wait for a save |
+| Screen during downloads | user mode can set the firmware's backlight-off time (30–120 s took); the screen went dark on battery and AC; the press that lights it reaches the program; a power cycle brings the player's time back | 60 s while downloading, the player's time after and at quit, the waking press held back ([backlight](#backlight)) |
 
 ## Entropy
 

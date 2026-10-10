@@ -89,10 +89,19 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   network can take a further lock other threads share. Quitting asks the runner to stop and waits
   up to 5 s for the thread; a join still in progress is left to the process exit.
 - **Power**: during a job, `skiff_psp_keep_awake()` (`scePowerTick(PSP_POWER_TICK_SUSPEND)`, at
-  most every 5 s) keeps the PSP from auto-sleeping, and the backlight can still dim to save
-  battery. A power callback on the same thread as the HOME-menu callback counts suspends and
-  resumes (`src/platform/psp/lifecycle.c`): on resume the Wi-Fi connection is gone, so the job
-  reconnects and resumes from the `.part` file instead of failing.
+  most every 5 s) keeps the PSP from auto-sleeping, but not the screen on: the firmware still turns
+  the backlight off at the player's Backlight Auto-Off. While the worker has a download queued or
+  active (`skiff_app_downloading()`), the UI thread shortens that time to 60 s
+  (`skiff_ui_backlight_off_s()`, set through `sceImposeSetBacklightOffTime()` in
+  `src/platform/psp/backlight_psp.c`, a user-mode call). It leaves alone a player's "never" or a
+  shorter time, and puts the player's time back once nothing is left to download, and first thing
+  when Skiff quits. A crash can leave the short time until the next power cycle, which brings the
+  player's back ([hardware findings](hardware-findings.md#backlight)). The button that lights the
+  screen again reaches Skiff too, so `skiff_ui_wake_filter()` holds back a press that comes after
+  the off time without one, until every button is up: X never confirms on a dark screen. A power
+  callback on the same thread as the HOME-menu callback counts suspends and resumes
+  (`src/platform/psp/lifecycle.c`): on resume the Wi-Fi connection is gone, so the job reconnects
+  and resumes from the `.part` file instead of failing.
 - The Wi-Fi switch and the HOME menu are ordinary interruptions with the same resume path. A
   download's stop hook asks the network layer whether the connection still stands
   (`skiff_psp_net_online()`: switch, access point) and whether a suspend happened, so an attempt

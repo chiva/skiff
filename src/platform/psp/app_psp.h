@@ -27,6 +27,7 @@
 #include "skiff/storage_paths.h"
 #include "skiff/ui.h"
 
+#include "backlight_psp.h"
 #include "call_psp.h"
 #include "dialog_psp.h"
 #include "jobs_psp.h"
@@ -70,6 +71,10 @@ typedef struct skiff_psp_app {
     skiff_psp_ui_style style;
     int ui_started;
     skiff_ui_input input;
+    /* The press that lights a dark screen does nothing (skiff_ui_wake_filter()). */
+    skiff_ui_wake wake;
+    /* The backlight-off time, shortened while a download runs. */
+    skiff_psp_backlight backlight;
 
     /* The mutexes the threads share (skiff_app_config's four, and the network's). */
     skiff_psp_mutex log_lock;
@@ -118,10 +123,11 @@ skiff_app_config skiff_psp_app_config(skiff_psp_app *platform);
 skiff_app_env skiff_psp_app_env(skiff_psp_app *platform);
 
 /*
- * One frame: reads the buttons, runs the app (skiff_app_update()), draws its view, runs the dialog
- * it asks for, and presents the frame. Returns the view drawn. At debug level it also logs, every
- * SKIFF_PSP_APP_STATS_PERIOD_US, the frame times, memory and the worker's stack, and for a frame
- * longer than SKIFF_PSP_APP_SLOW_FRAME_US where its time went.
+ * One frame: reads the buttons (holding back the press that lights a dark screen), runs the app
+ * (skiff_app_update()), shortens or restores the backlight-off time as downloads start and end,
+ * draws its view, runs the dialog it asks for, and presents the frame. Returns the view drawn. At
+ * debug level it also logs, every SKIFF_PSP_APP_STATS_PERIOD_US, the frame times, memory and the
+ * worker's stack, and for a frame longer than SKIFF_PSP_APP_SLOW_FRAME_US where its time went.
  */
 const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform);
 
@@ -129,9 +135,10 @@ const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform);
 void skiff_psp_app_close_dialog(skiff_psp_app *platform);
 
 /*
- * Ends the app: stops the worker (SKIFF_PSP_WORKER_STOP_TIMEOUT_US), then, only if it stopped,
- * destroys the app, disconnects and unloads the network, stops TLS and frees the rest. Returns 1
- * when everything was released, 0 when something was left to the process exit.
+ * Ends the app: puts the player's backlight-off time back, stops the worker
+ * (SKIFF_PSP_WORKER_STOP_TIMEOUT_US), then, only if it stopped, destroys the app, disconnects and
+ * unloads the network, stops TLS and frees the rest. Returns 1 when everything was released, 0
+ * when something was left to the process exit.
  */
 int skiff_psp_app_finish(skiff_psp_app *platform);
 

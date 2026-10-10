@@ -16,6 +16,7 @@
 #include "storage_psp.h"
 
 #define US_PER_MS 1000LL
+#define MS_PER_S 1000U
 #define BYTES_PER_KB 1024U
 /* sceWlanGetSwitchState() with the switch off (pspwlan.h names no value). */
 #define WLAN_SWITCH_OFF 0
@@ -480,6 +481,8 @@ skiff_err skiff_psp_app_start(skiff_psp_app *platform, const char *program_path,
     platform->style.ui = &platform->ui;
     platform->style.size = SKIFF_PSP_UI_TEXT_SIZE;
     skiff_ui_input_init(&platform->input, skiff_psp_ui_confirm_is_cross());
+    skiff_ui_wake_init(&platform->wake, now_ms(NULL));
+    skiff_psp_backlight_start(&platform->backlight);
     return SKIFF_OK;
 }
 
@@ -489,7 +492,29 @@ static unsigned read_input(skiff_psp_app *platform) {
     if (sceCtrlReadBufferPositive(&pad, 1) < 0) {
         pad.Buttons = 0;
     }
-    return skiff_ui_input_update(&platform->input, pad.Buttons);
+    unsigned buttons = pad.Buttons;
+    const uint32_t off_ms = skiff_psp_backlight_off_ms(&platform->backlight);
+    if (skiff_ui_wake_filter(&platform->wake, now_ms(NULL), off_ms, &buttons)) {
+        skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                        "backlight: a press after %u s without one only lit the screen",
+                        (unsigned)(off_ms / MS_PER_S));
+    }
+    return skiff_ui_input_update(&platform->input, buttons);
+}
+
+/* The backlight-off time for downloading or not, logged when it changes. */
+static void update_backlight(skiff_psp_app *platform, int downloading) {
+    const int result = skiff_psp_backlight_update(&platform->backlight, downloading);
+    if (result > 0) {
+        skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                        "backlight: off after %d s %s (the player's: %d s)",
+                        platform->backlight.set_s, downloading ? "while downloading" : "again",
+                        platform->backlight.player_s);
+    } else if (result < 0) {
+        skiff_log_write(skiff_app_log(platform->app), SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+                        "backlight: the firmware refused a new off time (0x%08x); left alone",
+                        (unsigned)result);
+    }
 }
 
 /* ---- Drawing ---- */
@@ -683,6 +708,7 @@ const skiff_app_view *skiff_psp_app_step(skiff_psp_app *platform) {
     const unsigned actions = read_input(platform);
     const long long read = sceKernelGetSystemTimeWide();
     skiff_app_update(platform->app, actions);
+    update_backlight(platform, skiff_app_downloading(platform->app));
     const skiff_app_view *view = skiff_app_view_now(platform->app);
     const long long updated = sceKernelGetSystemTimeWide();
     draw_frame(platform, view);
@@ -718,6 +744,7 @@ void skiff_psp_app_close_dialog(skiff_psp_app *platform) {
 /* ---- Ending ---- */
 
 int skiff_psp_app_finish(skiff_psp_app *platform) {
+    update_backlight(platform, 0);
     skiff_psp_app_close_dialog(platform);
     if (platform->dialog_stuck) {
         return 0;

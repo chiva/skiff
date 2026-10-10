@@ -193,15 +193,22 @@ skiff_err skiff_cover_cache_load(skiff_storage *storage, const skiff_storage_roo
 
 /* ---- Storing ---- */
 
-/* Room for a slot file that does not exist yet; replacing an existing one never needs more. */
+/* Room for what the slot file grows by: all of it when there is none yet, the difference over a
+ * shorter cover or a cut file. A replacement no larger than the file there takes no more room. */
 static skiff_err check_room(skiff_storage *storage, const char *slot, const char *folder,
                             size_t file_size) {
     uint64_t existing = 0;
     skiff_err err = skiff_storage_size(storage, slot, &existing);
-    if (err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+    if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
+        existing = 0;
+    } else if (err != SKIFF_OK) {
         return err;
     }
-    err = skiff_storage_check_room(storage, folder, file_size + SKIFF_COVER_CACHE_ROOM_BYTES);
+    if (existing >= file_size) {
+        return SKIFF_OK;
+    }
+    err = skiff_storage_check_room(storage, folder,
+                                   file_size - existing + SKIFF_COVER_CACHE_ROOM_BYTES);
     /* A device that cannot tell is not refused: a full one fails the write instead. */
     return err == SKIFF_ERR_NOT_IMPLEMENTED ? SKIFF_OK : err;
 }

@@ -101,10 +101,11 @@ skiff_err skiff_cover_cache_load(skiff_storage *storage, const skiff_storage_roo
                                  const skiff_cover_key *key, skiff_cover *out);
 
 /*
- * Writes cover into key's slot, replacing whatever it held, and creates the folder first. A slot
- * file that does not exist yet is only made with SKIFF_COVER_CACHE_ROOM_BYTES free beyond the
- * margin (SKIFF_ERR_STORAGE_NO_SPACE otherwise); replacing one never takes more room. A device that
- * cannot report its free space is written to anyway. SKIFF_ERR_INVALID_ARG for a NULL argument or a
+ * Writes cover into key's slot, replacing whatever it held, and creates the folder first. Whatever
+ * the slot file grows by (all of it for a new one, the difference over a shorter cover or a cut
+ * file) needs SKIFF_COVER_CACHE_ROOM_BYTES free beyond the margin (SKIFF_ERR_STORAGE_NO_SPACE
+ * otherwise); a replacement no larger than the file there is not checked. A device that cannot
+ * report its free space is written to anyway. SKIFF_ERR_INVALID_ARG for a NULL argument or a
  * cover larger than the box; otherwise the storage's error, and the slot may then hold a cut file,
  * which loads as damaged.
  */

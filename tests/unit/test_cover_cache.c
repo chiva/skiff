@@ -235,7 +235,7 @@ static void test_a_nearly_full_stick_gets_no_new_slot_file(void) {
     TEST_PRINTF("with just enough room it is written");
     storage.free_bytes = ROOM_NEEDED;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_cover_cache_store(&storage.base, &roots, &key, cover));
-    TEST_PRINTF("replacing an existing slot takes no more room, so it is not checked");
+    TEST_PRINTF("replacing a slot with a cover of the same size is not checked");
     storage.free_bytes = 0;
     const int queries = storage.free_space_queries;
     fill_cover(cover, COVER_WIDTH, COVER_HEIGHT, 9);
@@ -243,6 +243,29 @@ static void test_a_nearly_full_stick_gets_no_new_slot_file(void) {
     TEST_ASSERT_EQUAL_INT(queries, storage.free_space_queries);
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, load(&key));
     assert_loaded_is(cover);
+}
+
+static void test_a_slot_that_grows_needs_room_for_the_difference(void) {
+    fill_cover(cover, 1, 1, 3);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_cover_cache_store(&storage.base, &roots, &key, cover));
+    const uint64_t small = HEADER_BYTES + SKIFF_COVER_WIDTH * 2;
+    TEST_PRINTF("a full-height cover over a 1-row one grows the file by %llu bytes",
+                (unsigned long long)(FILE_BYTES - small));
+    fill_cover(cover, COVER_WIDTH, COVER_HEIGHT, 4);
+    storage.has_free_bytes = 1;
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + SKIFF_COVER_CACHE_ROOM_BYTES + (FILE_BYTES - small) - 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE,
+                          skiff_cover_cache_store(&storage.base, &roots, &key, cover));
+    storage.free_bytes++;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_cover_cache_store(&storage.base, &roots, &key, cover));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, load(&key));
+    assert_loaded_is(cover);
+    TEST_PRINTF("over a cut file, the same");
+    rewrite_slot(ROM_ID, HEADER_BYTES, -1);
+    storage.free_bytes = SKIFF_STORAGE_FREE_MARGIN_BYTES + SKIFF_COVER_CACHE_ROOM_BYTES;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE,
+                          skiff_cover_cache_store(&storage.base, &roots, &key, cover));
 }
 
 static void test_a_device_that_cannot_tell_its_space_still_caches(void) {
@@ -317,6 +340,7 @@ int main(void) {
     RUN_TEST(test_a_cut_or_changed_file_is_damaged_not_drawn);
     RUN_TEST(test_the_cache_never_holds_more_than_its_slots);
     RUN_TEST(test_a_nearly_full_stick_gets_no_new_slot_file);
+    RUN_TEST(test_a_slot_that_grows_needs_room_for_the_difference);
     RUN_TEST(test_a_device_that_cannot_tell_its_space_still_caches);
     RUN_TEST(test_storage_failures_come_back_as_their_codes);
     RUN_TEST(test_bad_arguments_are_refused);

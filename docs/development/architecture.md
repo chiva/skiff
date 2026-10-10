@@ -550,8 +550,9 @@ decoded picture (about 70 KB) is what the Memory Stick cache will keep.
   path with RomM's `?ts=`), so another ROM sharing the slot, another server or a changed cover is a
   miss and is overwritten; a header with the box size and a CRC-32 over the whole file turns a cut
   or edited file into a miss too, never garbage on screen. A hit is one read of about 68 KB. Writes
-  are one write without a sync (a lost cover is fetched again), and a new slot file needs 16 MB
-  free beyond the 8 MB margin, so covers never take the last of the Memory Stick from downloads.
+  are one write without a sync (a lost cover is fetched again), and whatever a slot file grows by
+  needs 16 MB free beyond the 8 MB margin, so covers never take the last of the Memory Stick from
+  downloads.
 - **Tested** with PNGs written in memory by libpng's writer (every colour type and bit depth,
   interlaced, transparent, cut, and thousands of corrupted copies, some with their CRCs repaired so
   the damage reaches the decoder) under ASan and UBSan; the self-test decodes a 2×2 PNG on the PSP.

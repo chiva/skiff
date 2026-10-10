@@ -89,8 +89,9 @@ typedef enum app_call_kind {
 
 typedef struct app_call {
     skiff_romm_client *romm;
-    /* In: the platform and page to list, the ROM to fetch. */
+    /* In: the platform, list and page to list, the ROM to fetch. */
     uint64_t platform_id;
+    int favourites;
     uint64_t page_index;
     uint64_t rom_id;
     /* Out: what the request returned. */
@@ -254,6 +255,9 @@ struct skiff_app {
     /* The screen the keyboard edits the server address for. */
     skiff_app_screen keyboard_from;
     int has_platform;
+    /* The library lists the player's favourites rather than every game (SELECT switches it). Not
+     * saved: every launch starts on every game. */
+    int favourites;
     int total_known;
     app_request request;
     app_request failed_request;

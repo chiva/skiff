@@ -39,6 +39,7 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_DECIMAL_SEPARATOR, 0, ".", ",")                                                   \
     /* Screen titles. */                                                                           \
     X(SKIFF_TEXT_TITLE_LIBRARY, 0, "Library", "Biblioteca")                                        \
+    X(SKIFF_TEXT_TITLE_FAVOURITES, 0, "Favourites", "Favoritos")                                   \
     X(SKIFF_TEXT_TITLE_DETAILS, 0, "Details", "Detalles")                                          \
     X(SKIFF_TEXT_TITLE_QUEUE, 0, "Downloads", "Descargas")                                         \
     X(SKIFF_TEXT_TITLE_SETTINGS, 0, "Settings", "Ajustes")                                         \
@@ -99,6 +100,12 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_LIBRARY_EMPTY, 0, "There are no PSP games in this RomM library",                  \
       "No hay juegos de PSP en esta biblioteca de RomM")                                           \
     X(SKIFF_TEXT_LIBRARY_COUNT, 1, "{1} games", "{1} juegos")                                      \
+    X(SKIFF_TEXT_FAVOURITES_EMPTY, 0,                                                              \
+      "No favourites yet. Mark games as favourites in RomM, then come back.",                      \
+      "Aún no tienes favoritos. Márcalos en RomM y vuelve.")                                       \
+    /* SELECT on the library: the list it switches to. */                                          \
+    X(SKIFF_TEXT_SHOW_FAVOURITES, 0, "Favourites", "Favoritos")                                    \
+    X(SKIFF_TEXT_SHOW_ALL_GAMES, 0, "All games", "Todos")                                          \
     X(SKIFF_TEXT_INSTALLED, 0, "Installed", "Instalado")                                           \
     X(SKIFF_TEXT_DETAILS_SIZE, 1, "Size: {1}", "Tamaño: {1}")                                      \
     X(SKIFF_TEXT_NAME_UNSUPPORTED, 0,                                                              \

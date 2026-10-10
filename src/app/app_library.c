@@ -54,7 +54,8 @@ static const skiff_romm_rom_summary *rom_at(skiff_app *app, size_t index, const 
 
 /* The page is on its way: a call for it runs, and its result will be kept. */
 static int page_loading(const skiff_app *app, uint64_t index) {
-    return app->call.kind == CALL_PAGE && !app->call.abandoned && app->call.page_index == index;
+    return app->call.kind == CALL_PAGE && !app->call.abandoned && app->call.page_index == index &&
+           app->call.favourites == app->favourites;
 }
 
 /* Asks for the first page, or the page of a row on screen that is not loaded, unless it is on its
@@ -96,10 +97,16 @@ void app_page_done(skiff_app *app) {
     const app_call *call = &app->call;
     const skiff_err err = call->err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
-                    SKIFF_APP_LOG_TAG, "page %llu: %zu of %llu: %s (%d)",
-                    (unsigned long long)call->page_index, err == SKIFF_OK ? call->page.count : 0,
+                    SKIFF_APP_LOG_TAG, "page %llu%s: %zu of %llu: %s (%d)",
+                    (unsigned long long)call->page_index, call->favourites ? " (favourites)" : "",
+                    err == SKIFF_OK ? call->page.count : 0,
                     (unsigned long long)(err == SKIFF_OK ? call->page.total : 0),
                     skiff_err_name(err), (int)err);
+    /* A page of the list the player switched away from: dropped, the other list loads next. */
+    if (call->favourites != app->favourites) {
+        app_network_failed(app, err);
+        return;
+    }
     if (err != SKIFF_OK) {
         app_network_failed(app, err);
         app->failed_request = REQUEST_PAGE;
@@ -247,6 +254,7 @@ void app_request_run(skiff_app *app) {
     }
     if (request == REQUEST_PAGE) {
         app->call.platform_id = app->platform.id;
+        app->call.favourites = app->favourites;
         app->call.page_index = app->request_page;
         app_call_start(app, CALL_PAGE);
     } else {
@@ -308,8 +316,33 @@ void app_rom_detail(skiff_app *app, const skiff_romm_rom_summary *rom, char *out
 
 /* ---- The library screen ---- */
 
+/* Every game or the favourites: the other list starts from its first page, at its top. A page
+ * still loading for the list left behind finishes and is dropped (app_page_done()), rather than
+ * cancelled with its connection. */
+static void switch_list(skiff_app *app) {
+    app->favourites = !app->favourites;
+    memset(app->pages, 0, sizeof app->pages);
+    app->total = 0;
+    app->total_known = 0;
+    skiff_ui_list_init(&app->library, 0, APP_LIBRARY_ROWS);
+    if (app->request == REQUEST_PAGE) {
+        app->request = REQUEST_NONE;
+    }
+    if (app->failed_request == REQUEST_PAGE) {
+        app->failed_request = REQUEST_NONE;
+    }
+    app->dirty = 1;
+    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG, "library: %s",
+                    app->favourites ? "favourites" : "every game");
+    (void)request_missing_page(app);
+}
+
 void app_library_update(skiff_app *app, unsigned actions) {
     app_request_run(app);
+    if ((actions & SKIFF_UI_ACTION_SELECT) && app->has_platform) {
+        switch_list(app);
+        return;
+    }
     if (actions & SKIFF_UI_ACTION_EXTRA) {
         app_queue_refresh(app);
         app_set_screen(app, SKIFF_APP_SCREEN_QUEUE);

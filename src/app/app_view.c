@@ -340,7 +340,8 @@ static void pair_view(skiff_app *app) {
 
 static void library_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
-    set_title(app, app_text(app, SKIFF_TEXT_TITLE_LIBRARY));
+    set_title(app, app_text(app, app->favourites ? SKIFF_TEXT_TITLE_FAVOURITES
+                                                 : SKIFF_TEXT_TITLE_LIBRARY));
     if (app->total_known) {
         char count[24];
         snprintf(count, sizeof count, "%llu", (unsigned long long)app->total);
@@ -349,7 +350,9 @@ static void library_view(skiff_app *app) {
         app_format(app, SKIFF_TEXT_LIBRARY_COUNT, args, 1, text);
         set_status(app, text);
     }
-    if (!app->has_platform || (app->total_known && app->total == 0)) {
+    if (app->has_platform && app->favourites && app->total_known && app->total == 0) {
+        add_text(app, SKIFF_TEXT_FAVOURITES_EMPTY);
+    } else if (!app->has_platform || (app->total_known && app->total == 0)) {
         add_text(app, SKIFF_TEXT_LIBRARY_EMPTY);
     } else if (!app->total_known) {
         add_text(app, SKIFF_TEXT_LIBRARY_LOADING);
@@ -380,6 +383,10 @@ static void library_view(skiff_app *app) {
     }
     add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+    if (app->has_platform) {
+        add_hint(app, SKIFF_UI_ACTION_SELECT,
+                 app->favourites ? SKIFF_TEXT_SHOW_ALL_GAMES : SKIFF_TEXT_SHOW_FAVOURITES);
+    }
 }
 
 /* A game's name beside the cover: at most APP_DETAILS_NAME_LINES lines, the last cut with "..."

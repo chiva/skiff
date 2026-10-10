@@ -140,6 +140,10 @@ dialogs and the network, and reaches it through `skiff_app_env`.
 - **The Wi-Fi connection** is picked once with the system's network picker and saved as
   `[network] profile`; later launches join it without asking, and a failed join offers the picker
   again. The network stays up until Skiff quits.
+- **The library** lists every PSP game, or with SELECT only the player's favourites (marked in
+  RomM's web UI; see [RomM integration](#romm-integration)). The choice is not saved. Switching
+  starts the other list from its first page; a page still loading for the list left behind
+  finishes and is dropped rather than cancelled, which would cost its connection.
 - **Startup order**: heartbeat first (205 below RomM 5.3; a newer release line gets a notice once,
   remembered as `[skiff] romm_notice`), then pairing when there is no token, then the `psp`
   platform. The worker starts once RomM answered, with its own copies of the server address, token

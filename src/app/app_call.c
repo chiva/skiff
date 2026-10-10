@@ -45,7 +45,8 @@ static void run(void *arg) {
         break;
     case CALL_PAGE: {
         const skiff_romm_list_query query = {.platform_id = call->platform_id,
-                                             .filter = SKIFF_ROMM_LIST_ALL};
+                                             .filter = call->favourites ? SKIFF_ROMM_LIST_FAVOURITES
+                                                                        : SKIFF_ROMM_LIST_ALL};
         call->err =
             skiff_romm_list_roms(call->romm, &query, call->page_index * SKIFF_ROMM_PAGE_SIZE,
                                  SKIFF_ROMM_PAGE_SIZE, &call->page);

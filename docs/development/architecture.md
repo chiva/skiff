@@ -59,7 +59,10 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   a game's details, pairing), one at a time (`src/platform/psp/call_psp.h`), so a slow network
   never freezes the screen. The app copies a request's inputs into its call before it starts and
   reads the results once the UI sees it done (`src/app/app_call.c`); the thread touches nothing
-  else but the browse client, which is not replaced while a call runs. Leaving what a request was
+  else but the browse client, which is not replaced while a call runs. The one exception is
+  "Download all favourites" queueing its games: that call reads the app's installer, roots and
+  queue (all fixed while a call runs) and copies `installed.json` under its lock, and the library
+  takes no input until it is done. Leaving what a request was
   for (Back from a game's details, a pairing given up) drops its result and asks its transfer to
   stop. Settings that would replace the client (a new server, pairing again) wait for the call.
   It starts with the first request, at the worker's priority, with a 32 KB stack.
@@ -153,6 +156,18 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   ones), `installed.json` has room (512 records), and a game already installed asks "Replace your
   installed copy?". `games:` is created first. Downloads already queued count against the 512
   records too, since each will need one.
+- **Download all favourites** (START on the favourites, `src/app/app_batch.c`) applies the same
+  rules to every favourite. The browsing thread reads the favourites a page at a time with their
+  files (`with_files`, so no request per game), and the UI sorts each page as it arrives: installed,
+  changed in RomM (replacing stays a choice made game by game), already queued, or not installable
+  are left out and counted; the rest are taken in name order while the queue and `installed.json`
+  have room. A game repeated across pages (the favourites changed meanwhile) is taken once. The
+  free space is read on the browsing thread and the longest run that fits (with the unfinished
+  downloads' sizes and the 8 MiB margin) is kept. After the player confirms, the browsing thread
+  plans every target against a copy of `installed.json` (two favourites with the same safe name
+  get distinct targets) and queues them with `skiff_jobs_add_many()`: one save of the queue
+  instead of one per game (116 to 233 ms each on a PSP-1000). A game it cannot plan is reported
+  with its error, apart from a full queue.
 - **Settings**: a new server address clears the token and RomM's device id (they belong to the old
   server) and pairs again. The old server's downloads cannot run against the new one (other ROM
   ids, other files), and neither does what Skiff installed from it say anything about the new

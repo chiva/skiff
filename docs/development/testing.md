@@ -563,6 +563,19 @@ most 64). Games Skiff installed stay in `ms0:/ISO` after `scripts/memstick.sh
 uninstall`. The seeded files are random bytes, so those with a disc extension (`.iso`) show as
 Corrupted Data in the XMB; only the launch check's images are real discs.
 
+**Favourites (A3).** With the same library (the seed marks 36 favourites in two collections; the
+admin who approves the pairing owns them): press SELECT and check the title says Favourites with 36
+games, scroll to the end (the second page loads as it comes on screen), open a favourite and press
+Back (back on the favourites, same row), then SELECT again (every game). On the favourites, press
+START and then Back while the header says "Checking favourites" (no error). Press START again and
+read the confirmation: 3 can't be installed (the `.zip`, the BEL name and the long name), the rest
+to download with their total size; OK adds them ("Added N downloads"), in name order on the
+Downloads screen. Press START once more while they download: games already in Downloads are left
+out and nothing is queued twice. Quit and relaunch: the queue carries on. Read back: `slow frame:`
+lines (no frame over 16 ms while the favourites are checked or queued), the `download all
+favourites:` lines (counts and bytes) and `stats:` (the browsing thread's lowest free
+stack at least 8 KB, system memory unchanged).
+
 ## UI prototype
 
 `tests/prototype/ui_proto.c` checks the UI stack chosen in

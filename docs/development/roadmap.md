@@ -74,7 +74,11 @@ on their own thread since (#67).
   scaled on the browsing thread) and kept on the Memory Stick (64 covers, about 4.5 MB). On a
   PSP-1000 a cover decodes in about 0.3 s and reads back from the Memory Stick in about 40 ms, and
   loading one never holds up the screen. See [Architecture](architecture.md#covers).
-- Favourites and collections, "download all favourites".
+- **Favourites** and **"download all favourites"**: SELECT switches the library to the player's
+  favourites (marked in RomM's web app; RomM serves them to Skiff's `roms.read` token, so no new
+  pairing), and START queues every favourite that fits, with one save of the queue. Waiting for
+  hardware run A3. **Collections** need `collections.read`: they come with Phase 5's pairing again
+  rather than ask players to pair twice.
 - Backlight dimming during long downloads.
 
 ## Phase 4: PS1

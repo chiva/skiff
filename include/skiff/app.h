@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 #include "skiff/config.h"
+#include "skiff/cover.h"
 #include "skiff/error.h"
 #include "skiff/i18n.h"
 #include "skiff/jobs.h"
@@ -75,6 +76,14 @@
 #define SKIFF_APP_QR_WIDTH 176.0f
 #define SKIFF_APP_QR_GAP 8.0f
 #define SKIFF_APP_QR_TEXT_WIDTH (SKIFF_APP_TEXT_WIDTH - SKIFF_APP_QR_WIDTH - SKIFF_APP_QR_GAP)
+
+/* The details screen's cover takes a box this wide on the right of the body, as tall as
+ * SKIFF_COVER_HEIGHT under the gap above the first block, and the body's text wraps to what is
+ * left, cover or not, so nothing moves when it arrives. */
+#define SKIFF_APP_COVER_WIDTH ((float)SKIFF_COVER_WIDTH)
+#define SKIFF_APP_COVER_GAP 8.0f
+#define SKIFF_APP_COVER_TEXT_WIDTH                                                                 \
+    (SKIFF_APP_TEXT_WIDTH - SKIFF_APP_COVER_WIDTH - SKIFF_APP_COVER_GAP)
 
 /* Frames the starting screen is drawn before startup's blocking work (the first free-space query
  * takes 3 s on a 64 GB Memory Stick): with one, a PSP-1000 kept a half-drawn frame on screen. */
@@ -152,6 +161,11 @@ typedef struct skiff_app_view {
     /* A QR code to draw in the body's top right corner, within SKIFF_APP_QR_WIDTH (the pairing
      * address); NULL for none. Points into the app, valid until its next update. */
     const skiff_ui_qr *qr;
+    /* The details screen's cover box (SKIFF_APP_COVER_WIDTH wide, in the body's top right): the
+     * cover when it is in, otherwise a placeholder (loading, or the game has none). cover points
+     * into the app, valid until its next update. */
+    int has_cover_box;
+    const skiff_cover *cover;
     /* A list under the lines: rows[i] is item list.first + i. */
     int has_list;
     skiff_ui_list list;

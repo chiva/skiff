@@ -146,6 +146,76 @@ void app_rom_done(skiff_app *app) {
     }
     app->rom = *fetched;
     app->has_rom = 1;
+    /* The cover after the details: they decide whether the game downloads, it is decoration. */
+    if (app->rom.cover_path[0] != '\0' && !app_cover_shown(app)) {
+        app->request = REQUEST_COVER;
+    }
+}
+
+/* The key of the details screen's ROM's cover, from the server it is browsed on. */
+static skiff_cover_key current_cover_key(const skiff_app *app) {
+    return skiff_cover_key_of(app->romm.base_url, app->rom.summary.id, app->rom.cover_path);
+}
+
+static int same_cover(const skiff_cover_key *a, const skiff_cover_key *b) {
+    return a->rom_id == b->rom_id && a->server == b->server && a->cover_path == b->cover_path;
+}
+
+int app_cover_shown(const skiff_app *app) {
+    if (!app->has_cover || app->rom.cover_path[0] == '\0') {
+        return 0;
+    }
+    const skiff_cover_key key = current_cover_key(app);
+    return same_cover(&key, &app->cover_key);
+}
+
+/* Starts the cover call for the ROM on the details screen, its inputs and results reset. */
+static void start_cover(skiff_app *app) {
+    app_call *call = &app->call;
+    call->rom_id = app->rom.summary.id;
+    snprintf(call->cover_path, sizeof call->cover_path, "%s", app->rom.cover_path);
+    call->cover_key = current_cover_key(app);
+    call->storage = app->config.storage;
+    call->roots = app->config.roots;
+    call->now_ms = app->env.now_ms;
+    call->clock_ctx = app->env.ctx;
+    call->cover = app->cover_spare;
+    call->cover_cached = 0;
+    call->cover_bytes = 0;
+    call->cover_fetch_ms = 0;
+    call->cover_decode_ms = 0;
+    call->cover_cache_err = SKIFF_OK;
+    call->cover_store_err = SKIFF_OK;
+    app_call_start(app, CALL_COVER);
+}
+
+void app_cover_done(skiff_app *app) {
+    const app_call *call = &app->call;
+    const skiff_err err = call->err;
+    skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "cover: ROM %llu %s, %zu bytes, %ux%u, fetch %lld ms, decode %lld ms, cache "
+                    "%s, store %s: %s (%d)",
+                    (unsigned long long)call->rom_id, call->cover_cached ? "cached" : "from RomM",
+                    call->cover_bytes, err == SKIFF_OK ? call->cover->width : 0U,
+                    err == SKIFF_OK ? call->cover->height : 0U, (long long)call->cover_fetch_ms,
+                    (long long)call->cover_decode_ms, skiff_err_name(call->cover_cache_err),
+                    skiff_err_name(call->cover_store_err), skiff_err_name(err), (int)err);
+    if (err != SKIFF_OK) {
+        /* Shown without its cover; a lost network is joined again by the next request. */
+        app_network_failed(app, err);
+        return;
+    }
+    /* Kept while a confirmation or message covers the details screen, which it returns to; leaving
+     * the details abandons the call, so only another cover of the ROM can come back here. */
+    const skiff_cover_key key = current_cover_key(app);
+    if (!same_cover(&call->cover_key, &key)) {
+        return;
+    }
+    skiff_cover *shown = app->cover;
+    app->cover = app->cover_spare;
+    app->cover_spare = shown;
+    app->cover_key = call->cover_key;
+    app->has_cover = 1;
 }
 
 void app_request_run(skiff_app *app) {
@@ -154,6 +224,13 @@ void app_request_run(skiff_app *app) {
     }
     const app_request request = app->request;
     app->request = REQUEST_NONE;
+    /* A cover is never worth joining the Wi-Fi again for: the game shows without it. */
+    if (request == REQUEST_COVER) {
+        if (app->net_joined && app->screen == SKIFF_APP_SCREEN_DETAILS) {
+            start_cover(app);
+        }
+        return;
+    }
     /* A dropped request found the network gone: join again first; connecting then makes this
      * request (app_resume_after_connect()). */
     if (!app->net_joined) {
@@ -430,11 +507,11 @@ static void download(skiff_app *app) {
 void app_details_update(skiff_app *app, unsigned actions) {
     app_request_run(app);
     if (actions & SKIFF_UI_ACTION_BACK) {
-        /* Leaving while the ROM loads: its request is dropped, or never made. */
-        if (app->call.kind == CALL_ROM) {
+        /* Leaving while the ROM or its cover loads: the request is dropped, or never made. */
+        if (app->call.kind == CALL_ROM || app->call.kind == CALL_COVER) {
             app_call_abandon(app);
         }
-        if (app->request == REQUEST_ROM) {
+        if (app->request == REQUEST_ROM || app->request == REQUEST_COVER) {
             app->request = REQUEST_NONE;
         }
         app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);

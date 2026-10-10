@@ -422,6 +422,8 @@ skiff_err app_reset_server(skiff_app *app) {
     app->has_platform = 0;
     app->total_known = 0;
     app->has_rom = 0;
+    /* A cover of the old server's: a ROM of the new one may have the same id. */
+    app->has_cover = 0;
     app->request = REQUEST_NONE;
     app->failed_request = REQUEST_NONE;
     memset(app->pages, 0, sizeof app->pages);
@@ -475,6 +477,15 @@ skiff_err skiff_app_create(const skiff_app_config *config, const skiff_app_env *
     if (app == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
+    /* The details screen's cover and the one being decoded: the GE reads them where they are. */
+    app->cover = aligned_alloc(SKIFF_COVER_ALIGNMENT, sizeof *app->cover);
+    app->cover_spare = aligned_alloc(SKIFF_COVER_ALIGNMENT, sizeof *app->cover_spare);
+    if (app->cover == NULL || app->cover_spare == NULL) {
+        free(app->cover);
+        free(app->cover_spare);
+        free(app);
+        return SKIFF_ERR_NO_MEMORY;
+    }
     app->config = *config;
     app->env = *env;
     app->installer = skiff_install_find_installer(SKIFF_APP_PLATFORM_SLUG);
@@ -499,6 +510,8 @@ void skiff_app_destroy(skiff_app *app) {
     skiff_jobs_destroy(app->jobs);
     skiff_install_manifest_destroy(app->manifest);
     skiff_log_destroy(app->log);
+    free(app->cover);
+    free(app->cover_spare);
     free(app);
 }
 

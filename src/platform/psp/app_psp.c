@@ -40,6 +40,8 @@ enum {
 /* The app sizes its lists by its body geometry: it must be the body this renderer draws. */
 _Static_assert(SKIFF_APP_BODY_HEIGHT == SKIFF_PSP_UI_CONTENT_BOTTOM - SKIFF_PSP_UI_CONTENT_TOP,
                "skiff/app.h's body height must be the area between header and footer");
+_Static_assert(SKIFF_APP_BLOCK_GAP + SKIFF_COVER_HEIGHT <= SKIFF_APP_BODY_HEIGHT,
+               "the cover box must fit the body");
 _Static_assert(SKIFF_APP_LINE_HEIGHT == SKIFF_PSP_UI_ROW_HEIGHT,
                "skiff/app.h's line height must be a list row's");
 
@@ -514,6 +516,18 @@ static void draw_qr(const skiff_psp_ui *ui, const skiff_ui_qr *qr) {
                     SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP, scale, qr);
 }
 
+/* The details screen's cover box in the body's top right corner: the placeholder, and the cover
+ * over it when it is in, centred across the box and at its top. */
+static void draw_cover(const skiff_psp_ui *ui, const skiff_cover *cover) {
+    const int x = SKIFF_PSP_UI_SCREEN_WIDTH - SKIFF_PSP_UI_MARGIN - SKIFF_COVER_WIDTH;
+    const int y = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
+    skiff_psp_ui_rect(ui, x, y, SKIFF_COVER_WIDTH, SKIFF_COVER_HEIGHT,
+                      SKIFF_PSP_UI_COLOUR_COVER_BOX);
+    if (cover != NULL) {
+        skiff_psp_ui_cover(ui, x + (SKIFF_COVER_WIDTH - cover->width) / 2, y, cover);
+    }
+}
+
 /* The view's lines from y down, then its progress bar: where they end. */
 static int draw_details(const skiff_psp_ui *ui, const skiff_app_view *view, int y) {
     for (size_t i = 0; i < view->line_count; i++) {
@@ -536,6 +550,9 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
     skiff_psp_ui_header(ui, view->title, view->status[0] != '\0' ? view->status : NULL);
     if (view->qr != NULL) {
         draw_qr(ui, view->qr);
+    }
+    if (view->has_cover_box) {
+        draw_cover(ui, view->cover);
     }
     const int top = SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP;
     if (view->lines_below) {

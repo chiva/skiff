@@ -486,7 +486,8 @@ Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PR
 never packaged. PPSSPPHeadless has no ARK, no `config.ini` and nobody at the buttons, so the app
 must start (storage, the five mutexes, the font and renderer, `skiff.log`, the queue and
 `installed.json`), reach the screen asking for the server address, draw it for 60 frames, run a
-call on the browsing thread through the app's hooks and stop a second one with a cancel, and tear
+call on the browsing thread through the app's hooks and stop a second one with a cancel, draw a red
+square from a cover texture (RGB565) and find all 256 of its pixels red in the frame, and tear
 down (the browsing thread too): it then ends with `SKIFF APP SMOKE OK`. It ends with `SKIFF APP SMOKE FAIL` when it
 cannot start, stops on an error screen, has not reached that screen within 1800 frames, or leaves
 something to the process exit. `scripts/dev.sh app-smoke` runs it, as CI does. Pairing, browsing
@@ -499,8 +500,10 @@ and games to download, pairing for real. The seed adds, with `SKIFF_LIBRARY_ROMS
 (`tests/integration/seed.py`): that many small numbered ROMs, so the list spans several pages; a
 `.zip`, which the app lists but cannot install; a name with a control character, which it shows
 with `?` and as not downloadable; and a name longer than a Memory Stick file name may be, which it
-shortens for the file it downloads. Beside them stay the large seeded file (for the
-interruptions) and the small one with reserved characters in its name.
+shortens for the file it downloads. Every third numbered ROM gets a synthetic PNG cover of its
+own and Skiff Library 02 a JPEG one (shown as the placeholder: Skiff decodes PNG only). Beside them
+stay the large seeded file (for the interruptions, with a PNG cover) and the small one with
+reserved characters in its name (no cover: a RomM edit would rename it).
 
 The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff
 downloaded can be launched from the XMB without any game file from outside the project: a tiny
@@ -540,7 +543,18 @@ CA file), and a `stats:` line every 10 s (frames, mean and longest time between 
 system memory free and its largest block, the download worker's and the browsing thread's lowest
 free stack), and a
 `slow frame:` line for each frame that took over 100 ms, split into the app's update, drawing and
-the wait for the screen. Games Skiff installed stay in `ms0:/ISO` after `scripts/memstick.sh
+the wait for the screen, and a `cover:` line for each cover the details screen asked for: from the
+Memory Stick cache or RomM, its bytes and size, the time to fetch and to decode it, and how the
+cache read and write went.
+
+**Covers (A2).** With the same library: open Skiff Library 01 (a PNG cover) and check it appears
+beside the details without the text moving; Back, open it again (the `cover:` line says `cached`);
+press Back while a cover loads; open Skiff Library 02 (JPEG) and a game without a cover (both keep
+the grey placeholder and show no error); open covers while a 64 MiB download runs; quit, relaunch
+and open Skiff Library 01 again (cached). Read back: `cover:` lines (decode time, bytes), `stats:`
+(no frame over 16 ms while covers load, the browsing thread's lowest free stack at least 8 KB,
+system memory unchanged) and `PSP/GAME/Skiff/covers/` (one `.cov` file per covered game seen, at
+most 64). Games Skiff installed stay in `ms0:/ISO` after `scripts/memstick.sh
 uninstall`. The seeded files are random bytes, so those with a disc extension (`.iso`) show as
 Corrupted Data in the XMB; only the launch check's images are real discs.
 

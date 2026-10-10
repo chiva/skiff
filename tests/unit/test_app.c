@@ -320,19 +320,54 @@ static void serve_page(unsigned offset, unsigned count, unsigned total) {
     serve_raw(path, raw);
 }
 
-static void serve_rom(unsigned id) {
+/* ROM id's details, with RomM's cover path when cover_path is not NULL. */
+static fake_route *serve_rom_with_cover(unsigned id, const char *cover_path) {
     char raw[2048];
     char item[512];
+    char cover[SKIFF_ROMM_COVER_PATH_MAX + 32] = "";
     rom_item(item, sizeof item, id);
     /* The item without its closing brace, then its files. */
     item[strlen(item) - 1] = '\0';
+    if (cover_path != NULL) {
+        snprintf(cover, sizeof cover, ",\"path_cover_small\":\"%s\"", cover_path);
+    }
     snprintf(raw, sizeof raw,
-             JSON_OK "%s,\"files\":[{\"rom_id\":%u,\"file_name\":\"Game %u.iso\","
+             JSON_OK "%s%s,\"files\":[{\"rom_id\":%u,\"file_name\":\"Game %u.iso\","
                      "\"file_size_bytes\":%u,\"crc_hash\":\"%08x\"}]}",
-             item, id, id, BODY_BYTES, (unsigned)body_crc);
+             item, cover, id, id, BODY_BYTES, (unsigned)body_crc);
     char path[64];
     snprintf(path, sizeof path, "/api/roms/%u", id);
-    serve_raw(path, raw);
+    return serve_raw(path, raw);
+}
+
+static void serve_rom(unsigned id) { serve_rom_with_cover(id, NULL); }
+
+/* A 2x2 RGBA PNG: red, green / blue, transparent white (the self-test's). */
+static const unsigned char COVER_PNG[] = {
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72, 0xB6, 0x0D,
+    0x24, 0x00, 0x00, 0x00, 0x13, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x0C, 0x81, 0x34, 0x08, 0x30, 0x00, 0x00, 0x48, 0xC9, 0x08, 0xF8, 0xC5, 0x34, 0xFD, 0x05,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+/* A cover path as RomM gives it, and the URL path Skiff requests it under. */
+#define COVER_PATH(id)                                                                             \
+    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10 04:26:25"
+#define COVER_URL(id)                                                                              \
+    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10%2004:26:25"
+#define NEWER_COVER_PATH "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11 08:00:00"
+#define NEWER_COVER_URL "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11%2008:00:00"
+
+/* Answers the cover at url with status_line and body. */
+static fake_route *serve_cover(const char *url, const char *status_line, const unsigned char *data,
+                               size_t size) {
+    static char raw[256 + sizeof COVER_PNG];
+    const int used =
+        snprintf(raw, sizeof raw, "%s\r\nContent-Type: image/png\r\n\r\n", status_line);
+    TEST_ASSERT_LESS_THAN_size_t(sizeof raw, (size_t)used + size);
+    memcpy(raw + used, data, size);
+    fake_route *route = fake_transport_add_raw(&transport, url, raw, (size_t)used + size);
+    TEST_ASSERT_NOT_NULL(route);
+    return route;
 }
 
 static void serve_content(unsigned id) {
@@ -1409,6 +1444,225 @@ static void test_leaving_a_game_while_it_loads_drops_its_details(void) {
     TEST_ASSERT_TRUE(shows("Game 2.iso"));
 }
 
+/* ---- Covers ---- */
+
+static int cover_slot_exists(unsigned id) {
+    char path[TEMP_DIR_PATH_MAX];
+    char name[32];
+    snprintf(name, sizeof name, "covers/%u.cov", id % SKIFF_COVER_CACHE_SLOTS);
+    app_file(name, path, sizeof path);
+    FILE *file = fopen(path, "rb");
+    if (file != NULL) {
+        fclose(file);
+    }
+    return file != NULL;
+}
+
+/* Every body line fits beside the cover box. */
+static void assert_lines_beside_the_cover(void) {
+    for (size_t i = 0; i < view()->line_count; i++) {
+        TEST_ASSERT_TRUE(env_measure(NULL, view()->lines[i]) <= SKIFF_APP_COVER_TEXT_WIDTH);
+    }
+}
+
+static void test_a_game_shows_its_cover_and_keeps_it_on_the_memory_stick(void) {
+    open_paired_library(2);
+    fake_route *details = serve_rom_with_cover(1, COVER_PATH(1));
+    fake_route *cover = serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    const int calls = env_state.calls_started;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("details, then the cover: %d calls, cover asked %d time(s)",
+                env_state.calls_started - calls, cover->uses);
+    TEST_ASSERT_EQUAL_INT(2, env_state.calls_started - calls);
+    TEST_ASSERT_EQUAL_INT(1, cover->uses);
+    TEST_ASSERT_TRUE(view()->has_cover_box);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+    TEST_ASSERT_EQUAL_UINT16(2, view()->cover->width);
+    TEST_ASSERT_EQUAL_UINT16(2, view()->cover->height);
+    TEST_ASSERT_EQUAL_HEX16(skiff_cover_rgb565(0xFF, 0, 0), view()->cover->pixels[0]);
+    TEST_ASSERT_TRUE(cover_slot_exists(1));
+    assert_lines_beside_the_cover();
+    TEST_ASSERT_TRUE(shows("Game 1.iso"));
+    TEST_PRINTF("the second visit reads it from the Memory Stick, not RomM");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_NULL(view()->cover);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(1, cover->uses);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+    TEST_ASSERT_EQUAL_HEX16(skiff_cover_rgb565(0, 0xFF, 0), view()->cover->pixels[1]);
+    TEST_PRINTF("a cover changed in RomM (new ts) is fetched again, not the one in memory reused");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    /* Later routes for a path answer once the earlier one is used up. */
+    details->max_uses = details->uses;
+    details = serve_rom_with_cover(1, NEWER_COVER_PATH);
+    fake_route *newer =
+        serve_cover(NEWER_COVER_URL, "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(1, newer->uses);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+    TEST_PRINTF("a cover removed in RomM is not shown");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    details->max_uses = details->uses;
+    serve_rom(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_NULL(view()->cover);
+    TEST_PRINTF("a new server forgets the cover in memory: its ROM 1 is another game");
+    TEST_ASSERT_TRUE(app->has_cover);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_reset_server(app));
+    TEST_ASSERT_FALSE(app->has_cover);
+}
+
+static void test_a_game_without_a_usable_cover_keeps_its_placeholder(void) {
+    open_paired_library(4);
+    TEST_PRINTF("no cover: no request for one, the box stays empty");
+    const int calls = env_state.calls_started;
+    open_details(1);
+    TEST_ASSERT_EQUAL_INT(1, env_state.calls_started - calls);
+    TEST_ASSERT_TRUE(view()->has_cover_box);
+    TEST_ASSERT_NULL(view()->cover);
+    assert_lines_beside_the_cover();
+    const struct {
+        unsigned id;
+        const char *status;
+        const unsigned char *body;
+        size_t size;
+    } CASES[] = {
+        {2, "HTTP/1.1 404 Not Found", (const unsigned char *)"<html>", 6},
+        {3, "HTTP/1.1 200 OK", (const unsigned char *)"\xFF\xD8\xFF\xE0 JPEG", 9},
+        {4, "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG - 20},
+    };
+    static const char *const PATHS[] = {COVER_PATH(2), COVER_PATH(3), COVER_PATH(4)};
+    static const char *const URLS[] = {COVER_URL(2), COVER_URL(3), COVER_URL(4)};
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        frame(SKIFF_UI_ACTION_BACK);
+        run_until(SKIFF_APP_SCREEN_LIBRARY);
+        frame(SKIFF_UI_ACTION_DOWN);
+        serve_rom_with_cover(CASES[i].id, PATHS[i]);
+        serve_cover(URLS[i], CASES[i].status, CASES[i].body, CASES[i].size);
+        frame(SKIFF_UI_ACTION_CONFIRM);
+        run_until(SKIFF_APP_SCREEN_DETAILS);
+        TEST_PRINTF("game %u (%s): details shown, no cover, nothing cached", CASES[i].id,
+                    CASES[i].status);
+        TEST_ASSERT_TRUE(shows("Game"));
+        TEST_ASSERT_NULL(view()->cover);
+        TEST_ASSERT_FALSE(cover_slot_exists(CASES[i].id));
+        TEST_ASSERT_TRUE(app->net_joined);
+    }
+}
+
+static void test_long_names_beside_the_cover_leave_room_for_the_details(void) {
+    open_paired_library(1);
+    /* A title and a file name of 250 bytes: each would wrap to 6 lines beside the cover. */
+    char title[251];
+    char file_name[251];
+    memset(title, 'T', sizeof title - 1);
+    title[sizeof title - 1] = '\0';
+    for (size_t i = 0; i < sizeof title - 1; i += 9) {
+        title[i] = ' ';
+    }
+    memset(file_name, 'F', sizeof file_name - 1);
+    memcpy(file_name + sizeof file_name - 5, ".zip", 5);
+    for (size_t i = 0; i < sizeof file_name - 5; i += 11) {
+        file_name[i] = ' ';
+    }
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"id\":1,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"%s\","
+                     "\"fs_size_bytes\":%u,\"files\":[{\"rom_id\":1,\"file_name\":\"%s\","
+                     "\"file_size_bytes\":%u}]}",
+             title, file_name, BODY_BYTES, file_name, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("%zu lines: names cut at %d lines each, the rest still shown", view()->line_count,
+                APP_DETAILS_NAME_LINES);
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_LINES_MAX, view()->line_count);
+    TEST_ASSERT_NOT_NULL(strstr(view()->lines[APP_DETAILS_NAME_LINES - 1], "..."));
+    TEST_ASSERT_NOT_NULL(strstr(view()->lines[(size_t)2 * APP_DETAILS_NAME_LINES - 1], "..."));
+    TEST_ASSERT_EQUAL_STRING("Size: 2 KB", view()->lines[(size_t)2 * APP_DETAILS_NAME_LINES]);
+    TEST_ASSERT_TRUE(shows("Skiff can't install this file"));
+    TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->line_count - 1]);
+    assert_lines_beside_the_cover();
+}
+
+static void test_leaving_a_game_while_its_cover_loads_drops_the_cover(void) {
+    open_paired_library(2);
+    serve_rom_with_cover(1, COVER_PATH(1));
+    fake_route *cover = serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_COVER, app->call.kind);
+    TEST_PRINTF("Back while the cover loads: told to stop, the library is back, no error");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_FALSE(app->has_cover);
+    TEST_PRINTF("the cover that came anyway is not shown on the next game");
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(2);
+    TEST_ASSERT_NULL(view()->cover);
+    TEST_ASSERT_LESS_OR_EQUAL_INT(1, cover->uses);
+}
+
+static void test_a_cover_that_lands_under_a_confirmation_is_kept(void) {
+    record_installed(1, body_crc);
+    open_paired_library(1);
+    serve_rom_with_cover(1, COVER_PATH(1));
+    serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_COVER, app->call.kind);
+    TEST_PRINTF("Download on an installed game asks to replace it while the cover loads");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    env_state.hold_calls = 0;
+    finish_call();
+    TEST_PRINTF("No: back on the game, with its cover");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+}
+
+static void test_a_cover_lost_with_the_network_shows_no_error(void) {
+    open_paired_library(2);
+    serve_rom_with_cover(1, COVER_PATH(1));
+    fake_route *cover = serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    cover->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("the game shows without its cover; the next request joins the Wi-Fi again");
+    TEST_ASSERT_TRUE(shows("Game 1.iso"));
+    TEST_ASSERT_NULL(view()->cover);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_PRINTF("with the network gone, no cover request is made to join it again");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    app->request = REQUEST_COVER;
+    app->screen = SKIFF_APP_SCREEN_DETAILS;
+    const int joins = env_state.net_starts;
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    TEST_ASSERT_FALSE(app_call_busy(app));
+}
+
 static void test_a_lost_connection_under_a_dropped_request_still_counts(void) {
     open_paired_library(2);
     fake_route *lost = serve_raw("/api/roms/1", JSON_OK "{}");
@@ -2002,6 +2256,12 @@ int main(void) {
     RUN_TEST(test_a_failed_page_can_be_retried);
     RUN_TEST(test_the_library_answers_while_a_page_loads);
     RUN_TEST(test_leaving_a_game_while_it_loads_drops_its_details);
+    RUN_TEST(test_a_game_shows_its_cover_and_keeps_it_on_the_memory_stick);
+    RUN_TEST(test_a_game_without_a_usable_cover_keeps_its_placeholder);
+    RUN_TEST(test_long_names_beside_the_cover_leave_room_for_the_details);
+    RUN_TEST(test_leaving_a_game_while_its_cover_loads_drops_the_cover);
+    RUN_TEST(test_a_cover_that_lands_under_a_confirmation_is_kept);
+    RUN_TEST(test_a_cover_lost_with_the_network_shows_no_error);
     RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);
     RUN_TEST(test_a_page_asked_for_while_another_loaded_is_dropped_once_off_screen);
     RUN_TEST(test_a_new_server_drops_what_the_old_one_was_still_sending);

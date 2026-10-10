@@ -60,7 +60,11 @@ enum {
     LIST_TEXT_RIGHT = 12,
 
     PERCENT_FULL = 100,
+    /* The texture a cover is drawn from: the smallest power of two over its box. */
+    COVER_TEXTURE_SIZE = 256,
 };
+_Static_assert(COVER_TEXTURE_SIZE >= SKIFF_COVER_WIDTH && COVER_TEXTURE_SIZE >= SKIFF_COVER_HEIGHT,
+               "the cover texture must hold the cover box");
 
 static unsigned int __attribute__((aligned(16))) display_list[DISPLAY_LIST_WORDS];
 
@@ -189,6 +193,44 @@ void skiff_psp_ui_rect(const skiff_psp_ui *ui, int x, int y, int width, int heig
     vertices[0] = vertex(colour, x, y);
     vertices[1] = vertex(colour, x + width, y + height);
     draw_vertices(GU_SPRITES, vertices, 2);
+}
+
+/* A textured sprite's corner: 16-bit texel and screen coordinates (GU_TRANSFORM_2D). */
+typedef struct ui_texture_vertex {
+    unsigned short u;
+    unsigned short v;
+    short x;
+    short y;
+    short z;
+} ui_texture_vertex;
+
+void skiff_psp_ui_cover(const skiff_psp_ui *ui, int x, int y, const skiff_cover *cover) {
+    (void)ui;
+    if (cover == NULL || cover->width == 0 || cover->height == 0) {
+        return;
+    }
+    /* The GE reads RAM, not the data cache: the decoded pixels may still sit in it. */
+    sceKernelDcacheWritebackRange(cover->pixels, sizeof cover->pixels);
+    ui_texture_vertex *vertices = sceGuGetMemory((int)(2 * sizeof(ui_texture_vertex)));
+    const ui_texture_vertex corners[2] = {
+        {0, 0, (short)x, (short)y, 0},
+        {cover->width, cover->height, (short)(x + cover->width), (short)(y + cover->height), 0},
+    };
+    vertices[0] = corners[0];
+    vertices[1] = corners[1];
+    sceKernelDcacheWritebackRange(vertices, sizeof corners);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuEnable(GU_TEXTURE_2D);
+    /* A power-of-two texture as the GE requires, of which the cover's rows (SKIFF_COVER_WIDTH
+     * apart) fill the top left: only the texels inside the sprite are read. */
+    sceGuTexMode(GU_PSM_5650, 0, 0, 0);
+    sceGuTexImage(0, COVER_TEXTURE_SIZE, COVER_TEXTURE_SIZE, SKIFF_COVER_WIDTH, cover->pixels);
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuDrawArray(GU_SPRITES, GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, NULL,
+                   vertices);
+    /* intraFont sets its own texture and mode for every print, but modulates its glyphs. */
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
 }
 
 void skiff_psp_ui_backdrop(const skiff_psp_ui *ui) {

@@ -17,7 +17,7 @@ All builds and checks run in containers. Docker is the only prerequisite.
 | ASan + UBSan (gcc + clang) | `scripts/dev.sh asan` |
 | Coverage (85% floor) | `scripts/dev.sh coverage` |
 | clang-tidy + cppcheck | `scripts/dev.sh lint` |
-| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench,skiff_resume_probe,skiff_jobs_probe,skiff_app_smoke,skiff_launch_check}/EBOOT.PBP` |
+| PSP EBOOTs | `scripts/dev.sh psp` → `build/psp/pbp/{skiff,skiff_selftest,skiff_tls_probe,skiff_kirk_probe,skiff_ui_proto,skiff_net_probe,skiff_bench,skiff_resume_probe,skiff_jobs_probe,skiff_backlight_probe,skiff_app_smoke,skiff_launch_check}/EBOOT.PBP` |
 | Emulator self-test | `scripts/dev.sh selftest` (after `psp`) |
 | TLS toolchain probe | `scripts/dev.sh tls-probe` (after `psp`) |
 | KIRK probe without ARK (TLS must refuse) | `scripts/dev.sh kirk-probe` (after `psp`) |

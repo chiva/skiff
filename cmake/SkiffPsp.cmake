@@ -114,6 +114,13 @@ skiff_add_psp_app(skiff_kirk_probe "${SKIFF_PBP_TITLE} KIRK probe" tests/securit
 target_link_libraries(skiff_kirk_probe PRIVATE skiff_psp_check skiff_psp_ark skiff_psp_tls
                                                skiff_psp_entropy)
 
+# Backlight probe (Phase 3): what the firmware's backlight-off time does during a download, from
+# user mode, with the person holding the PSP answering. Hardware only (it waits for answers); not
+# run in CI.
+skiff_add_psp_app(skiff_backlight_probe "${SKIFF_PBP_TITLE} backlight probe"
+  tests/hardware/backlight_probe.c)
+target_link_libraries(skiff_backlight_probe PRIVATE skiff_psp_check)
+
 # The PSP's network stack (src/platform/psp/net_psp.c): CPU clock, modules, access-point connection,
 # teardown. psputility, pspnet_inet and pspnet_resolver are left out: psp-gcc already links them
 # after everything else, and listing a stub library twice splits its import stubs, which

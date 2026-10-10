@@ -14,9 +14,9 @@ readonly BUILD_PBP_DIR="$REPO_ROOT/build/psp/pbp"
 readonly RESULT_FILE="result.txt"
 # build target -> folder under PSP/GAME. The check EBOOTs write result.txt; the app does not.
 readonly TARGETS=(skiff skiff_selftest skiff_tls_probe skiff_kirk_probe skiff_ui_proto skiff_net_probe
-  skiff_bench skiff_resume_probe skiff_jobs_probe)
+  skiff_bench skiff_resume_probe skiff_jobs_probe skiff_backlight_probe)
 readonly FOLDERS=(Skiff SkiffSelftest SkiffTLSProbe SkiffKIRKProbe SkiffUIProto SkiffNetProbe
-  SkiffBench SkiffResumeProbe SkiffJobsProbe)
+  SkiffBench SkiffResumeProbe SkiffJobsProbe SkiffBacklightProbe)
 # The app gets the CA bundle it trusts by default next to its EBOOT, where scripts/dev.sh psp put it.
 readonly APP_TARGET="skiff"
 readonly APP_FOLDER="Skiff"
@@ -59,7 +59,8 @@ readonly SECRET_SECTIONS=(auth headers)
 readonly SECRET_KEYS=(token "$APP_TEST_HEADER")
 readonly REDACTED="[redacted]"
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt
+  backlight-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
 # address (from its certificate's addresses), the test CA and the client certificates. The keys are
 # test material for that throwaway server; uninstall removes them with the folder.

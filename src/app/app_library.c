@@ -340,8 +340,11 @@ static void switch_list(skiff_app *app) {
 
 void app_library_update(skiff_app *app, unsigned actions) {
     app_request_run(app);
-    /* While the favourites are checked for "Download all", only Back (which stops it) counts. */
-    if (app->batch.step == BATCH_SCANNING || app->batch.step == BATCH_SPACE) {
+    /* While the favourites are checked for "Download all", only Back (which stops it) counts;
+     * while they are queued (a moment), nothing does: the batch's room in the queue and
+     * installed.json must not be taken meanwhile. */
+    if (app->batch.step == BATCH_SCANNING || app->batch.step == BATCH_SPACE ||
+        app->batch.step == BATCH_QUEUEING) {
         if (actions & SKIFF_UI_ACTION_BACK) {
             app_batch_cancel(app);
         }

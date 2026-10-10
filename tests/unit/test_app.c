@@ -1305,6 +1305,28 @@ static void test_a_favourite_repeated_across_pages_is_taken_once(void) {
     TEST_ASSERT_TRUE(shows("Download 24 favourites"));
 }
 
+static void test_nothing_else_runs_while_download_all_queues(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(BATCH_QUEUEING, (int)app->batch.step);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_BATCH_ADDING)));
+    TEST_PRINTF("Downloads, Settings, SELECT and Back wait until the batch is queued");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_SELECT);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, (int)view()->screen);
+    TEST_ASSERT_TRUE(app->favourites);
+    TEST_ASSERT_EQUAL_size_t(0, view()->hint_count);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Added 3 downloads"));
+}
+
 static void test_back_while_favourites_are_checked_stops_download_all(void) {
     open_favourites(3);
     serve_batch_favourites(3);
@@ -2608,6 +2630,7 @@ int main(void) {
     RUN_TEST(test_download_all_keeps_room_for_installed_records);
     RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
     RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
+    RUN_TEST(test_nothing_else_runs_while_download_all_queues);
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);

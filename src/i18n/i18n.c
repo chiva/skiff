@@ -53,6 +53,9 @@
     X(SKIFF_ERR_ROMM_PAIRING_SCOPES,                                                               \
       "La vinculación se aprobó sin los permisos que Skiff necesita; vuelve a vincular y "         \
       "permítelos")                                                                                \
+    X(SKIFF_ERR_ROMM_COVER_FORMAT,                                                                 \
+      "RomM ha enviado una portada en un formato que Skiff no muestra")                            \
+    X(SKIFF_ERR_ROMM_COVER_DAMAGED, "RomM ha enviado una portada que Skiff no ha podido leer")     \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, "No se encuentra ningún Memory Stick")                           \
     X(SKIFF_ERR_STORAGE_NO_SPACE, "No hay suficiente espacio libre en el Memory Stick")            \
     X(SKIFF_ERR_STORAGE_IO, "No se puede leer o escribir en el Memory Stick")                      \

@@ -7,3 +7,4 @@ zlib
 libintrafont
 cjson
 qrcodegen
+libpng

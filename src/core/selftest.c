@@ -8,6 +8,7 @@
 
 #include "skiff/app.h"
 #include "skiff/config.h"
+#include "skiff/cover.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/i18n.h"
@@ -72,6 +73,12 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_COVER_URL                                                                   \
     SKIFF_SELFTEST_COVER_BASE                                                                      \
     "/assets/romm/resources/roms/1/7/cover/Caf%C3%A9.png?ts=2026-10-10%2004:21:31"
+/* A 2x2 RGBA PNG: red, green / blue, transparent white. Every byte escaped, 76 in all. */
+#define SKIFF_SELFTEST_COVER_PNG                                                                   \
+    "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x02\x00\x00"     \
+    "\x00\x02\x08\x06\x00\x00\x00\x72\xB6\x0D\x24\x00\x00\x00\x13\x49\x44\x41\x54\x78\xDA\x63"     \
+    "\xF8\xCF\xC0\xF0\x1F\x0C\x81\x34\x08\x30\x00\x00\x48\xC9\x08\xF8\xC5\x34\xFD\x05\x00\x00"     \
+    "\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82"
 /* A RomM name with accents and characters FAT refuses, and how it must come out. */
 #define SKIFF_SELFTEST_ROMM_NAME "Pok\xC3\xA9mon: Edici\xC3\xB3n/Plata?.iso"
 #define SKIFF_SELFTEST_SAFE_NAME "Pok\xC3\xA9mon_ Edici\xC3\xB3n_Plata_.iso"
@@ -273,6 +280,28 @@ static const char *check_romm_cover(void) {
                : "a cover URL came out wrong";
 }
 
+/* libpng and zlib as the EBOOT links them, and RGB565 written as the GE reads it: red in the low
+ * bits whatever the CPU's byte order. */
+static const char *check_cover_decode(void) {
+    static const unsigned char png[] = SKIFF_SELFTEST_COVER_PNG;
+    skiff_cover *cover = malloc(sizeof *cover);
+    if (cover == NULL) {
+        return "no memory for a cover";
+    }
+    const uint16_t expected[] = {skiff_cover_rgb565(0xFF, 0, 0), skiff_cover_rgb565(0, 0xFF, 0),
+                                 skiff_cover_rgb565(0, 0, 0xFF),
+                                 skiff_cover_rgb565(SKIFF_COVER_BACKGROUND_RED,
+                                                    SKIFF_COVER_BACKGROUND_GREEN,
+                                                    SKIFF_COVER_BACKGROUND_BLUE)};
+    const int ok = skiff_cover_decode_png(png, sizeof png - 1, cover) == SKIFF_OK &&
+                   cover->width == 2 && cover->height == 2 && cover->pixels[0] == expected[0] &&
+                   cover->pixels[1] == expected[1] &&
+                   cover->pixels[SKIFF_COVER_WIDTH] == expected[2] &&
+                   cover->pixels[SKIFF_COVER_WIDTH + 1] == expected[3] && expected[0] == 0x001F;
+    free(cover);
+    return ok ? NULL : "a PNG cover decoded wrong";
+}
+
 /* Names from RomM are cleaned byte by byte, and the PSP's char is signed: UTF-8 must still be
  * recognised, and a long name cut between characters, not inside one. */
 static const char *check_safe_names(void) {
@@ -451,6 +480,7 @@ static const selftest_check CHECKS[] = {
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
     {"romm-cover", check_romm_cover},
+    {"cover-decode", check_cover_decode},
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},

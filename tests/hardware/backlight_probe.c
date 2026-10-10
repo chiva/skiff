@@ -354,7 +354,15 @@ int main(int argc, char *argv[]) {
         ok = part_one(&report, state_path);
         marker = ok ? PART_ONE_MARKER : FAIL_MARKER;
     }
-    note(&report, marker);
+    /* The log gets the marker first: a success it cannot keep is reported as a failure. */
+    if (ok && !append_log(marker)) {
+        skiff_psp_report_line(&report, "FAIL cannot write " LOG_FILE_NAME);
+        marker = FAIL_MARKER;
+        (void)append_log(marker);
+    } else if (!ok) {
+        (void)append_log(marker);
+    }
+    skiff_psp_report_line(&report, marker);
     skiff_psp_report_close(&report);
     int waited_ms = 0;
     (void)wait_press(PSP_CTRL_CROSS | PSP_CTRL_CIRCLE, ANSWER_TIMEOUT_S, &waited_ms);

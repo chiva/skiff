@@ -489,11 +489,12 @@ Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PR
 checks what Skiff can do about the backlight during a long download from user mode, before it does
 it. The keep-awake tick resets only the auto-sleep timer, so the firmware already dims the screen
 after a minute and turns it off at the player's Backlight Auto-Off setting; the plan is to shorten
-that setting while a download runs (`sceImposeSetBacklightOffTime()`) and put the player's back
-afterwards. Nothing here reads the brightness (`sceDisplayGetBrightness()` is kernel-only in
+that setting while a download runs (`sceImposeSetBacklightOffTime()`) and restore the player's own
+setting afterwards. Nothing here reads the brightness (`sceDisplayGetBrightness()` is kernel-only in
 pspsdk), so the person holding the PSP answers with Up (yes) or Down (no).
 
-1. **First run** (`SKIFF BACKLIGHT PROBE PART 1 OK`): records the player's off time, sets 30, 60
+1. **First run** (`SKIFF BACKLIGHT PROBE PART 1 OK`), started on battery (on AC it asks you to
+   unplug, and stops with nothing changed if you don't): records the player's off time, sets 30, 60
    and 120 s and reads each back (`set <v> -> <returned>, reads <v>`), then with 60 s (or 120 s if
    60 is refused) asks you to leave the PSP alone and press X once the screen has gone dark. It
    logs whether X reached the probe and asks whether the screen dimmed, went dark and lit again.
@@ -504,10 +505,12 @@ pspsdk), so the person holding the PSP answers with Up (yes) or Down (no).
 3. **Second run** (`SKIFF BACKLIGHT PROBE OK`): `setting lasted: yes|no` (whether the firmware kept
    the value run 1 left across the power cycle; `unknown` when that was yours already), then puts your
    setting back and removes the state file. Run it again whenever a first run ended early: it
-   always restores.
+   restores from the state file. If that file cannot be read, it stops with nothing changed: set
+   Backlight Auto-Off by hand (run 1's `player's off time` line in `backlight-log.txt` has your
+   value) and delete the file.
 
-Read back with `scripts/memstick.sh results`: `result.txt` holds the last run, `backlight-log.txt`
-both.
+Read back with `scripts/memstick.sh results`: `result.txt` holds the last run, and
+`backlight-log.txt` the lines of both runs. A line the log cannot keep fails the run.
 
 ## App smoke test
 

@@ -74,21 +74,32 @@ typedef enum press {
 /* Next to the EBOOT; empty when there is no folder for them. */
 static char log_path[PATH_MAX_LENGTH];
 static char left_path[PATH_MAX_LENGTH];
+/* A line could not be added to backlight-log.txt: the run is not reported as complete. */
+static int log_failed;
 
 static int64_t now_us(void) { return (int64_t)sceKernelGetSystemTimeWide(); }
 
-/* A report line, also appended to backlight-log.txt (opened per line: a suspend invalidates open
- * files), so the second run's result.txt does not lose the first run's answers. */
+/* Appends line to backlight-log.txt (opened per line: a suspend invalidates open files); 0 if it
+ * could not be written whole. */
+static int append_log(const char *line) {
+    const SceUID file = sceIoOpen(log_path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+    if (file < 0) {
+        return 0;
+    }
+    const int length = (int)strlen(line);
+    const int ok =
+        sceIoWrite(file, line, (SceSize)length) == length && sceIoWrite(file, "\n", 1) == 1;
+    sceIoClose(file);
+    return ok;
+}
+
+/* A report line, also kept in backlight-log.txt, so the second run's result.txt does not lose the
+ * first run's answers. A line the log loses fails the run. */
 static void note(skiff_psp_report *report, const char *line) {
     skiff_psp_report_line(report, line);
-    if (log_path[0] == '\0') {
-        return;
-    }
-    const SceUID file = sceIoOpen(log_path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
-    if (file >= 0) {
-        (void)sceIoWrite(file, line, (SceSize)strlen(line));
-        (void)sceIoWrite(file, "\n", 1);
-        sceIoClose(file);
+    if (!append_log(line) && !log_failed) {
+        log_failed = 1;
+        skiff_psp_report_line(report, "FAIL cannot write " LOG_FILE_NAME);
     }
 }
 
@@ -199,10 +210,13 @@ static state_found read_value(const char *path, const char *key, int *value) {
         return STATE_DAMAGED;
     }
     text[read] = '\0';
+    /* Exactly what write_value() wrote, newline included: a cut "original=300" must not read as
+     * 30 s. */
     char read_key[STATE_KEY_MAX] = "";
-    return sscanf(text, "%15[^=]=%d", read_key, value) == STATE_FIELDS && strcmp(read_key, key) == 0
-               ? STATE_READ
-               : STATE_DAMAGED;
+    int used = 0;
+    const int complete = sscanf(text, "%15[^=]=%d%n", read_key, value, &used) == STATE_FIELDS &&
+                         text[used] == '\n' && text[used + 1] == '\0';
+    return complete && strcmp(read_key, key) == 0 ? STATE_READ : STATE_DAMAGED;
 }
 
 static int write_value(const char *path, const char *key, int value) {
@@ -224,8 +238,19 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     snprintf(line, sizeof line, "player's off time %d s (0 = Off); power online %d, battery %d %%",
              original, scePowerIsPowerOnline(), scePowerGetBatteryLifePercent());
     note(report, line);
-    if (original < 0) {
+    if (original < 0 || log_failed) {
         return 0;
+    }
+    /* Battery first, then AC: the watches compare them, and nothing has changed yet. */
+    if (scePowerIsPowerOnline()) {
+        note(report, ACTION_PREFIX "unplug the AC adapter, then press X (O to stop).");
+        int waited_ms = 0;
+        if (wait_press(PSP_CTRL_CROSS | PSP_CTRL_CIRCLE, ANSWER_TIMEOUT_S, &waited_ms) !=
+                PRESS_CONFIRM ||
+            scePowerIsPowerOnline()) {
+            note(report, "FAIL still on AC power: start on battery (nothing changed)");
+            return 0;
+        }
     }
     /* Kept first and never rewritten, so whatever happens next, run 2 puts it back. */
     if (!write_value(state_path, STATE_KEY_ORIGINAL, original)) {
@@ -241,18 +266,17 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     if (left_path[0] == '\0' || !write_value(left_path, STATE_KEY_LEFT, watch_s)) {
         note(report, "cannot write " LEFT_FILE_NAME ": run 2 will not tell whether it lasted");
     }
-    watch(report, scePowerIsPowerOnline() ? "ac" : "battery", watch_s);
-    if (!scePowerIsPowerOnline()) {
-        note(report, ACTION_PREFIX "plug in the AC adapter, then press X (O to skip).");
-        int waited_ms = 0;
-        if (wait_press(PSP_CTRL_CROSS | PSP_CTRL_CIRCLE, ANSWER_TIMEOUT_S, &waited_ms) ==
-                PRESS_CONFIRM &&
-            scePowerIsPowerOnline()) {
-            watch(report, "ac", watch_s);
-        } else {
-            note(report, "watch ac: skipped");
-        }
+    watch(report, "battery", watch_s);
+    note(report, ACTION_PREFIX "plug in the AC adapter, then press X (O to skip).");
+    int waited_ms = 0;
+    if (wait_press(PSP_CTRL_CROSS | PSP_CTRL_CIRCLE, ANSWER_TIMEOUT_S, &waited_ms) ==
+            PRESS_CONFIRM &&
+        scePowerIsPowerOnline()) {
+        watch(report, "ac", watch_s);
+    } else {
+        note(report, "watch ac: skipped");
     }
+
     snprintf(line, sizeof line,
              "left %d s set on purpose (player's %d s is in " STATE_FILE_NAME ")", watch_s,
              original);
@@ -260,7 +284,7 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     note(report, ACTION_PREFIX "HOME -> Quit. Check Settings > Power Save Settings > "
                                "Backlight Auto-Off, then turn the PSP off and on and "
                                "run this probe again: it puts your setting back.");
-    return 1;
+    return !log_failed;
 }
 
 /* Run 2: did the value run 1 left last, and the player's back. It cannot tell when run 1 left the
@@ -289,7 +313,7 @@ static int part_two(skiff_psp_report *report, const char *state_path, int origin
         sceIoRemove(left_path);
     }
     note(report, "player's setting put back; " STATE_FILE_NAME " removed");
-    return 1;
+    return !log_failed;
 }
 
 int main(int argc, char *argv[]) {
@@ -300,11 +324,10 @@ int main(int argc, char *argv[]) {
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
     const char *program = argc > 0 ? argv[0] : "";
     skiff_psp_report_open(&report, program);
-    note(&report, "Skiff backlight probe");
-
     if (!sibling_path(program, LOG_FILE_NAME, log_path)) {
         log_path[0] = '\0';
     }
+    note(&report, "Skiff backlight probe");
     if (!sibling_path(program, LEFT_FILE_NAME, left_path)) {
         left_path[0] = '\0';
     }

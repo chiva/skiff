@@ -1,6 +1,7 @@
 /*
  * The RomM client (skiff/romm.h) against the integration RomM behind Caddy, over the curl transport
- * and the TLS stack the PSP links: the version check, the PSP platform, every ROM page by page, a
+ * and the TLS stack the PSP links: the version check, the PSP platform, every ROM page by page, the
+ * seeded favourite with its file, a
  * ROM's files, and a download URL built from a file name full of reserved characters that brings
  * back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched without the
  * token from the URL its ROM's details give.
@@ -23,6 +24,8 @@ enum {
     HEX_BASE = 16,
     DECIMAL_BASE = 10,
     SEEDED_ROMS = 2,
+    /* The payload (tests/integration/seed.py). */
+    SEEDED_FAVOURITES = 1,
     HTTP_OK = 200,
     HTTP_NOT_FOUND = 404,
     /* The first bytes of a cover, enough to tell its format. */
@@ -109,12 +112,12 @@ static void test_every_rom_is_listed_page_by_page(void) {
     skiff_romm_platform platform;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&client, PLATFORM_SLUG, &platform));
     TEST_ASSERT_EQUAL_UINT64(SEEDED_ROMS, platform.rom_count);
+    const skiff_romm_list_query all = {.platform_id = platform.id, .filter = SKIFF_ROMM_LIST_ALL};
     skiff_romm_rom_page page;
     int seen_payload = 0;
     int seen_extra = 0;
     for (uint64_t offset = 0; offset <= SEEDED_ROMS; offset++) {
-        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                              skiff_romm_list_roms(&client, platform.id, offset, 1, &page));
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &all, offset, 1, &page));
         TEST_PRINTF("offset %llu: %zu item(s) of %llu%s%s", (unsigned long long)offset, page.count,
                     (unsigned long long)page.total, page.count > 0 ? ", " : "",
                     page.count > 0 ? page.items[0].fs_name : "");
@@ -128,11 +131,32 @@ static void test_every_rom_is_listed_page_by_page(void) {
     TEST_ASSERT_EQUAL_INT(1, seen_payload);
     TEST_ASSERT_EQUAL_INT(1, seen_extra);
     TEST_PRINTF("a full page holds both, in name order");
-    TEST_ASSERT_EQUAL_INT(
-        SKIFF_OK, skiff_romm_list_roms(&client, platform.id, 0, SKIFF_ROMM_PAGE_SIZE, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_list_roms(&client, &all, 0, SKIFF_ROMM_PAGE_SIZE, &page));
     TEST_ASSERT_EQUAL_size_t(SEEDED_ROMS, page.count);
     TEST_ASSERT_EQUAL_UINT64(extra.rom_id, page.items[0].id);
     TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[1].id);
+}
+
+static void test_the_favourites_hold_the_seeded_favourite_with_its_file(void) {
+    skiff_romm_platform platform;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&client, PLATFORM_SLUG, &platform));
+    const skiff_romm_list_query favourites = {
+        .platform_id = platform.id, .filter = SKIFF_ROMM_LIST_FAVOURITES, .with_files = 1};
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_romm_list_roms(&client, &favourites, 0, SKIFF_ROMM_PAGE_SIZE, &page));
+    TEST_PRINTF("favourites: %zu of %llu%s%s", page.count, (unsigned long long)page.total,
+                page.count > 0 ? ", first file " : "",
+                page.count > 0 ? page.items[0].file.file_name : "");
+    TEST_ASSERT_EQUAL_UINT64(SEEDED_FAVOURITES, page.total);
+    TEST_ASSERT_EQUAL_size_t(SEEDED_FAVOURITES, page.count);
+    TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[0].id);
+    TEST_ASSERT_TRUE(page.items[0].has_file);
+    TEST_ASSERT_EQUAL_STRING(payload.file_name, page.items[0].file.file_name);
+    TEST_ASSERT_EQUAL_UINT64(payload.size, page.items[0].file.size);
+    TEST_ASSERT_TRUE(page.items[0].file.has_crc32);
+    TEST_ASSERT_EQUAL_HEX32(payload.crc32, page.items[0].file.crc32);
 }
 
 static skiff_err count_body(void *ctx, const unsigned char *data, size_t size) {
@@ -235,6 +259,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_the_server_version_is_supported);
     RUN_TEST(test_every_rom_is_listed_page_by_page);
+    RUN_TEST(test_the_favourites_hold_the_seeded_favourite_with_its_file);
     RUN_TEST(test_a_reserved_file_name_downloads_through_its_url);
     RUN_TEST(test_a_cover_comes_without_the_token_from_its_rom_details);
     RUN_TEST(test_a_wrong_token_is_refused_by_romm);

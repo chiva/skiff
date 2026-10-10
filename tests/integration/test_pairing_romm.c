@@ -2,7 +2,9 @@
  * Pairing (skiff/romm_pairing.h) against the integration RomM behind Caddy, over the curl transport
  * and the TLS stack the PSP links: Skiff starts a pairing, polls while the player has not approved
  * yet, the admin approves it through RomM's own endpoint (what the web UI does), and the token
- * Skiff receives browses the PSP platform and downloads a ROM, with the scopes Skiff asked for.
+ * Skiff receives browses the PSP platform and the player's favourites and downloads a ROM, with the
+ * scopes Skiff asked for, and is refused RomM's collections, which need a scope Skiff does not ask
+ * for.
  * Then a refused pairing (207) and a code that was already used (208). A pairing that runs out of
  * time is not run: RomM gives every pairing 10 minutes; the unit tests replay that answer.
  *
@@ -20,7 +22,7 @@
 
 #include "unity.h"
 
-enum { PATH_MAX_LENGTH = 256, BODY_MAX = 512, DECIMAL_BASE = 10 };
+enum { PATH_MAX_LENGTH = 256, BODY_MAX = 512, DECIMAL_BASE = 10, HTTP_FORBIDDEN = 403 };
 
 #define TLS_SITE "https://proxy:8443"
 #define PLATFORM_SLUG "psp"
@@ -121,6 +123,23 @@ static skiff_err count_body(void *ctx, const unsigned char *data, size_t size) {
     return SKIFF_OK;
 }
 
+/* The status of a GET with client's token. */
+static long paired_get_status(const skiff_romm_client *paired, const char *path) {
+    char url[PATH_MAX_LENGTH];
+    snprintf(url, sizeof url, TLS_SITE "%s", path);
+    skiff_http_header authorization;
+    TEST_ASSERT_EQUAL_size_t(1, skiff_romm_auth_header(paired, &authorization));
+    skiff_http_request request;
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    request.headers = &authorization;
+    request.header_count = 1;
+    skiff_http_response response;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(transport, &request, &response));
+    TEST_PRINTF("GET %s with the paired token -> HTTP %ld", path, response.status);
+    return response.status;
+}
+
 static void test_an_approved_pairing_gives_a_token_that_browses_and_downloads(void) {
     start();
     TEST_PRINTF("before the admin approves, RomM says pending (or slow_down if polled too soon)");
@@ -147,9 +166,22 @@ static void test_an_approved_pairing_gives_a_token_that_browses_and_downloads(vo
                           skiff_romm_client_init(&paired, transport, TLS_SITE, result.token));
     skiff_romm_platform platform;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&paired, PLATFORM_SLUG, &platform));
+    const skiff_romm_list_query all = {.platform_id = platform.id, .filter = SKIFF_ROMM_LIST_ALL};
     skiff_romm_rom_page page;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&paired, platform.id, 0, 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&paired, &all, 0, 1, &page));
     TEST_ASSERT_EQUAL_size_t(1, page.count);
+
+    TEST_PRINTF("the player's favourites need no scope beyond roms.read");
+    const skiff_romm_list_query favourites = {
+        .platform_id = platform.id, .filter = SKIFF_ROMM_LIST_FAVOURITES, .with_files = 1};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&paired, &favourites, 0, 1, &page));
+    TEST_PRINTF("favourites with the paired token: %zu of %llu", page.count,
+                (unsigned long long)page.total);
+    TEST_ASSERT_EQUAL_size_t(1, page.count);
+    TEST_ASSERT_EQUAL_UINT64(payload_rom_id, page.items[0].id);
+    TEST_ASSERT_TRUE(page.items[0].has_file);
+    TEST_PRINTF("RomM's collections need collections.read, which Skiff does not ask for");
+    TEST_ASSERT_EQUAL_INT64(HTTP_FORBIDDEN, paired_get_status(&paired, "/api/collections"));
 
     char url[PATH_MAX_LENGTH];
     snprintf(url, sizeof url, TLS_SITE "/api/roms/%llu/content/%s",

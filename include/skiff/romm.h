@@ -3,7 +3,8 @@
 
 /*
  * A typed client for the RomM REST API over a skiff_transport: the server's version and whether
- * Skiff supports it, the PSP platform, its ROMs one page at a time, a ROM's files, and the URL a
+ * Skiff supports it, the PSP platform, its ROMs (or the player's favourites) one page at a time, a
+ * ROM's files, and the URL a
  * file downloads from (skiff/download.h does the download). Responses are JSON, parsed with cJSON
  * one response at a time from a buffer of at most SKIFF_ROMM_BODY_MAX bytes: a larger response is
  * refused, never cut, so a PSP cannot run out of memory on a large library.
@@ -116,6 +117,17 @@ typedef enum skiff_romm_name_status {
 /* ASCII, so the PSP's Latin firmware font draws it (it has no "…"). */
 #define SKIFF_ROMM_NAME_CUT_MARKER "~"
 
+typedef struct skiff_romm_file {
+    char file_name[SKIFF_ROMM_FILE_NAME_MAX];
+    uint64_t size;
+    int has_crc32;
+    uint32_t crc32;
+    /* Anything but SKIFF_ROMM_NAME_OK: file_name is only for display, or the ROM's own names are
+     * not usable (the file then carries the ROM's status), and skiff_romm_content_url() refuses the
+     * file. */
+    skiff_romm_name_status name_status;
+} skiff_romm_file;
+
 /* A ROM as a list shows it. size and crc32 are the whole ROM's (one file for a PSP game). */
 typedef struct skiff_romm_rom_summary {
     uint64_t id;
@@ -131,26 +143,37 @@ typedef struct skiff_romm_rom_summary {
     /* For name and fs_name together: anything but SKIFF_ROMM_NAME_OK means the ROM is listed but
      * cannot be downloaded. */
     skiff_romm_name_status name_status;
+    /* The ROM's only file, when the answer listed the ROM's files (a ROM's details always do, a
+     * list only with_files) and there is exactly one that reads as a file of this ROM: what a
+     * download needs, as skiff_romm_get_rom() gives it in files[0]. has_file is 0 otherwise (no
+     * files listed, several, or one that cannot be read); the ROM is listed all the same. */
+    int has_file;
+    skiff_romm_file file;
 } skiff_romm_rom_summary;
 
+/* Which of a platform's ROMs a list holds. */
+typedef enum skiff_romm_list_filter {
+    SKIFF_ROMM_LIST_ALL,
+    /* The ones in the RomM user's favourites collections (a user may have several: RomM merges
+     * them). Needs no scope beyond roms.read; a user without favourites gets an empty list. */
+    SKIFF_ROMM_LIST_FAVOURITES,
+} skiff_romm_list_filter;
+
+typedef struct skiff_romm_list_query {
+    uint64_t platform_id;
+    skiff_romm_list_filter filter;
+    /* Also list each ROM's files (about 0.5 KB more JSON per ROM), so a summary carries its only
+     * file (has_file) and a download needs no request for the ROM's details. */
+    int with_files;
+} skiff_romm_list_query;
+
 typedef struct skiff_romm_rom_page {
-    /* ROMs on the platform, and where this page starts among them. */
+    /* ROMs the list holds, and where this page starts among them. */
     uint64_t total;
     uint64_t offset;
     size_t count;
     skiff_romm_rom_summary items[SKIFF_ROMM_PAGE_SIZE];
 } skiff_romm_rom_page;
-
-typedef struct skiff_romm_file {
-    char file_name[SKIFF_ROMM_FILE_NAME_MAX];
-    uint64_t size;
-    int has_crc32;
-    uint32_t crc32;
-    /* Anything but SKIFF_ROMM_NAME_OK: file_name is only for display, or the ROM's own names are
-     * not usable (the file then carries the ROM's status), and skiff_romm_content_url() refuses the
-     * file. */
-    skiff_romm_name_status name_status;
-} skiff_romm_file;
 
 typedef struct skiff_romm_rom {
     skiff_romm_rom_summary summary;
@@ -201,14 +224,15 @@ skiff_err skiff_romm_find_platform(skiff_romm_client *client, const char *slug,
                                    skiff_romm_platform *out);
 
 /*
- * GET /api/roms: up to limit (1 to SKIFF_ROMM_PAGE_SIZE) ROMs of platform_id from offset, ordered
- * by name, without the per-library extras RomM adds by default. A page past the end is empty with
- * the total. A page that is not the one asked for (another offset, more ROMs than limit or than the
- * total leaves, a ROM of another platform) is SKIFF_ERR_ROMM_BAD_RESPONSE. SKIFF_ERR_INVALID_ARG
- * for a limit out of range.
+ * GET /api/roms: up to limit (1 to SKIFF_ROMM_PAGE_SIZE) ROMs of query's platform and filter from
+ * offset, ordered by name, without the per-library extras RomM adds by default (and with each ROM's
+ * files if query asks). A page past the end is empty with the total. A page that is not the one
+ * asked for (another offset, more ROMs than limit or than the total leaves, a ROM of another
+ * platform) is SKIFF_ERR_ROMM_BAD_RESPONSE. SKIFF_ERR_INVALID_ARG for a NULL query or a limit out
+ * of range.
  */
-skiff_err skiff_romm_list_roms(skiff_romm_client *client, uint64_t platform_id, uint64_t offset,
-                               size_t limit, skiff_romm_rom_page *out);
+skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_query *query,
+                               uint64_t offset, size_t limit, skiff_romm_rom_page *out);
 
 /* GET /api/roms/{rom_id}: the ROM with its files. A response for another ROM, or listing a file of
  * another ROM, is SKIFF_ERR_ROMM_BAD_RESPONSE. */

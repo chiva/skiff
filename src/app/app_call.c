@@ -43,11 +43,14 @@ static void run(void *arg) {
     case CALL_PLATFORM:
         call->err = skiff_romm_find_platform(call->romm, SKIFF_APP_PLATFORM_SLUG, &call->platform);
         break;
-    case CALL_PAGE:
-        call->err = skiff_romm_list_roms(call->romm, call->platform_id,
-                                         call->page_index * SKIFF_ROMM_PAGE_SIZE,
-                                         SKIFF_ROMM_PAGE_SIZE, &call->page);
+    case CALL_PAGE: {
+        const skiff_romm_list_query query = {.platform_id = call->platform_id,
+                                             .filter = SKIFF_ROMM_LIST_ALL};
+        call->err =
+            skiff_romm_list_roms(call->romm, &query, call->page_index * SKIFF_ROMM_PAGE_SIZE,
+                                 SKIFF_ROMM_PAGE_SIZE, &call->page);
         break;
+    }
     case CALL_ROM:
         call->err = skiff_romm_get_rom(call->romm, call->rom_id, &call->rom);
         break;

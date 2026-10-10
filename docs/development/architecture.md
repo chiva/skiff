@@ -329,6 +329,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Pairing | Device-code flow: `POST /api/auth/device/init` (`client_device_identifier`, `name`, `client`, `platform`, `client_version`, `requested_scopes`) gives a `device_code` and a `user_code`; the user approves in the web UI while the PSP polls `POST /api/auth/device/token` for an `access_token` and its `device_id` |
 | Fallback auth | Client API token (`rmm_…`) as `Authorization: Bearer` |
 | Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files from `GET /api/roms/{id}` |
+| Favourites | The same list with `favorite=true` (and `with_files=true` when each ROM's file is needed) |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
 | Saves | `POST /api/saves`, `GET /api/saves/{id}/content`, `POST /api/sync/negotiate`, tagged with this PSP's `device_id` |
@@ -363,9 +364,19 @@ that, so a page stays well under the cap (cJSON's tree and its strings stay with
 and fills a screen in one request. They also turn off `with_char_index`, `with_filter_values` and
 `with_rom_id_index`: RomM includes those by default, and they grow with the whole library, not the
 page. A page that is not the one asked for (another offset, more ROMs than the limit or than the
-total leaves, a ROM of another platform) is refused, as is a ROM returned under another id or
-listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
-`files[]` comes with `GET /api/roms/{id}`. RomM records CRC32, MD5 and SHA-1 for every file, so the
+total leaves, a ROM of another platform) is refused, as are a ROM's details returned under another
+id or listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
+`files[]` comes with `GET /api/roms/{id}`, and with a list only when it asks `with_files` (about 0.5
+KB more per ROM). A ROM listed with exactly one file that reads as its own carries that file
+(`skiff_romm_rom_summary.file`), so a download needs no request for its details; anything else
+(several files, a file of another ROM, a broken entry) leaves the ROM listed without it, rather
+than refusing the page.
+
+Favourites are the same list with `favorite=true`: RomM keeps a player's favourites as their own
+collections marked `is_favorite` (a user may have several, which RomM merges), created by its web UI
+on the first favourite, and the filter needs no scope beyond `roms.read`, so Skiff's token reads
+them. A player without favourites gets an empty list. RomM's collection endpoints need
+`collections.read`, which Skiff does not ask for (see [Pairing](#pairing)). RomM records CRC32, MD5 and SHA-1 for every file, so the
 integrity check can use any of them; its `crc_hash` is hexadecimal, read with or without leading
 zeros.
 
@@ -395,8 +406,9 @@ device grant):
 1. `POST /api/auth/device/init` (open, rate-limited) with this PSP's `client_device_identifier`,
    `name` "Skiff on PSP", `client` "skiff", `platform` "psp", `client_version` and the scopes Skiff
    asks for: `platforms.read` and `roms.read`, all that browsing and downloading need (checked
-   against RomM 5.3.1), so the token on the Memory Stick can only read. Save sync (Phase 5) needs
-   `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair again. RomM answers
+   against RomM 5.3.1), favourites included, so the token on the Memory Stick can only read. Save
+   sync (Phase 5) needs `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair
+   again, and collections (`collections.read`) wait for that pairing rather than ask for a second. RomM answers
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
    (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path with

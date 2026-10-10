@@ -30,8 +30,15 @@
     "&order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false"                  \
     "&with_rom_id_index=false"
 #define PAGE_PATH(offset) "/api/roms?platform_ids=1&limit=1&offset=" #offset LIST_QUERY
+/* What it adds for the player's favourites with each ROM's files (the recorder asks the same). */
+#define FAVOURITES_PAGE_PATH(offset) PAGE_PATH(offset) "&favorite=true&with_files=true"
 #define JSON_OK "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
 #define RAW_MAX 4096
+
+static const skiff_romm_list_query ALL_ROMS = {.platform_id = PSP_PLATFORM_ID,
+                                               .filter = SKIFF_ROMM_LIST_ALL};
+static const skiff_romm_list_query FAVOURITES_WITH_FILES = {
+    .platform_id = PSP_PLATFORM_ID, .filter = SKIFF_ROMM_LIST_FAVOURITES, .with_files = 1};
 
 static fake_transport fake;
 static skiff_romm_client client;
@@ -62,7 +69,7 @@ static void serve_page_item(const char *item) {
 }
 
 static skiff_err list_first_page(skiff_romm_rom_page *page) {
-    const skiff_err err = skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 0, 1, page);
+    const skiff_err err = skiff_romm_list_roms(&client, &ALL_ROMS, 0, 1, page);
     TEST_PRINTF("list -> %s, %zu item(s) of %llu", skiff_err_name(err), page->count,
                 (unsigned long long)page->total);
     return err;
@@ -196,7 +203,7 @@ static void test_two_pages_of_one_rom_then_an_empty_page(void) {
     serve_fixture(PAGE_PATH(2), "romm/roms-page-2.http");
     skiff_romm_rom_page page;
 
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 0, 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &ALL_ROMS, 0, 1, &page));
     TEST_PRINTF("page 0: '%s' (%s), %llu bytes, CRC-32 %lx", page.items[0].name,
                 page.items[0].fs_name, (unsigned long long)page.items[0].size,
                 (unsigned long)page.items[0].crc32);
@@ -209,13 +216,13 @@ static void test_two_pages_of_one_rom_then_an_empty_page(void) {
     TEST_ASSERT_EQUAL_HEX32(EXTRA_CRC32, page.items[0].crc32);
     TEST_ASSERT_FALSE(page.items[0].multiple_files);
 
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 1, 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &ALL_ROMS, 1, 1, &page));
     TEST_ASSERT_EQUAL_UINT64(1, page.offset);
     TEST_ASSERT_EQUAL_STRING(PAYLOAD_NAME, page.items[0].fs_name);
     TEST_ASSERT_EQUAL_UINT64(4096, page.items[0].size);
     TEST_ASSERT_EQUAL_HEX32(PAYLOAD_CRC32, page.items[0].crc32);
 
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 2, 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &ALL_ROMS, 2, 1, &page));
     TEST_ASSERT_EQUAL_size_t(0, page.count);
     TEST_ASSERT_EQUAL_UINT64(2, page.total);
 }
@@ -240,11 +247,118 @@ static void test_a_page_longer_than_asked_is_refused(void) {
 static void test_page_limits_are_checked(void) {
     skiff_romm_rom_page page;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 0, 0, &page));
+                          skiff_romm_list_roms(&client, &ALL_ROMS, 0, 0, &page));
     TEST_ASSERT_EQUAL_INT(
         SKIFF_ERR_INVALID_ARG,
-        skiff_romm_list_roms(&client, PSP_PLATFORM_ID, 0, SKIFF_ROMM_PAGE_SIZE + 1, &page));
+        skiff_romm_list_roms(&client, &ALL_ROMS, 0, SKIFF_ROMM_PAGE_SIZE + 1, &page));
     TEST_ASSERT_EQUAL_size_t(0, fake.request_count);
+}
+
+static void test_favourites_list_with_their_files_then_end(void) {
+    serve_fixture(FAVOURITES_PAGE_PATH(0), "romm/roms-favorites-page-0.http");
+    serve_fixture(FAVOURITES_PAGE_PATH(1), "romm/roms-favorites-page-1.http");
+    skiff_romm_rom_page page;
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_list_roms(&client, &FAVOURITES_WITH_FILES, 0, 1, &page));
+    TEST_PRINTF("favourites page 0: %zu of %llu, '%s', file '%s' %llu bytes CRC-32 %lx", page.count,
+                (unsigned long long)page.total, page.items[0].fs_name, page.items[0].file.file_name,
+                (unsigned long long)page.items[0].file.size,
+                (unsigned long)page.items[0].file.crc32);
+    TEST_ASSERT_EQUAL_UINT64(1, page.total);
+    TEST_ASSERT_EQUAL_size_t(1, page.count);
+    TEST_ASSERT_EQUAL_UINT64(PAYLOAD_ROM_ID, page.items[0].id);
+    TEST_ASSERT_TRUE(page.items[0].has_file);
+    TEST_ASSERT_EQUAL_STRING(PAYLOAD_NAME, page.items[0].file.file_name);
+    TEST_ASSERT_EQUAL_UINT64(4096, page.items[0].file.size);
+    TEST_ASSERT_TRUE(page.items[0].file.has_crc32);
+    TEST_ASSERT_EQUAL_HEX32(PAYLOAD_CRC32, page.items[0].file.crc32);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, page.items[0].file.name_status);
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_list_roms(&client, &FAVOURITES_WITH_FILES, 1, 1, &page));
+    TEST_ASSERT_EQUAL_size_t(0, page.count);
+    TEST_ASSERT_EQUAL_UINT64(1, page.total);
+}
+
+static void test_a_list_asks_only_for_what_its_query_wants(void) {
+    const skiff_romm_list_query favourites = {.platform_id = PSP_PLATFORM_ID,
+                                              .filter = SKIFF_ROMM_LIST_FAVOURITES};
+    const skiff_romm_list_query all_with_files = {
+        .platform_id = PSP_PLATFORM_ID, .filter = SKIFF_ROMM_LIST_ALL, .with_files = 1};
+    const char *empty = JSON_OK "{\"items\":[],\"total\":0,\"limit\":1,\"offset\":0}";
+    serve_raw(PAGE_PATH(0) "&favorite=true", empty);
+    serve_raw(PAGE_PATH(0) "&with_files=true", empty);
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &favourites, 0, 1, &page));
+    TEST_PRINTF("a player without favourites gets an empty list: %llu",
+                (unsigned long long)page.total);
+    TEST_ASSERT_EQUAL_UINT64(0, page.total);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &all_with_files, 0, 1, &page));
+    TEST_ASSERT_EQUAL_size_t(2, fake.request_count);
+    TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&favorite=true", fake.log[0].url + strlen(BASE_URL));
+    TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&with_files=true", fake.log[1].url + strlen(BASE_URL));
+}
+
+static void test_a_favourite_of_another_platform_is_refused(void) {
+    serve_raw(FAVOURITES_PAGE_PATH(0),
+              JSON_OK "{\"items\":[{\"id\":9,\"platform_id\":2,\"fs_name\":\"a.iso\","
+                      "\"fs_size_bytes\":1,\"files\":[]}],\"total\":1,\"limit\":1,\"offset\":0}");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_list_roms(&client, &FAVOURITES_WITH_FILES, 0, 1, &page));
+    TEST_ASSERT_EQUAL_size_t(0, page.count);
+}
+
+typedef struct listed_file_case {
+    const char *what;
+    const char *item;
+    int has_file;
+    skiff_romm_name_status file_status;
+} listed_file_case;
+
+static void test_a_listed_file_is_kept_only_when_it_is_the_roms_only_one(void) {
+#define ITEM_HEAD "{\"id\":5,\"platform_id\":1,\"fs_name\":\"Game.iso\",\"fs_size_bytes\":4,"
+#define ITEM_BAD_NAME                                                                              \
+    "{\"id\":5,\"platform_id\":1,\"fs_name\":\"G\\u0007.iso\",\"fs_size_bytes\":4,"
+#define GOOD_FILE "{\"rom_id\":5,\"file_name\":\"Game.iso\",\"file_size_bytes\":4}"
+    static const listed_file_case CASES[] = {
+        {"no files listed", ITEM_HEAD "\"files\":[]}", 0, SKIFF_ROMM_NAME_OK},
+        {"no files field", ITEM_HEAD "\"crc_hash\":null}", 0, SKIFF_ROMM_NAME_OK},
+        {"one file", ITEM_HEAD "\"files\":[" GOOD_FILE "]}", 1, SKIFF_ROMM_NAME_OK},
+        {"two files", ITEM_HEAD "\"files\":[" GOOD_FILE "," GOOD_FILE "]}", 0, SKIFF_ROMM_NAME_OK},
+        {"a file of another ROM",
+         ITEM_HEAD "\"files\":[{\"rom_id\":6,\"file_name\":\"Game.iso\",\"file_size_bytes\":4}]}",
+         0, SKIFF_ROMM_NAME_OK},
+        {"a file without a size",
+         ITEM_HEAD "\"files\":[{\"rom_id\":5,\"file_name\":\"Game.iso\"}]}", 0, SKIFF_ROMM_NAME_OK},
+        {"files that are not an array", ITEM_HEAD "\"files\":{}}", 0, SKIFF_ROMM_NAME_OK},
+        {"a file name with a control character",
+         ITEM_HEAD
+         "\"files\":[{\"rom_id\":5,\"file_name\":\"G\\u0007.iso\",\"file_size_bytes\":4}]}",
+         1, SKIFF_ROMM_NAME_CONTROL_CHAR},
+        {"a clean file of a ROM with an unusable name", ITEM_BAD_NAME "\"files\":[" GOOD_FILE "]}",
+         1, SKIFF_ROMM_NAME_CONTROL_CHAR},
+    };
+#undef ITEM_HEAD
+#undef ITEM_BAD_NAME
+#undef GOOD_FILE
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char json[RAW_MAX];
+        snprintf(json, sizeof json, "{\"items\":[%s],\"total\":1,\"offset\":0}", CASES[i].item);
+        skiff_romm_rom_page page;
+        const skiff_err err = skiff_romm_parse_rom_page(json, strlen(json), &page);
+        TEST_PRINTF("%s -> %s, has_file %d, file status %d", CASES[i].what, skiff_err_name(err),
+                    page.items[0].has_file, (int)page.items[0].file.name_status);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, err, CASES[i].what);
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(1, page.count, CASES[i].what);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(CASES[i].has_file, page.items[0].has_file, CASES[i].what);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(CASES[i].file_status, page.items[0].file.name_status,
+                                      CASES[i].what);
+        if (!CASES[i].has_file) {
+            TEST_ASSERT_EQUAL_STRING_MESSAGE("", page.items[0].file.file_name, CASES[i].what);
+        }
+    }
 }
 
 typedef struct item_case {
@@ -792,6 +906,10 @@ static void test_a_rom_comes_with_its_files(void) {
     TEST_ASSERT_EQUAL_UINT64(1536, rom.files[0].size);
     TEST_ASSERT_TRUE(rom.files[0].has_crc32);
     TEST_ASSERT_EQUAL_HEX32(EXTRA_CRC32, rom.files[0].crc32);
+    TEST_PRINTF("its summary carries the only file too, as a list with files gives it");
+    TEST_ASSERT_TRUE(rom.summary.has_file);
+    TEST_ASSERT_EQUAL_STRING(EXTRA_NAME, rom.summary.file.file_name);
+    TEST_ASSERT_EQUAL_UINT64(1536, rom.summary.file.size);
     TEST_ASSERT_EQUAL_STRING("/api/roms/2", fake.log[0].url + strlen(BASE_URL));
 }
 
@@ -822,6 +940,7 @@ static void test_a_rom_with_many_files_counts_them_all(void) {
     TEST_ASSERT_EQUAL_size_t(files, rom.file_count);
     TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_FILES_MAX, rom.stored_count);
     TEST_ASSERT_TRUE(rom.summary.multiple_files);
+    TEST_ASSERT_FALSE(rom.summary.has_file);
     TEST_ASSERT_EQUAL_STRING("part15.bin", rom.files[SKIFF_ROMM_FILES_MAX - 1].file_name);
     TEST_ASSERT_FALSE(rom.files[0].has_crc32);
 }
@@ -1201,7 +1320,10 @@ static void test_requests_refuse_bad_arguments(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_find_platform(&client, "", &platform));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_find_platform(&client, "psp", NULL));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_get_rom(NULL, 1, &rom));
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_list_roms(&client, 1, 0, 1, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_list_roms(&client, &ALL_ROMS, 0, 1, NULL));
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_list_roms(&client, NULL, 0, 1, &page));
     TEST_ASSERT_EQUAL_size_t(0, fake.request_count);
 }
 
@@ -1221,6 +1343,10 @@ int main(void) {
     RUN_TEST(test_another_page_than_the_one_asked_for_is_refused);
     RUN_TEST(test_a_page_longer_than_asked_is_refused);
     RUN_TEST(test_page_limits_are_checked);
+    RUN_TEST(test_favourites_list_with_their_files_then_end);
+    RUN_TEST(test_a_list_asks_only_for_what_its_query_wants);
+    RUN_TEST(test_a_favourite_of_another_platform_is_refused);
+    RUN_TEST(test_a_listed_file_is_kept_only_when_it_is_the_roms_only_one);
     RUN_TEST(test_every_field_is_checked_before_a_rom_is_shown);
     RUN_TEST(test_a_rom_with_a_control_character_is_listed_but_not_downloadable);
     RUN_TEST(test_a_title_with_a_control_character_marks_its_rom);

@@ -98,7 +98,8 @@ the PSP's network checks:
   uploads a synthetic 600×800 PNG cover for the first, as the web UI uploads custom artwork, which
   RomM resizes into a 240×320 small cover; the server has no metadata providers, so it is the only
   cover. The second gets none: every ROM update in RomM 5.3.1 also cleans the file's name on disk,
-  which would drop its `+`.
+  which would drop its `+`. The first is also the admin's favourite, kept as RomM's web UI keeps
+  favourites: a private collection named "Favorites" marked as favourites.
 
 | Command | What it does |
 |---|---|
@@ -155,12 +156,14 @@ platform holds both seeded ROMs, pages of one ROM return each once and then an e
 page lists them in name order, the second file's details match the seed, and its download URL,
 built from the name with reserved characters, brings back exactly its bytes; the seeded cover comes
 back without the token from the URL its ROM's details give, the other ROM has none, and a cover
-RomM lacks is a 404; a wrong token is a RomM refusal (200).
+RomM lacks is a 404; the favourites list holds the seeded favourite with its file; a wrong token is
+a RomM refusal (200).
 
 The fourth pairs with RomM (`include/skiff/romm_pairing.h`): a pairing starts, a poll before the
 admin approves is not approved, the admin approves through RomM's own endpoint (as its web UI does),
-the next poll brings a token that lists the `psp` platform and downloads the seeded file with only
-the scopes Skiff asked for, and asking again with the spent code is an expired pairing (208); a
+the next poll brings a token that lists the `psp` platform and the favourites and downloads the
+seeded file with only the scopes Skiff asked for, while RomM's collections answer 403 (they need
+`collections.read`), and asking again with the spent code is an expired pairing (208); a
 pairing the admin refuses ends with 207. A pairing that runs out of time is left to the unit tests:
 RomM gives every pairing 10 minutes. `romm-record` also records the flow's answers for the fake
 transport (`tests/integration/record-pairing-fixtures.sh`), with every code, token and id replaced
@@ -503,7 +506,9 @@ with `?` and as not downloadable; and a name longer than a Memory Stick file nam
 shortens for the file it downloads. Every third numbered ROM gets a synthetic PNG cover of its
 own and Skiff Library 02 a JPEG one (shown as the placeholder: Skiff decodes PNG only). Beside them
 stay the large seeded file (for the interruptions, with a PNG cover) and the small one with
-reserved characters in its name (no cover: a RomM edit would rename it).
+reserved characters in its name (no cover: a RomM edit would rename it). The admin's favourites are
+the large file, the first 30 numbered ROMs and the three odd names, plus a second favourites
+collection with the next two numbered ROMs (RomM lists the union: 36 favourites, two pages).
 
 The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff
 downloaded can be launched from the XMB without any game file from outside the project: a tiny

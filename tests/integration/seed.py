@@ -17,6 +17,12 @@ character and a name too long for the Memory Stick. Files already in the platfor
 scanned too: scripts/dev.sh copies the launch check's disc images there first
 (tests/hardware/make_launch_disc.py).
 
+The admin's favourites are kept as RomM's web UI keeps them, in a private collection marked as
+favourites: the payload ROM, and with SKIFF_LIBRARY_ROMS also the first LIBRARY_FAVOURITES numbered
+ROMs and the three special files, plus a second favourites collection with LIBRARY_MORE_FAVOURITES
+more (a user may have several; RomM lists their union). Adding a ROM to a collection renames
+nothing, so any ROM may be a favourite.
+
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
 SKIFF_LIBRARY_ROMS (optional).
 """
@@ -82,6 +88,12 @@ COVER_LABEL = "SKIFF SYNTHETIC COVER"
 COVER_LABEL_BOX = (60, 60, 540, 200)
 COVER_LABEL_AT = (80, 110)
 MULTIPART_BOUNDARY = "skiff-seed-cover"
+# The favourites (see the module's docstring). The first collection is named as the web UI names the
+# one it creates on a player's first favourite.
+FAVOURITES_NAME = "Favorites"
+MORE_FAVOURITES_NAME = "Skiff More Favourites"
+LIBRARY_FAVOURITES = 30
+LIBRARY_MORE_FAVOURITES = 2
 # Every call is bounded, so a stalled RomM fails the seed instead of hanging it.
 REQUEST_TIMEOUT_SECONDS = 30
 TOKEN_NAME = "skiff-integration"
@@ -191,6 +203,46 @@ def set_cover(auth, rom_id, fs_name, seed=COVER_SEED, jpeg=False):
         raise SystemExit(f"seed: ROM {rom_id} has no small cover after the upload")
     log(f"ROM {rom_id} cover: {path}")
     return path
+
+
+def create_favourites(auth, name, rom_ids):
+    """A private favourites collection holding rom_ids, created the way RomM's web UI creates one."""
+    body = (
+        f"--{MULTIPART_BOUNDARY}\r\n"
+        'Content-Disposition: form-data; name="name"\r\n\r\n'
+        f"{name}\r\n--{MULTIPART_BOUNDARY}--\r\n"
+    ).encode()
+    req = urllib.request.Request(
+        f"{API}/api/collections?is_favorite=true&is_public=false", data=body, method="POST"
+    )
+    req.add_header("Authorization", auth)
+    req.add_header("Content-Type", f"multipart/form-data; boundary={MULTIPART_BOUNDARY}")
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            collection = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"seed: creating the favourites {name!r} failed with HTTP {error.code}")
+    status, _ = request("POST", f"/api/collections/{collection['id']}/roms", auth, {"rom_ids": rom_ids})
+    if status != HTTP_OK:
+        raise SystemExit(f"seed: adding favourites to {name!r} failed with HTTP {status}")
+    log(f"favourites {name!r} (collection {collection['id']}): {len(rom_ids)} ROMs")
+
+
+def set_favourites(auth, payload_rom_id, library, library_roms):
+    """The admin's favourites (see the module's docstring); returns their ROM ids."""
+    favourites = [payload_rom_id]
+    more = []
+    if library:
+        numbered, special = library[:library_roms], library[library_roms:]
+        _, favourites_ids = find_roms(auth, numbered[:LIBRARY_FAVOURITES] + special)
+        favourites += favourites_ids
+        more_names = numbered[LIBRARY_FAVOURITES : LIBRARY_FAVOURITES + LIBRARY_MORE_FAVOURITES]
+        if more_names:
+            _, more = find_roms(auth, more_names)
+    create_favourites(auth, FAVOURITES_NAME, favourites)
+    if more:
+        create_favourites(auth, MORE_FAVOURITES_NAME, more)
+    return favourites + more
 
 
 def basic_auth(user, password):
@@ -340,6 +392,7 @@ def main():
     payload["cover_path"] = set_cover(auth, rom_id, PAYLOAD_NAME)
     if library:
         set_library_covers(auth, library_roms)
+    favourite_rom_ids = set_favourites(auth, rom_id, library, library_roms)
     extra["rom_id"] = extra_rom_id
     print(
         json.dumps(
@@ -349,6 +402,7 @@ def main():
                 "token": create_token(auth),
                 **payload,
                 "extra": extra,
+                "favourite_rom_ids": favourite_rom_ids,
             }
         )
     )

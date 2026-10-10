@@ -284,7 +284,8 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     note(report, ACTION_PREFIX "HOME -> Quit. Check Settings > Power Save Settings > "
                                "Backlight Auto-Off, then turn the PSP off and on and "
                                "run this probe again: it puts your setting back.");
-    return !log_failed;
+    /* HOME → Quit mid-run leaves the answers missing: not complete, and the state file stays. */
+    return !log_failed && !skiff_psp_exit_requested();
 }
 
 /* Run 2: did the value run 1 left last, and the player's back. It cannot tell when run 1 left the
@@ -308,7 +309,12 @@ static int part_two(skiff_psp_report *report, const char *state_path, int origin
         note(report, line);
         return 0;
     }
-    sceIoRemove(state_path);
+    /* A state file left behind would make the next launch a second run again, putting back a
+     * setting the player may since have changed. */
+    if (sceIoRemove(state_path) < 0) {
+        note(report, "FAIL player's setting put back, but " STATE_FILE_NAME " remains: delete it");
+        return 0;
+    }
     if (left_path[0] != '\0') {
         sceIoRemove(left_path);
     }

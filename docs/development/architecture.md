@@ -329,6 +329,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Fallback auth | Client API token (`rmm_…`) as `Authorization: Bearer` |
 | Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files from `GET /api/roms/{id}` |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
+| Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
 | Saves | `POST /api/saves`, `GET /api/saves/{id}/content`, `POST /api/sync/negotiate`, tagged with this PSP's `device_id` |
 
 Custom headers: `config.ini` may define extra HTTP headers sent on every request. This covers
@@ -371,6 +372,19 @@ Download URLs percent-encode every byte of the file name except letters, digits 
 would otherwise end the path, a `?` start a query, a `/` split it. The URL builder takes the file
 RomM listed and refuses one whose name was not usable. The heartbeat is public and is
 sent without the token.
+
+A ROM's details name its small cover (`path_cover_small`, `skiff_romm_rom.cover_path`): not an API
+endpoint but a path on the server, such as
+`/assets/romm/resources/roms/1/2/cover/small.png?ts=2026-10-09 23:02:27`. RomM's nginx serves those
+files to anyone, so a cover request carries the custom headers but not the token, and the `ts`
+query (when RomM last changed the ROM) marks the file as never changing. That query holds a raw
+space, so `skiff_romm_cover_url()` percent-encodes every byte other than letters, digits and
+`-._~/?=&:`. A path outside `/assets/romm/resources/`, or with a `.` or `..` segment, a backslash or
+a control character, is treated as no cover, so a response cannot send Skiff elsewhere; a cover never
+refuses its ROM. RomM makes the small cover by resizing the stored one to 40% (20% from 1000 px
+tall) and saving it under the stored file's extension: a PNG for every metadata provider, the
+upload's format for artwork uploaded in the web UI. Its WebP option writes a copy beside each cover
+without changing these paths.
 
 ### Pairing
 

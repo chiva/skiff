@@ -61,6 +61,17 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
 #define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL
 #define SKIFF_SELFTEST_ROMM_CRC32 0x0a1b2c3dU
+/* A ROM whose cover path holds a UTF-8 character and the raw space RomM's "?ts=" carries, and the
+ * cover URL it must give. */
+#define SKIFF_SELFTEST_COVER_BASE "https://romm.lan"
+#define SKIFF_SELFTEST_COVER_ROM                                                                   \
+    "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"files\":[{\"rom_"     \
+    "id\":7,"                                                                                      \
+    "\"file_name\":\"a.iso\",\"file_size_bytes\":1}],\"path_cover_small\":"                        \
+    "\"/assets/romm/resources/roms/1/7/cover/Caf\xC3\xA9.png?ts=2026-10-10 04:21:31\"}"
+#define SKIFF_SELFTEST_COVER_URL                                                                   \
+    SKIFF_SELFTEST_COVER_BASE                                                                      \
+    "/assets/romm/resources/roms/1/7/cover/Caf%C3%A9.png?ts=2026-10-10%2004:21:31"
 /* A RomM name with accents and characters FAT refuses, and how it must come out. */
 #define SKIFF_SELFTEST_ROMM_NAME "Pok\xC3\xA9mon: Edici\xC3\xB3n/Plata?.iso"
 #define SKIFF_SELFTEST_SAFE_NAME "Pok\xC3\xA9mon_ Edici\xC3\xB3n_Plata_.iso"
@@ -242,6 +253,26 @@ static const char *check_romm_json(void) {
                : "a RomM page came back with other values";
 }
 
+/* A cover URL is percent-encoded byte by byte, and the PSP's char is signed: each byte of a UTF-8
+ * character must become its own "%XX". */
+static const char *check_romm_cover(void) {
+    static const char rom_text[] = SKIFF_SELFTEST_COVER_ROM;
+    static skiff_romm_rom rom;
+    if (skiff_romm_parse_rom(rom_text, sizeof rom_text - 1, &rom) != SKIFF_OK ||
+        rom.cover_path[0] == '\0') {
+        return "a RomM cover path did not parse";
+    }
+    /* Building a URL sends nothing, so the transport is never used. */
+    skiff_transport unused = {NULL};
+    skiff_romm_client client;
+    char url[SKIFF_ROMM_COVER_URL_MAX];
+    return skiff_romm_client_init(&client, &unused, SKIFF_SELFTEST_COVER_BASE, NULL) == SKIFF_OK &&
+                   skiff_romm_cover_url(&client, rom.cover_path, url, sizeof url) == SKIFF_OK &&
+                   strcmp(url, SKIFF_SELFTEST_COVER_URL) == 0
+               ? NULL
+               : "a cover URL came out wrong";
+}
+
 /* Names from RomM are cleaned byte by byte, and the PSP's char is signed: UTF-8 must still be
  * recognised, and a long name cut between characters, not inside one. */
 static const char *check_safe_names(void) {
@@ -419,6 +450,7 @@ static const selftest_check CHECKS[] = {
     {"config-parse", check_config_parsing},
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
+    {"romm-cover", check_romm_cover},
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},
     {"ui-fit", check_ui_text_fitting},

@@ -2,7 +2,8 @@
  * The RomM client (skiff/romm.h) against the integration RomM behind Caddy, over the curl transport
  * and the TLS stack the PSP links: the version check, the PSP platform, every ROM page by page, a
  * ROM's files, and a download URL built from a file name full of reserved characters that brings
- * back exactly the bytes RomM recorded the CRC-32 of.
+ * back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched without the
+ * token from the URL its ROM's details give.
  *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh), with the server's
  * details in SKIFF_IT_* environment variables. Not a ctest test: it needs the server.
@@ -17,7 +18,20 @@
 
 #include "unity.h"
 
-enum { PATH_MAX_LENGTH = 256, HEX_BASE = 16, DECIMAL_BASE = 10, SEEDED_ROMS = 2 };
+enum {
+    PATH_MAX_LENGTH = 256,
+    HEX_BASE = 16,
+    DECIMAL_BASE = 10,
+    SEEDED_ROMS = 2,
+    HTTP_OK = 200,
+    HTTP_NOT_FOUND = 404,
+    /* The first bytes of a cover, enough to tell its format. */
+    MAGIC_BYTES = 8,
+};
+
+/* The seed uploads a PNG cover (tests/integration/seed.py). */
+#define MISSING_COVER SKIFF_ROMM_COVER_PREFIX "roms/0/0/cover/small.png?ts=x"
+static const unsigned char PNG_MAGIC[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
 
 #define TLS_SITE "https://proxy:8443"
 #define PLATFORM_SLUG "psp"
@@ -35,6 +49,7 @@ typedef struct seeded_file {
 typedef struct received {
     uint64_t bytes;
     uint32_t crc32;
+    unsigned char magic[MAGIC_BYTES];
 } received;
 
 static const char *token;
@@ -122,6 +137,9 @@ static void test_every_rom_is_listed_page_by_page(void) {
 
 static skiff_err count_body(void *ctx, const unsigned char *data, size_t size) {
     received *got = ctx;
+    for (size_t i = 0; i < size && got->bytes + i < MAGIC_BYTES; i++) {
+        got->magic[got->bytes + i] = data[i];
+    }
     got->crc32 = (uint32_t)crc32(got->crc32, data, (uInt)size);
     got->bytes += size;
     return SKIFF_OK;
@@ -143,7 +161,7 @@ static void test_a_reserved_file_name_downloads_through_its_url(void) {
         SKIFF_OK, skiff_romm_content_url(&client, rom.summary.id, &rom.files[0], url, sizeof url));
     skiff_http_header authorization;
     TEST_ASSERT_EQUAL_size_t(1, skiff_romm_auth_header(&client, &authorization));
-    received got = {0, 0};
+    received got = {0, 0, {0}};
     skiff_http_request request;
     memset(&request, 0, sizeof request);
     request.url = url;
@@ -158,6 +176,40 @@ static void test_a_reserved_file_name_downloads_through_its_url(void) {
     TEST_ASSERT_EQUAL_INT(200, response.status);
     TEST_ASSERT_EQUAL_UINT64(extra.size, got.bytes);
     TEST_ASSERT_EQUAL_HEX32(extra.crc32, got.crc32);
+}
+
+/* GETs url without any header, the way the app fetches a cover. */
+static long get_without_token(const char *url, received *got) {
+    memset(got, 0, sizeof *got);
+    skiff_http_request request;
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    request.on_body = count_body;
+    request.body_ctx = got;
+    skiff_http_response response;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(transport, &request, &response));
+    TEST_PRINTF("GET %s -> HTTP %ld, %llu bytes", url, response.status,
+                (unsigned long long)got->bytes);
+    return response.status;
+}
+
+static void test_a_cover_comes_without_the_token_from_its_rom_details(void) {
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, payload.rom_id, &rom));
+    TEST_PRINTF("ROM %llu cover path '%s'", (unsigned long long)payload.rom_id, rom.cover_path);
+    TEST_ASSERT_NOT_EQUAL(0, rom.cover_path[0]);
+    char url[SKIFF_ROMM_COVER_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_cover_url(&client, rom.cover_path, url, sizeof url));
+    received got;
+    TEST_ASSERT_EQUAL_INT(HTTP_OK, get_without_token(url, &got));
+    TEST_ASSERT_GREATER_THAN_UINT64(sizeof PNG_MAGIC, got.bytes);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(PNG_MAGIC, got.magic, sizeof PNG_MAGIC);
+    TEST_PRINTF("the extra ROM has none");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, extra.rom_id, &rom));
+    TEST_ASSERT_EQUAL_STRING("", rom.cover_path);
+    TEST_PRINTF("a cover RomM does not have is a 404");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_cover_url(&client, MISSING_COVER, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(HTTP_NOT_FOUND, get_without_token(url, &got));
 }
 
 static void test_a_wrong_token_is_refused_by_romm(void) {
@@ -184,6 +236,7 @@ int main(void) {
     RUN_TEST(test_the_server_version_is_supported);
     RUN_TEST(test_every_rom_is_listed_page_by_page);
     RUN_TEST(test_a_reserved_file_name_downloads_through_its_url);
+    RUN_TEST(test_a_cover_comes_without_the_token_from_its_rom_details);
     RUN_TEST(test_a_wrong_token_is_refused_by_romm);
     const int failures = UNITY_END();
 

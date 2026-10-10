@@ -1,7 +1,8 @@
 /*
  * The RomM client (skiff/romm.h) against the fake transport replaying responses recorded from RomM
  * 5.3.1 (tests/fixtures/romm/): the version policy, the PSP platform, two pages of one ROM and the
- * empty page after them, a ROM's files, and download URLs that survive any file name. Every way a
+ * empty page after them, a ROM's files and cover, download URLs that survive any file name, and
+ * cover URLs that only ever lead to RomM's own pictures. Every way a
  * response can be wrong (a proxy's login page, a cut or oversized body, a field that does not fit)
  * is SKIFF_ERR_ROMM_BAD_RESPONSE, never a half-filled result.
  */
@@ -929,6 +930,169 @@ static void test_the_longest_file_name_fits_the_content_url_buffer(void) {
                           skiff_romm_content_url(&wide, UINT64_MAX, &file, url, sizeof url));
 }
 
+/* ---- Covers ---- */
+
+#define COVER_PREFIX SKIFF_ROMM_COVER_PREFIX
+/* What RomM gives for an uploaded cover: a path on the server with a raw space in its "?ts="
+ * (tests/integration/seed.py uploads synthetic artwork for the recorded payload ROM). */
+#define COVER_PATH COVER_PREFIX "roms/1/2/cover/small.png?ts=2026-10-09 23:02:27"
+
+/* A ROM's details JSON whose path_cover_small is cover_json, a JSON value or NULL for none. */
+static void rom_with_cover(const char *cover_json, char *json, size_t json_size) {
+    snprintf(
+        json, json_size,
+        ROM_HEAD "%s%s,\"files\":[{\"rom_id\":3,\"file_name\":\"a.iso\","
+                 "\"file_size_bytes\":1}]}",
+        cover_json == NULL ? "" : ",\"path_cover_small\":", cover_json == NULL ? "" : cover_json);
+}
+
+static void test_a_rom_names_its_small_cover(void) {
+    serve_fixture("/api/roms/1", "romm/rom.http");
+    serve_fixture("/api/roms/2", "romm/rom-extra.http");
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
+    TEST_PRINTF("ROM 1 cover '%s'", rom.cover_path);
+    TEST_ASSERT_EQUAL_STRING_LEN(COVER_PREFIX "roms/1/1/cover/small.png?ts=", rom.cover_path,
+                                 strlen(COVER_PREFIX "roms/1/1/cover/small.png?ts="));
+    TEST_ASSERT_NOT_NULL(strchr(rom.cover_path, ' '));
+    TEST_PRINTF("the extra ROM has none");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, EXTRA_ROM_ID, &rom));
+    TEST_ASSERT_EQUAL_STRING("", rom.cover_path);
+}
+
+static void test_a_cover_path_skiff_would_not_request_is_no_cover(void) {
+    char too_long[SKIFF_ROMM_COVER_PATH_MAX + 8] = "\"" COVER_PREFIX;
+    const size_t start = strlen(too_long);
+    memset(too_long + start, 'a', SKIFF_ROMM_COVER_PATH_MAX - start + 1);
+    memcpy(too_long + SKIFF_ROMM_COVER_PATH_MAX + 1, "\"", 2);
+    const char *const NONE[] = {
+        NULL,
+        "null",
+        "\"\"",
+        "42",
+        "[\"" COVER_PREFIX "x.png\"]",
+        "\"https://example.invalid/" COVER_PREFIX "x.png\"",
+        "\"//example.invalid" COVER_PREFIX "x.png\"",
+        "\"/api/roms/1/content/a.iso\"",
+        "\"/assets/romm/resources\"",
+        "\"" COVER_PREFIX "\"",
+        "\"" COVER_PREFIX "../../api/roms\"",
+        "\"" COVER_PREFIX "roms/..\"",
+        "\"" COVER_PREFIX "roms/./1/small.png\"",
+        "\"" COVER_PREFIX "a#/../../api/heartbeat\"",
+        "\"" COVER_PREFIX "a#b/..\"",
+        "\"" COVER_PREFIX "roms\\\\1\\\\small.png\"",
+        "\"" COVER_PREFIX "small.png\\u0007\"",
+        "\"" COVER_PREFIX "small.png?ts=\\u009b\"",
+        too_long,
+    };
+    for (size_t i = 0; i < sizeof NONE / sizeof NONE[0]; i++) {
+        char json[RAW_MAX];
+        rom_with_cover(NONE[i], json, sizeof json);
+        skiff_romm_rom rom;
+        memset(&rom, 'x', sizeof rom);
+        TEST_PRINTF("cover %s", NONE[i] == NULL ? "(absent)" : NONE[i]);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(json, strlen(json), &rom));
+        TEST_ASSERT_EQUAL_STRING("", rom.cover_path);
+        TEST_ASSERT_EQUAL_size_t(1, rom.file_count);
+    }
+}
+
+static void test_a_cover_path_keeps_dots_that_climb_nowhere(void) {
+    const char *const KEPT[] = {
+        COVER_PATH,
+        COVER_PREFIX "roms/1/2/cover/small.png?ts=a/../b",
+        COVER_PREFIX "roms/1/2/cover/...png",
+        COVER_PREFIX "roms/1/2/cover/.hidden.png",
+    };
+    for (size_t i = 0; i < sizeof KEPT / sizeof KEPT[0]; i++) {
+        char cover_json[SKIFF_ROMM_COVER_PATH_MAX + 2];
+        snprintf(cover_json, sizeof cover_json, "\"%s\"", KEPT[i]);
+        char json[RAW_MAX];
+        rom_with_cover(cover_json, json, sizeof json);
+        skiff_romm_rom rom;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(json, strlen(json), &rom));
+        TEST_PRINTF("kept '%s'", rom.cover_path);
+        TEST_ASSERT_EQUAL_STRING(KEPT[i], rom.cover_path);
+    }
+}
+
+typedef struct cover_url_case {
+    const char *path;
+    const char *expected_tail;
+} cover_url_case;
+
+static void test_cover_urls_encode_what_a_request_line_cannot_carry(void) {
+    static const cover_url_case CASES[] = {
+        {COVER_PATH, COVER_PREFIX "roms/1/2/cover/small.png?ts=2026-10-09%2023:02:27"},
+        {COVER_PREFIX "a.png?ts=2026-10-09 23:02:27+00:00&v=1",
+         COVER_PREFIX "a.png?ts=2026-10-09%2023:02:27%2B00:00&v=1"},
+        {COVER_PREFIX "Caf\xC3\xA9 #1 100%.png", COVER_PREFIX "Caf%C3%A9%20%231%20100%25.png"},
+        {COVER_PREFIX "AZaz09-._~/?=&:", COVER_PREFIX "AZaz09-._~/?=&:"},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char url[SKIFF_ROMM_COVER_URL_MAX];
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                              skiff_romm_cover_url(&client, CASES[i].path, url, sizeof url));
+        TEST_PRINTF("'%s' -> %s", CASES[i].path, url);
+        TEST_ASSERT_EQUAL_STRING_LEN(BASE_URL, url, strlen(BASE_URL));
+        TEST_ASSERT_EQUAL_STRING(CASES[i].expected_tail, url + strlen(BASE_URL));
+    }
+}
+
+static void test_a_cover_url_is_refused_when_it_would_lead_elsewhere_or_not_fit(void) {
+    static const char *const REFUSED[] = {
+        "",
+        "/api/heartbeat",
+        "//example.invalid" COVER_PREFIX "a.png",
+        COVER_PREFIX "../api/heartbeat",
+        COVER_PREFIX "a#/../../api/heartbeat",
+        COVER_PREFIX "a\\b.png",
+        COVER_PREFIX "a\x01.png",
+    };
+    char url[SKIFF_ROMM_COVER_URL_MAX];
+    for (size_t i = 0; i < sizeof REFUSED / sizeof REFUSED[0]; i++) {
+        snprintf(url, sizeof url, "untouched");
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                              skiff_romm_cover_url(&client, REFUSED[i], url, sizeof url));
+        TEST_ASSERT_EQUAL_STRING("", url);
+    }
+    const char *expected = BASE_URL COVER_PREFIX "a%20b.png";
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_BUFFER_TOO_SMALL,
+        skiff_romm_cover_url(&client, COVER_PREFIX "a b.png", url, strlen(expected)));
+    TEST_ASSERT_EQUAL_STRING("", url);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_romm_cover_url(&client, COVER_PREFIX "a b.png", url, 4));
+    TEST_ASSERT_EQUAL_STRING("", url);
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_romm_cover_url(&client, COVER_PREFIX "a b.png", url, strlen(expected) + 1));
+    TEST_ASSERT_EQUAL_STRING(expected, url);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_cover_url(NULL, COVER_PATH, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_cover_url(&client, NULL, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_cover_url(&client, COVER_PATH, NULL, sizeof url));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_cover_url(&client, COVER_PATH, url, 0));
+}
+
+static void test_the_longest_cover_path_fits_the_cover_url_buffer(void) {
+    char long_base[SKIFF_CONFIG_URL_MAX];
+    memset(long_base, 'h', sizeof long_base - 1);
+    memcpy(long_base, "https://", 8);
+    long_base[sizeof long_base - 1] = '\0';
+    skiff_romm_client wide;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_client_init(&wide, &fake.base, long_base, NULL));
+    char path[SKIFF_ROMM_COVER_PATH_MAX];
+    memset(path, ' ', sizeof path - 1);
+    memcpy(path, COVER_PREFIX, strlen(COVER_PREFIX));
+    path[sizeof path - 1] = '\0';
+    char url[SKIFF_ROMM_COVER_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_cover_url(&wide, path, url, sizeof url));
+    TEST_PRINTF("longest cover URL: %zu of %d bytes", strlen(url) + 1, SKIFF_ROMM_COVER_URL_MAX);
+}
+
 /* ---- The client ---- */
 
 static void test_the_client_checks_its_settings(void) {
@@ -1037,6 +1201,12 @@ int main(void) {
     RUN_TEST(test_a_download_url_that_does_not_fit_is_refused);
     RUN_TEST(test_a_file_that_is_not_downloadable_gets_no_url);
     RUN_TEST(test_the_longest_file_name_fits_the_content_url_buffer);
+    RUN_TEST(test_a_rom_names_its_small_cover);
+    RUN_TEST(test_a_cover_path_skiff_would_not_request_is_no_cover);
+    RUN_TEST(test_a_cover_path_keeps_dots_that_climb_nowhere);
+    RUN_TEST(test_cover_urls_encode_what_a_request_line_cannot_carry);
+    RUN_TEST(test_a_cover_url_is_refused_when_it_would_lead_elsewhere_or_not_fit);
+    RUN_TEST(test_the_longest_cover_path_fits_the_cover_url_buffer);
     RUN_TEST(test_the_client_checks_its_settings);
     RUN_TEST(test_the_token_header_is_offered_and_wiped);
     RUN_TEST(test_requests_refuse_bad_arguments);

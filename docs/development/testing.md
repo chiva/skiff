@@ -93,7 +93,12 @@ the PSP's network checks:
 - `seed.py` runs inside the RomM container. It creates the admin, writes a synthetic 1 MiB file to
   the `psp` platform (the same bytes every run) and a second, small one named
   `Skiff Extra #2 (Café & Co+).iso` (a second ROM for paging, and a name that only downloads when
-  `#`, `&`, `+` and `é` are percent-encoded), scans them and creates an API token.
+  `#`, `&`, `+` and `é` are percent-encoded), scans them (the large one first, so it is always
+  ROM 1 and the small one ROM 2, as the recorded fixtures expect) and creates an API token. It
+  uploads a synthetic 600×800 PNG cover for the first, as the web UI uploads custom artwork, which
+  RomM resizes into a 240×320 small cover; the server has no metadata providers, so it is the only
+  cover. The second gets none: every ROM update in RomM 5.3.1 also cleans the file's name on disk,
+  which would drop its `+`.
 
 | Command | What it does |
 |---|---|
@@ -148,8 +153,9 @@ the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind.
 The third drives the RomM client (`include/skiff/romm.h`): the version check passes, the `psp`
 platform holds both seeded ROMs, pages of one ROM return each once and then an empty page, a full
 page lists them in name order, the second file's details match the seed, and its download URL,
-built from the name with reserved characters, brings back exactly its bytes; a wrong token is a
-RomM refusal (200).
+built from the name with reserved characters, brings back exactly its bytes; the seeded cover comes
+back without the token from the URL its ROM's details give, the other ROM has none, and a cover
+RomM lacks is a 404; a wrong token is a RomM refusal (200).
 
 The fourth pairs with RomM (`include/skiff/romm_pairing.h`): a pairing starts, a poll before the
 admin approves is not approved, the admin approves through RomM's own endpoint (as its web UI does),
@@ -164,7 +170,7 @@ Everything generated lives in `build/integration/` (git-ignored):
 
 - `certs/`: copy `ca.crt` and a client certificate and key to the PSP;
 - `romm.env`: the secrets, including the web UI password for the user `skiff`;
-- `romm.json`: the seeded file's ID, size and hashes, and the API token.
+- `romm.json`: the seeded files' IDs, sizes, hashes and cover paths, and the API token.
 
 The keys and the token are test material for a server that only lives on your machine: never
 commit them, and do not reuse them anywhere else. The proxy container only gets the server's key

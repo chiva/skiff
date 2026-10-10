@@ -127,8 +127,11 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_BATCH_OVER_SPACE, 2, "{1} don't fit on the Memory Stick ({2} free)",              \
       "{1} no caben en el Memory Stick ({2} libres)")                                              \
     X(SKIFF_TEXT_BATCH_ADDED, 1, "Added {1} downloads", "Añadidas {1} descargas")                  \
-    X(SKIFF_TEXT_BATCH_ADDED_SOME, 2, "Added {1} of {2} downloads: Downloads is full",             \
-      "Añadidas {1} de {2} descargas: Descargas está lleno")                                       \
+    X(SKIFF_TEXT_BATCH_ADDED_SOME, 2, "Added {1} of {2} downloads.",                               \
+      "Añadidas {1} de {2} descargas.")                                                            \
+    X(SKIFF_TEXT_BATCH_LEFT_FULL, 1, "{1} weren't added: Downloads is full",                       \
+      "{1} no se han añadido: Descargas está lleno")                                               \
+    X(SKIFF_TEXT_BATCH_LEFT_ERROR, 2, "{1} weren't added: {2}", "{1} no se han añadido: {2}")      \
     X(SKIFF_TEXT_INSTALLED, 0, "Installed", "Instalado")                                           \
     X(SKIFF_TEXT_DETAILS_SIZE, 1, "Size: {1}", "Tamaño: {1}")                                      \
     X(SKIFF_TEXT_NAME_UNSUPPORTED, 0,                                                              \

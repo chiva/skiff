@@ -145,6 +145,9 @@ typedef struct app_batch {
     size_t listed_count;
     size_t request_count;
     size_t added;
+    /* Games whose target could not be planned, and the first one's error. */
+    size_t plan_failures;
+    skiff_err plan_error;
 } app_batch;
 
 typedef struct app_call {

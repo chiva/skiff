@@ -1273,6 +1273,28 @@ static void test_download_all_keeps_room_for_installed_records(void) {
     app_unlock_manifest(app);
 }
 
+static void test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue(void) {
+    open_favourites(3);
+    serve_batch_favourites(3);
+    TEST_PRINTF("Game 101's name and its [101] fallback are both taken by hand-copied files");
+    char iso[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO", iso, sizeof iso));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, iso));
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Game 101.iso", iso, sizeof iso));
+    write_file(iso, "copy", 4);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "ISO/Game 101 [101].iso", iso, sizeof iso));
+    write_file(iso, "copy", 4);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("Added 2 of 3 downloads."));
+    TEST_ASSERT_TRUE(shows("1 weren't added:"));
+    TEST_ASSERT_FALSE(shows("Downloads is full"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 2, jobs[0].rom_id);
+}
+
 static void test_back_while_favourites_are_checked_stops_download_all(void) {
     open_favourites(3);
     serve_batch_favourites(3);
@@ -2574,6 +2596,7 @@ int main(void) {
     RUN_TEST(test_download_all_with_a_full_queue_queues_nothing_and_says_why);
     RUN_TEST(test_download_all_takes_what_fits_the_free_space_in_name_order);
     RUN_TEST(test_download_all_keeps_room_for_installed_records);
+    RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);

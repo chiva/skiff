@@ -287,27 +287,43 @@ static int promised(void *ctx, const char *logical_path) {
 skiff_err app_batch_queue_run(app_call *call) {
     skiff_app *app = call->app;
     app_batch *batch = &app->batch;
+    /* The queue first: a job that finishes after this is listed as unfinished (its target stays
+     * promised), and its record is in the snapshot below. */
     batch->listed_count = skiff_jobs_list(app->jobs, batch->listed, SKIFF_JOBS_MAX);
     batch->request_count = 0;
     batch->added = 0;
+    batch->plan_failures = 0;
+    batch->plan_error = SKIFF_OK;
     char games[SKIFF_STORAGE_PATH_MAX];
     skiff_err err =
         skiff_storage_resolve(&app->config.roots, SKIFF_STORAGE_ROOT_GAMES, games, sizeof games);
     if (err == SKIFF_OK) {
         err = skiff_storage_mkdirs(app->config.storage, games);
     }
+    /* Planned against a copy: planning checks the Memory Stick for every game, and the screen's
+     * thread takes the manifest lock to draw the library. */
+    skiff_install_manifest *snapshot = NULL;
+    if (err == SKIFF_OK) {
+        err = skiff_install_manifest_create(&snapshot);
+    }
     if (err != SKIFF_OK) {
         return err;
     }
-    /* One pass under the manifest lock; the requests point into games[] and plans[]. */
     app_lock_manifest(app);
+    *snapshot = *app->manifest;
+    app_unlock_manifest(app);
+    /* The requests point into games[] and plans[]. */
     for (size_t i = 0; i < batch->count; i++) {
         const skiff_romm_rom_summary *rom = &batch->games[i];
         skiff_install_plan *plan = &batch->plans[i];
-        batch->planned[i] = skiff_install_plan_download(
-                                app->installer, rom, &rom->file, &app->config.roots, app->manifest,
-                                app->config.storage, promised, call, plan) == SKIFF_OK;
+        const skiff_err planned =
+            skiff_install_plan_download(app->installer, rom, &rom->file, &app->config.roots,
+                                        snapshot, app->config.storage, promised, call, plan);
+        batch->planned[i] = planned == SKIFF_OK;
         if (!batch->planned[i]) {
+            if (batch->plan_failures++ == 0) {
+                batch->plan_error = planned;
+            }
             continue;
         }
         batch->requests[batch->request_count++] = (skiff_job_request){
@@ -322,7 +338,7 @@ skiff_err app_batch_queue_run(app_call *call) {
             .replace_size = plan->own_size,
         };
     }
-    app_unlock_manifest(app);
+    skiff_install_manifest_destroy(snapshot);
     return skiff_jobs_add_many(app->jobs, batch->requests, batch->request_count, batch->ids,
                                &batch->added);
 }
@@ -333,9 +349,10 @@ void app_batch_queued(skiff_app *app) {
     app_batch *batch = &app->batch;
     const skiff_err err = app->call.err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
-                    "download all favourites: queued %zu of %zu (%zu planned): %s (%d)",
-                    batch->added, batch->count, batch->request_count, skiff_err_name(err),
-                    (int)err);
+                    "download all favourites: queued %zu of %zu (%zu planned, first failure %s): "
+                    "%s (%d)",
+                    batch->added, batch->count, batch->request_count,
+                    skiff_err_name(batch->plan_error), skiff_err_name(err), (int)err);
     end_batch(app);
     app_queue_refresh(app);
     if (err != SKIFF_OK) {
@@ -352,8 +369,19 @@ void app_batch_queued(skiff_app *app) {
     if (batch->added == batch->count) {
         app_format(app, SKIFF_TEXT_BATCH_ADDED, args, 1, text);
         app_note(app, text);
-    } else {
-        app_format(app, SKIFF_TEXT_BATCH_ADDED_SOME, args, 2, text);
-        app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, text, MESSAGE_BACK, SKIFF_APP_SCREEN_LIBRARY);
+        return;
+    }
+    /* Each reason a game was left out, so a full queue is never blamed for another failure. */
+    app_format(app, SKIFF_TEXT_BATCH_ADDED_SOME, args, 2, text);
+    app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, text, MESSAGE_BACK, SKIFF_APP_SCREEN_LIBRARY);
+    char lines[2][SKIFF_TEXT_MAX];
+    char sentence[SKIFF_TEXT_MAX];
+    (void)skiff_error_line(app->config.language, batch->plan_error, sentence, sizeof sentence);
+    size_t used = add_line(app, lines, 2, 0, SKIFF_TEXT_BATCH_LEFT_FULL,
+                           batch->request_count - batch->added, NULL);
+    used =
+        add_line(app, lines, 2, used, SKIFF_TEXT_BATCH_LEFT_ERROR, batch->plan_failures, sentence);
+    for (size_t i = 0; i < used; i++) {
+        app_message_add(app, lines[i]);
     }
 }

@@ -40,8 +40,9 @@ address of RomM's pairing page with this PSP's code in it, for example
    too long for a QR code is shown as text only.)
 2. Sign in to RomM and check that the page shows the same code as the PSP. RomM lists what Skiff
    asks for: reading your platforms and ROMs, to browse and download, and nothing else. Approve it
-   with both ticked: Skiff cannot work without them (error 209). When save sync arrives, Skiff will
-   ask you to pair again for the extra permissions it needs.
+   with both ticked: Skiff cannot work without them (error 209). Your favourites need nothing
+   more. When save sync arrives, Skiff will ask you to pair again for the extra permissions it
+   needs, and RomM's collections will come with that pairing.
 3. Skiff checks every few seconds, picks up the approval and shows your library.
 
 The code works only once, and only for the time the PSP counts down (10 minutes with RomM's
@@ -72,6 +73,15 @@ installed. The games themselves stay on the Memory Stick.
   folder to free the space. Covers come from RomM's own copy, which is a PNG for every cover RomM
   downloads; artwork you uploaded to RomM as a JPEG or WebP shows as a grey box. The guide's
   [troubleshooting](troubleshooting.md) codes 210 and 211 explain covers that do not show.
+- From Skiff 0.4.0, **SELECT** switches the library between all your PSP games and your
+  **Favourites**: the games you marked as favourites in RomM's web app (Skiff cannot mark them
+  itself). The list you see is not remembered: Skiff starts on all games.
+- In Favourites, **START** offers **Download all**. Skiff checks every favourite first (the header
+  counts them), then asks, listing what it leaves out: games already installed or already in
+  Downloads, games RomM has changed since you installed them (open each to replace it), games it
+  cannot install, and games that do not fit: Downloads holds 64 unfinished downloads, Skiff keeps
+  track of 512 installed games, and the downloads must fit the Memory Stick's free space. It takes
+  games in name order until one does not fit. Press **Back** while it checks to stop.
 - **Downloads** shows each download's progress, speed and time left. Downloads carry on while you
   browse. A failed download can be retried or cancelled, and **Clear finished** tidies the list.
 - Games go to the `ISO/` folder of the Memory Stick. Play them from Game → Memory Stick, like any

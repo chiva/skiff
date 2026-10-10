@@ -23,6 +23,9 @@
 #define APP_QUEUE_ROWS SKIFF_APP_ROWS_FIT(APP_QUEUE_DETAIL_LINES, 1)
 #define APP_SETTINGS_LINES 3
 #define APP_SETTINGS_ROWS SKIFF_APP_ROWS_FIT(APP_SETTINGS_LINES, 0)
+/* Lines a game's title and its file name each take at most on the details screen, beside the
+ * cover: the size, the download state and the free space always fit under them. */
+#define APP_DETAILS_NAME_LINES 3
 
 /* Where the walk from a launch to the library is. */
 typedef enum app_connect_step {

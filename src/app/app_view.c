@@ -382,6 +382,34 @@ static void library_view(skiff_app *app) {
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
 }
 
+/* A game's name beside the cover: at most APP_DETAILS_NAME_LINES lines, the last cut with "..."
+ * when there is more, so the size, the download state and the free space always fit under it. */
+static void add_name_within(skiff_app *app, const char *name, float width) {
+    char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
+    const size_t count =
+        skiff_app_wrap(name, width, app->env.measure, app->env.ctx, lines, SKIFF_APP_LINES_MAX);
+    skiff_app_view *view = &app->view;
+    for (size_t i = 0; i < count && i < APP_DETAILS_NAME_LINES; i++) {
+        if (view->line_count == SKIFF_APP_LINES_MAX) {
+            return;
+        }
+        char *line = view->lines[view->line_count++];
+        if (i + 1 == APP_DETAILS_NAME_LINES && count > APP_DETAILS_NAME_LINES) {
+            /* Longer than the line, so the fit ends it with "...". */
+            char joined[2 * SKIFF_TEXT_MAX];
+            const size_t first = strnlen(lines[i], SKIFF_TEXT_MAX - 1);
+            const size_t next = strnlen(lines[i + 1], SKIFF_TEXT_MAX - 1);
+            memcpy(joined, lines[i], first);
+            joined[first] = ' ';
+            memcpy(joined + first + 1, lines[i + 1], next);
+            joined[first + 1 + next] = '\0';
+            app_fit(app, joined, width, line, SKIFF_TEXT_MAX);
+        } else {
+            memcpy(line, lines[i], SKIFF_TEXT_MAX);
+        }
+    }
+}
+
 static void details_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_DETAILS));
@@ -390,14 +418,14 @@ static void details_view(skiff_app *app) {
     const float width = SKIFF_APP_COVER_TEXT_WIDTH;
     view->has_cover_box = 1;
     view->cover = app_cover_shown(app) ? app->cover : NULL;
-    add_wrapped_within(app, rom->name[0] != '\0' ? rom->name : rom->fs_name, width);
+    add_name_within(app, rom->name[0] != '\0' ? rom->name : rom->fs_name, width);
     if (!app->has_rom) {
         add_text_within(app, SKIFF_TEXT_LIBRARY_LOADING, width);
         add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
         return;
     }
     if (rom->name[0] != '\0') {
-        add_wrapped_within(app, rom->fs_name, width);
+        add_name_within(app, rom->fs_name, width);
     }
     char size[SKIFF_APP_DETAIL_MAX];
     app_format_bytes(app, rom->size, size, sizeof size);

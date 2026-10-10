@@ -1557,6 +1557,41 @@ static void test_a_game_without_a_usable_cover_keeps_its_placeholder(void) {
     }
 }
 
+static void test_long_names_beside_the_cover_leave_room_for_the_details(void) {
+    open_paired_library(1);
+    /* A title and a file name of 250 bytes: each would wrap to 6 lines beside the cover. */
+    char title[251];
+    char file_name[251];
+    memset(title, 'T', sizeof title - 1);
+    title[sizeof title - 1] = '\0';
+    for (size_t i = 0; i < sizeof title - 1; i += 9) {
+        title[i] = ' ';
+    }
+    memset(file_name, 'F', sizeof file_name - 1);
+    memcpy(file_name + sizeof file_name - 5, ".zip", 5);
+    for (size_t i = 0; i < sizeof file_name - 5; i += 11) {
+        file_name[i] = ' ';
+    }
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"id\":1,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"%s\","
+                     "\"fs_size_bytes\":%u,\"files\":[{\"rom_id\":1,\"file_name\":\"%s\","
+                     "\"file_size_bytes\":%u}]}",
+             title, file_name, BODY_BYTES, file_name, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("%zu lines: names cut at %d lines each, the rest still shown", view()->line_count,
+                APP_DETAILS_NAME_LINES);
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_LINES_MAX, view()->line_count);
+    TEST_ASSERT_NOT_NULL(strstr(view()->lines[APP_DETAILS_NAME_LINES - 1], "..."));
+    TEST_ASSERT_NOT_NULL(strstr(view()->lines[(size_t)2 * APP_DETAILS_NAME_LINES - 1], "..."));
+    TEST_ASSERT_EQUAL_STRING("Size: 2 KB", view()->lines[(size_t)2 * APP_DETAILS_NAME_LINES]);
+    TEST_ASSERT_TRUE(shows("Skiff can't install this file"));
+    TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->line_count - 1]);
+    assert_lines_beside_the_cover();
+}
+
 static void test_leaving_a_game_while_its_cover_loads_drops_the_cover(void) {
     open_paired_library(2);
     serve_rom_with_cover(1, COVER_PATH(1));
@@ -2200,6 +2235,7 @@ int main(void) {
     RUN_TEST(test_leaving_a_game_while_it_loads_drops_its_details);
     RUN_TEST(test_a_game_shows_its_cover_and_keeps_it_on_the_memory_stick);
     RUN_TEST(test_a_game_without_a_usable_cover_keeps_its_placeholder);
+    RUN_TEST(test_long_names_beside_the_cover_leave_room_for_the_details);
     RUN_TEST(test_leaving_a_game_while_its_cover_loads_drops_the_cover);
     RUN_TEST(test_a_cover_lost_with_the_network_shows_no_error);
     RUN_TEST(test_a_lost_connection_under_a_dropped_request_still_counts);

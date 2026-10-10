@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/chiva/skiff/compare/v0.3.0...v0.4.0) (2026-10-10)
+
+
+### Features
+
+* **app:** download all favourites ([#81](https://github.com/chiva/skiff/issues/81)) ([c8f6531](https://github.com/chiva/skiff/commit/c8f65315558e519408c58ddb1c992813fb570924))
+* **app:** switch the library to favourites with SELECT ([#79](https://github.com/chiva/skiff/issues/79)) ([094fc11](https://github.com/chiva/skiff/commit/094fc11a73136aaaeee11b5878866a1a843a519a))
+* **jobs:** queue many downloads with one save ([#78](https://github.com/chiva/skiff/issues/78)) ([3b05917](https://github.com/chiva/skiff/commit/3b05917f0730d700c2bf058bf4b2130ab911bc32))
+* **romm:** list a player's favourite games ([#77](https://github.com/chiva/skiff/issues/77)) ([6f40f29](https://github.com/chiva/skiff/commit/6f40f2930c84f36337ab05bc77b1fe7ce95e6b7e))
+
 ## [0.3.0](https://github.com/chiva/skiff/compare/v0.2.0...v0.3.0) (2026-10-10)
 
 

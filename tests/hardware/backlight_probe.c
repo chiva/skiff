@@ -162,19 +162,30 @@ static int sibling_path(const char *program_path, const char *name, char *out) {
     return written > 0 && written < PATH_MAX_LENGTH;
 }
 
-static int read_state(const char *path, int *original) {
+typedef enum state_found {
+    STATE_MISSING,
+    STATE_READ,
+    /* There, but it cannot be read: the player's value may be in it, so nothing is touched. */
+    STATE_DAMAGED,
+} state_found;
+
+static state_found read_state(const char *path, int *original) {
+    SceIoStat stat;
+    if (sceIoGetstat(path, &stat) < 0) {
+        return STATE_MISSING;
+    }
     char text[STATE_TEXT_MAX] = "";
     const SceUID file = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (file < 0) {
-        return 0;
+        return STATE_DAMAGED;
     }
     const int read = sceIoRead(file, text, sizeof text - 1);
     sceIoClose(file);
     if (read <= 0) {
-        return 0;
+        return STATE_DAMAGED;
     }
     text[read] = '\0';
-    return sscanf(text, STATE_FORMAT, original) == STATE_FIELDS;
+    return sscanf(text, STATE_FORMAT, original) == STATE_FIELDS ? STATE_READ : STATE_DAMAGED;
 }
 
 static int write_state(const char *path, int original) {
@@ -269,12 +280,17 @@ int main(int argc, char *argv[]) {
     }
     int ok = sibling_path(program, STATE_FILE_NAME, state_path);
     int original = 0;
+    state_found found = STATE_MISSING;
     const char *marker = FAIL_MARKER;
     if (!ok) {
         note(&report, "FAIL no folder for " STATE_FILE_NAME);
-    } else if (read_state(state_path, &original)) {
+    } else if ((found = read_state(state_path, &original)) == STATE_READ) {
         ok = part_two(&report, state_path, original);
         marker = ok ? OK_MARKER : FAIL_MARKER;
+    } else if (found == STATE_DAMAGED) {
+        ok = 0;
+        note(&report, "FAIL " STATE_FILE_NAME " cannot be read: nothing changed. Set Backlight "
+                      "Auto-Off by hand (your value is in backlight-log.txt), then delete it.");
     } else {
         ok = part_one(&report, state_path);
         marker = ok ? PART_ONE_MARKER : FAIL_MARKER;

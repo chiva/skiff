@@ -22,6 +22,9 @@
     "&order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false"                  \
     "&with_rom_id_index=false"
 #define UNRESERVED_SYMBOLS "-._~"
+/* Kept as they are in a cover URL besides the unreserved ones: they separate the path's segments
+ * and its query. */
+#define COVER_URL_SYMBOLS "/?=&:"
 #define HEX_DIGITS "0123456789ABCDEF"
 #define CRC32_HEX_DIGITS_MAX 8
 #define HEX_BASE 16
@@ -229,6 +232,48 @@ static int parse_file(const cJSON *item, uint64_t rom_id, skiff_romm_file *out) 
            read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32);
 }
 
+/* A segment of a path that a server resolves to the folder itself or the one above it. */
+static int is_dot_segment(const char *segment, size_t length) {
+    return (length == 1 && segment[0] == '.') ||
+           (length == 2 && segment[0] == '.' && segment[1] == '.');
+}
+
+/*
+ * A cover path Skiff will request: under SKIFF_ROMM_COVER_PREFIX, so a response cannot send it
+ * elsewhere on the server or to another host; no "." or ".." segment before the query, which would
+ * climb out of the prefix; no backslash, which some servers read as '/'; no control character; and
+ * short enough for skiff_romm_rom.cover_path.
+ */
+static int is_cover_path(const char *path) {
+    const size_t length = strlen(path);
+    const size_t prefix_length = sizeof SKIFF_ROMM_COVER_PREFIX - 1;
+    if (length <= prefix_length || length >= SKIFF_ROMM_COVER_PATH_MAX ||
+        strncmp(path, SKIFF_ROMM_COVER_PREFIX, prefix_length) != 0 || strchr(path, '\\') != NULL ||
+        !is_printable_text(path)) {
+        return 0;
+    }
+    const size_t path_end = strcspn(path, "?#");
+    for (size_t start = 0; start < path_end;) {
+        const size_t segment = strcspn(path + start, "/?#");
+        if (is_dot_segment(path + start, segment)) {
+            return 0;
+        }
+        start += segment + 1;
+    }
+    return 1;
+}
+
+/* path_cover_small into out when it is a path is_cover_path() accepts, otherwise empty: a cover
+ * never refuses its ROM. */
+static void read_cover_path(const cJSON *object, char *out, size_t out_size) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, "path_cover_small");
+    out[0] = '\0';
+    if (cJSON_IsString(item) && item->valuestring != NULL && is_cover_path(item->valuestring) &&
+        strlen(item->valuestring) < out_size) {
+        memcpy(out, item->valuestring, strlen(item->valuestring) + 1);
+    }
+}
+
 /* ---- Parsing whole responses ---- */
 
 static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
@@ -411,6 +456,7 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
             out->stored_count++;
         }
     }
+    read_cover_path(root, out->cover_path, sizeof out->cover_path);
     return 1;
 }
 
@@ -812,11 +858,43 @@ skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_r
     return err;
 }
 
-/* ---- Download URLs ---- */
+/* ---- URLs ---- */
 
 static int is_unreserved(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || is_digit(c) ||
            (c != '\0' && strchr(UNRESERVED_SYMBOLS, c) != NULL);
+}
+
+/*
+ * Writes prefix into out, then text with every byte that is neither unreserved nor in kept
+ * percent-encoded. SKIFF_ERR_BUFFER_TOO_SMALL (out emptied) when the result does not fit.
+ */
+static skiff_err write_encoded(char *out, size_t out_size, const char *prefix, const char *text,
+                               const char *kept) {
+    size_t used = strlen(prefix);
+    if (used >= out_size) {
+        out[0] = '\0';
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    memcpy(out, prefix, used);
+    for (const char *c = text; *c != '\0'; c++) {
+        const int plain = is_unreserved(*c) || strchr(kept, *c) != NULL;
+        const size_t needed = plain ? 1 : 3;
+        if (needed >= out_size - used) {
+            out[0] = '\0';
+            return SKIFF_ERR_BUFFER_TOO_SMALL;
+        }
+        if (plain) {
+            out[used++] = *c;
+        } else {
+            const unsigned char byte = (unsigned char)*c;
+            out[used++] = '%';
+            out[used++] = HEX_DIGITS[byte >> 4];
+            out[used++] = HEX_DIGITS[byte & 0x0F];
+        }
+    }
+    out[used] = '\0';
+    return SKIFF_OK;
 }
 
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
@@ -829,29 +907,21 @@ skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_i
         file->file_name[0] == '\0' || out == NULL || out_size == 0) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    const char *file_name = file->file_name;
-    const int written = snprintf(out, out_size, "%s" PATH_ROMS "/%llu/content/", client->base_url,
-                                 (unsigned long long)rom_id);
-    if (written < 0 || (size_t)written >= out_size) {
+    char prefix[SKIFF_ROMM_URL_MAX];
+    snprintf(prefix, sizeof prefix, "%s" PATH_ROMS "/%llu/content/", client->base_url,
+             (unsigned long long)rom_id);
+    /* A '#', '?' or '/' in a file name must not end or split the path. */
+    return write_encoded(out, out_size, prefix, file->file_name, "");
+}
+
+skiff_err skiff_romm_cover_url(const skiff_romm_client *client, const char *cover_path, char *out,
+                               size_t out_size) {
+    if (out != NULL && out_size > 0) {
         out[0] = '\0';
-        return SKIFF_ERR_BUFFER_TOO_SMALL;
     }
-    size_t used = (size_t)written;
-    for (const char *c = file_name; *c != '\0'; c++) {
-        const size_t needed = is_unreserved(*c) ? 1 : 3;
-        if (needed >= out_size - used) {
-            out[0] = '\0';
-            return SKIFF_ERR_BUFFER_TOO_SMALL;
-        }
-        if (needed == 1) {
-            out[used++] = *c;
-        } else {
-            const unsigned char byte = (unsigned char)*c;
-            out[used++] = '%';
-            out[used++] = HEX_DIGITS[byte >> 4];
-            out[used++] = HEX_DIGITS[byte & 0x0F];
-        }
+    if (!client_ready(client) || cover_path == NULL || !is_cover_path(cover_path) || out == NULL ||
+        out_size == 0) {
+        return SKIFF_ERR_INVALID_ARG;
     }
-    out[used] = '\0';
-    return SKIFF_OK;
+    return write_encoded(out, out_size, client->base_url, cover_path, COVER_URL_SYMBOLS);
 }

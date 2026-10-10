@@ -14,7 +14,7 @@ enum { BODY_MAX = 8192, RESUME_OFFSET = 1000 };
 
 /* Recorded from the integration RomM with a 4096-byte synthetic file. */
 #define CONTENT_PATH "/api/roms/1/content/Skiff%20Test%20Payload.iso"
-#define CONTENT_ETAG "\"6ac53cf2-1000\""
+#define CONTENT_ETAG "\"6ac9be68-1000\""
 #define CONTENT_BYTES 4096U
 #define HEARTBEAT_BYTES 1351U
 

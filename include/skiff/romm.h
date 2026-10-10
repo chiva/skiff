@@ -8,6 +8,10 @@
  * one response at a time from a buffer of at most SKIFF_ROMM_BODY_MAX bytes: a larger response is
  * refused, never cut, so a PSP cannot run out of memory on a large library.
  *
+ * Covers are not API responses: RomM's web server serves them as files under
+ * SKIFF_ROMM_COVER_PREFIX, without a token, and a ROM's details name its cover there
+ * (skiff_romm_rom.cover_path, skiff_romm_cover_url()).
+ *
  * Every call returns SKIFF_OK, the transport's error (1xx), the RomM error for an HTTP status
  * (skiff_http_status_error(): 401 → 200, 403 → 201, 404 → 202, 5xx → 203), or
  * SKIFF_ERR_ROMM_BAD_RESPONSE (204) for a body that is not the JSON RomM sends: a proxy's login
@@ -55,6 +59,14 @@
 #define SKIFF_ROMM_URL_MAX (SKIFF_CONFIG_URL_MAX + 256)
 /* A download URL: every byte of a file name may become "%XX". */
 #define SKIFF_ROMM_CONTENT_URL_MAX (SKIFF_CONFIG_URL_MAX + 64 + 3 * SKIFF_ROMM_FILE_NAME_MAX)
+/* Where RomM's web server serves the pictures it keeps (covers, screenshots), without a token. */
+#define SKIFF_ROMM_COVER_PREFIX "/assets/romm/resources/"
+/* A cover path as RomM gives it, e.g.
+ * "/assets/romm/resources/roms/1/2/cover/small.png?ts=2026-10-09 23:02:27"; a longer one is
+ * treated as no cover. */
+#define SKIFF_ROMM_COVER_PATH_MAX 256
+/* A cover URL: the server address and the path, any byte of which may become "%XX". */
+#define SKIFF_ROMM_COVER_URL_MAX (SKIFF_CONFIG_URL_MAX + 3 * SKIFF_ROMM_COVER_PATH_MAX)
 /* "Bearer " and a token from config.ini. */
 #define SKIFF_ROMM_AUTHORIZATION_MAX (sizeof "Bearer " + SKIFF_CONFIG_TOKEN_MAX)
 
@@ -147,6 +159,11 @@ typedef struct skiff_romm_rom {
     size_t file_count;
     size_t stored_count;
     skiff_romm_file files[SKIFF_ROMM_FILES_MAX];
+    /* RomM's small cover (path_cover_small), a path on the server under SKIFF_ROMM_COVER_PREFIX
+     * with its "?ts=" query; empty when the ROM has none. A cover is decoration, so a path Skiff
+     * would not request (another prefix, a "." or ".." segment, a backslash, a control character,
+     * too long, not a string) leaves it empty rather than refusing the ROM. */
+    char cover_path[SKIFF_ROMM_COVER_PATH_MAX];
 } skiff_romm_rom;
 
 /*
@@ -207,6 +224,17 @@ skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_r
  */
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
                                  const skiff_romm_file *file, char *out, size_t out_size);
+
+/*
+ * Writes the URL of a ROM's cover, the server address followed by cover_path (as
+ * skiff_romm_rom.cover_path holds it) with every byte other than letters, digits and "-._~/?=&:"
+ * percent-encoded: the "?ts=" RomM appends holds a raw space, which no request line may carry. The
+ * request needs no token. SKIFF_ERR_INVALID_ARG for a NULL argument or a path
+ * skiff_romm_rom.cover_path would not hold (an empty one included); SKIFF_ERR_BUFFER_TOO_SMALL when
+ * it does not fit (SKIFF_ROMM_COVER_URL_MAX always does). out is empty on error.
+ */
+skiff_err skiff_romm_cover_url(const skiff_romm_client *client, const char *cover_path, char *out,
+                               size_t out_size);
 
 /* ---- Parsing, exposed for the tests and the self-test ---- */
 

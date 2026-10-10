@@ -5,6 +5,11 @@ needs nothing installed elsewhere: the standard library plus the python-socketio
 The scan is started over RomM's socket, the way its web UI does, because RomM has no REST endpoint
 for it. Prints one JSON object on stdout for the tests; the token in it is a secret.
 
+The payload ROM gets a synthetic PNG cover, uploaded the way RomM's web UI uploads custom artwork;
+the seed has no metadata providers, so it is the only cover. RomM keeps the upload as the large
+cover and resizes it into the small one Skiff shows. The extra ROM gets none: every ROM update in
+RomM 5.3.1 also cleans the file's name on disk, which would drop the '+' its name is there for.
+
 With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware session (A1):
 that many small numbered ROMs (several pages), a file the app cannot install (.zip), a name with a
 control character and a name too long for the Memory Stick. Files already in the platform's folder are scanned too: scripts/dev.sh
@@ -16,6 +21,8 @@ SKIFF_LIBRARY_ROMS (optional).
 
 import asyncio
 import base64
+import io
+import random
 import hashlib
 import json
 import os
@@ -27,6 +34,7 @@ import zlib
 from pathlib import Path
 
 import socketio
+from PIL import Image, ImageDraw
 
 API = "http://localhost:8080"
 PLATFORM_SLUG = "psp"
@@ -58,6 +66,16 @@ LIST_LIMIT = 500
 # same hashes on every run and every machine.
 PAYLOAD_SEED = b"skiff-integration-payload"
 SCAN_TIMEOUT_SECONDS = 120
+# Synthetic covers: 600x800, so RomM's small cover is 240x320 (it scales covers under 1000 px tall
+# by 0.4), a size real covers have. Gradients with seeded noise compress about as badly as a
+# photograph, so the bytes are realistic too, and the same on every run.
+COVER_SIZE = (600, 800)
+COVER_NOISE = 32
+COVER_SEED = 2026
+COVER_LABEL = "SKIFF SYNTHETIC COVER"
+COVER_LABEL_BOX = (60, 60, 540, 200)
+COVER_LABEL_AT = (80, 110)
+MULTIPART_BOUNDARY = "skiff-seed-cover"
 # Every call is bounded, so a stalled RomM fails the seed instead of hanging it.
 REQUEST_TIMEOUT_SECONDS = 30
 TOKEN_NAME = "skiff-integration"
@@ -119,6 +137,53 @@ def request(method, path, auth, body=None):
             return response.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
         return error.code, None
+
+
+def cover_png():
+    """A synthetic PNG cover, the same bytes on every run."""
+    noise = random.Random(COVER_SEED)
+    width, height = COVER_SIZE
+    image = Image.new("RGB", COVER_SIZE)
+    pixels = image.load()
+    for y in range(height):
+        for x in range(width):
+            n = noise.randrange(COVER_NOISE)
+            pixels[x, y] = (
+                min(255, x * 220 // (width - 1) + n),
+                min(255, y * 220 // (height - 1) + n),
+                ((x ^ y) & 127) + n,
+            )
+    draw = ImageDraw.Draw(image)
+    draw.rectangle(COVER_LABEL_BOX, fill=(250, 250, 250))
+    draw.text(COVER_LABEL_AT, COVER_LABEL, fill=(0, 0, 0))
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+def set_cover(auth, rom_id, fs_name):
+    """Upload a synthetic cover as the ROM's custom artwork; returns RomM's small cover path. RomM
+    also cleans the ROM's file name on disk, so only a ROM whose name is already clean may get one."""
+    body = (
+        f"--{MULTIPART_BOUNDARY}\r\n"
+        'Content-Disposition: form-data; name="artwork"; filename="cover.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode() + cover_png() + f"\r\n--{MULTIPART_BOUNDARY}--\r\n".encode()
+    req = urllib.request.Request(f"{API}/api/roms/{rom_id}", data=body, method="PUT")
+    req.add_header("Authorization", auth)
+    req.add_header("Content-Type", f"multipart/form-data; boundary={MULTIPART_BOUNDARY}")
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            rom = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"seed: uploading a cover for ROM {rom_id} failed with HTTP {error.code}")
+    if rom.get("fs_name") != fs_name:
+        raise SystemExit(f"seed: uploading a cover renamed {fs_name!r} to {rom.get('fs_name')!r}")
+    path = rom.get("path_cover_small") or ""
+    if not path:
+        raise SystemExit(f"seed: ROM {rom_id} has no small cover after the upload")
+    log(f"ROM {rom_id} cover: {path}")
+    return path
 
 
 def basic_auth(user, password):
@@ -239,16 +304,20 @@ def main():
     library_roms = int(os.environ.get("SKIFF_LIBRARY_ROMS", "0"))
     auth = basic_auth(user, password)
 
-    payload = write_payload(size)
-    extra = write_payload(EXTRA_BYTES, EXTRA_NAME, EXTRA_SEED)
-    library = write_library(library_roms) if library_roms > 0 else []
     create_admin(user, password, auth)
     started = time.monotonic()
+    # Two scans: one scan numbers its new ROMs in no fixed order, and the recorded fixtures
+    # (tests/fixtures/romm/) expect the payload to be ROM 1 and the extra file ROM 2.
+    payload = write_payload(size)
+    asyncio.run(scan(session_cookie(auth)))
+    extra = write_payload(EXTRA_BYTES, EXTRA_NAME, EXTRA_SEED)
+    library = write_library(library_roms) if library_roms > 0 else []
     asyncio.run(scan(session_cookie(auth)))
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
     log(f"roms {rom_id}, {extra_rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")
     if library:
         log(f"library: {len(library)} more files, and every other file in {LIBRARY_DIR}")
+    payload["cover_path"] = set_cover(auth, rom_id, PAYLOAD_NAME)
     extra["rom_id"] = extra_rom_id
     print(
         json.dumps(

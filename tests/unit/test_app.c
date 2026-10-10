@@ -304,20 +304,35 @@ static int rom_item(char *out, size_t size, unsigned id) {
                     id, id, id, BODY_BYTES, (unsigned)body_crc);
 }
 
-/* A page of ROMs with ids from first_id, for a library of total. */
-static void serve_page(unsigned offset, unsigned count, unsigned total) {
+/* A page of a list of total ROMs (the list's query ends with filter), from offset: ids from
+ * first_id + offset + 1. */
+static void serve_list_page(const char *filter, unsigned first_id, unsigned offset, unsigned count,
+                            unsigned total) {
     static char raw[RAW_MAX];
     int used = snprintf(raw, sizeof raw, JSON_OK "{\"items\":[");
     for (unsigned i = 0; i < count; i++) {
         used += snprintf(raw + used, sizeof raw - (size_t)used, i > 0 ? "," : "");
-        used += rom_item(raw + used, sizeof raw - (size_t)used, offset + i + 1);
+        used += rom_item(raw + used, sizeof raw - (size_t)used, first_id + offset + i + 1);
     }
     snprintf(raw + used, sizeof raw - (size_t)used, "],\"total\":%u,\"limit\":%d,\"offset\":%u}",
              total, SKIFF_ROMM_PAGE_SIZE, offset);
     char path[256];
-    snprintf(path, sizeof path, "/api/roms?platform_ids=1&limit=%d&offset=%u" LIST_QUERY,
-             SKIFF_ROMM_PAGE_SIZE, offset);
+    snprintf(path, sizeof path, "/api/roms?platform_ids=1&limit=%d&offset=%u" LIST_QUERY "%s",
+             SKIFF_ROMM_PAGE_SIZE, offset, filter);
     serve_raw(path, raw);
+}
+
+/* A page of every game, ids from offset + 1, for a library of total. */
+static void serve_page(unsigned offset, unsigned count, unsigned total) {
+    serve_list_page("", 0, offset, count, total);
+}
+
+/* The player's favourites: total games, ids from FAVOURITE_ID_BASE + 1, on their first page. */
+#define FAVOURITE_ID_BASE 100
+#define FAVOURITES_FILTER "&favorite=true"
+static void serve_favourites(unsigned total) {
+    serve_list_page(FAVOURITES_FILTER, FAVOURITE_ID_BASE, 0,
+                    total < SKIFF_ROMM_PAGE_SIZE ? total : SKIFF_ROMM_PAGE_SIZE, total);
 }
 
 /* ROM id's details, with RomM's cover path when cover_path is not NULL. */
@@ -993,6 +1008,95 @@ static void test_a_library_without_psp_games_says_so(void) {
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_LIBRARY_EMPTY)));
     TEST_PRINTF("the downloads still run: the worker starts");
     TEST_ASSERT_EQUAL_INT(1, env_state.worker_starts);
+}
+
+/* ---- Favourites ---- */
+
+static void test_select_switches_the_library_to_favourites_and_back(void) {
+    open_paired_library(30);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_FAVOURITES)));
+    serve_favourites(3);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_FAVOURITES), view()->title);
+    TEST_ASSERT_TRUE(shows("3 games"));
+    TEST_ASSERT_TRUE(shows("Game 101"));
+    TEST_ASSERT_FALSE(shows("Game 1.iso"));
+    TEST_PRINTF("the favourites start at their top, whatever was selected before");
+    TEST_ASSERT_EQUAL_size_t(0, view()->list.selected);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+
+    TEST_PRINTF("SELECT again: every game, from their first page again");
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+    TEST_ASSERT_TRUE(shows("30 games"));
+    TEST_ASSERT_TRUE(shows("Game 1"));
+    TEST_ASSERT_EQUAL_size_t(requests + 1, transport.request_count);
+}
+
+static void test_favourites_without_any_say_where_to_mark_them(void) {
+    open_paired_library(2);
+    serve_favourites(0);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("RomM"));
+    TEST_ASSERT_TRUE(view()->line_count > 0);
+    TEST_ASSERT_FALSE(view()->has_list);
+    TEST_PRINTF("still switchable, and nothing to open");
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SELECT)));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
+static void test_a_page_of_the_list_left_behind_is_dropped(void) {
+    open_paired_library(30);
+    serve_favourites(3);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_SELECT);
+    frame(0);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_PRINTF("back to every game while the favourites' first page is on its way");
+    frame(SKIFF_UI_ACTION_SELECT);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+    TEST_ASSERT_TRUE(shows("30 games"));
+    TEST_ASSERT_FALSE(shows("Game 101"));
+    TEST_PRINTF("the favourites' page was not cancelled with its connection");
+    TEST_ASSERT_EQUAL_INT(0, env_state.cancels);
+}
+
+static void test_back_from_a_favourites_details_returns_to_the_favourites(void) {
+    open_paired_library(2);
+    serve_favourites(3);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(102);
+    TEST_ASSERT_TRUE(shows("Game 102.iso"));
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_FAVOURITES), view()->title);
+    TEST_ASSERT_EQUAL_size_t(1, view()->list.selected);
+    TEST_PRINTF("from the page kept in memory: no request");
+    TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
+}
+
+static void test_a_library_without_psp_games_offers_no_favourites(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    serve_raw("/api/platforms", JSON_OK "[]");
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_FAVOURITES)));
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_LIBRARY_EMPTY)));
 }
 
 /* ---- Downloading ---- */
@@ -2240,6 +2344,11 @@ int main(void) {
     RUN_TEST(test_pages_load_as_the_player_scrolls);
     RUN_TEST(test_the_library_fills_the_body);
     RUN_TEST(test_a_library_without_psp_games_says_so);
+    RUN_TEST(test_select_switches_the_library_to_favourites_and_back);
+    RUN_TEST(test_favourites_without_any_say_where_to_mark_them);
+    RUN_TEST(test_a_page_of_the_list_left_behind_is_dropped);
+    RUN_TEST(test_back_from_a_favourites_details_returns_to_the_favourites);
+    RUN_TEST(test_a_library_without_psp_games_offers_no_favourites);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);
     RUN_TEST(test_a_finished_download_shows_as_installed);
     RUN_TEST(test_a_changed_game_and_a_hand_copy);

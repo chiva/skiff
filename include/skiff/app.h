@@ -13,9 +13,9 @@
  * per-frame path: it reads the queue through skiff_jobs_next_event() and skiff_jobs_list() only,
  * and writes files (config.ini, the queue) only when the player asked for something.
  *
- * Requests to RomM run on the UI thread, one per frame at most, and only on a frame after the one
- * that showed what is being waited for ("Contacting RomM..."), so the screen never freezes without
- * saying why. Joining the Wi-Fi takes seconds and is polled instead (net_start, net_poll).
+ * Requests to RomM run on the browsing thread the platform provides (call_start, call_done), one
+ * at a time, and the UI thread applies each result on a later frame, so the screen keeps answering
+ * while they run. Joining the Wi-Fi takes seconds and is polled instead (net_start, net_poll).
  */
 
 #include <stddef.h>
@@ -304,8 +304,8 @@ const skiff_app_view *skiff_app_view_now(const skiff_app *app);
  * the network picker ended. */
 void skiff_app_dialog_done(skiff_app *app, skiff_app_dialog_result result, const char *text);
 
-/* The player asked to quit (START). The platform then stops the worker and calls
- * skiff_app_destroy(), as it does for HOME -> Quit. */
+/* The player asked to quit (OK on a message that ends Skiff, such as a config.ini it cannot use).
+ * The platform then stops the worker and calls skiff_app_destroy(), as it does for HOME -> Quit. */
 int skiff_app_quit_requested(const skiff_app *app);
 
 /* The logger, once started (NULL before), for the platform's own lines. */

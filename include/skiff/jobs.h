@@ -92,7 +92,7 @@ typedef struct skiff_job {
     uint64_t replace_size;
 } skiff_job;
 
-/* What skiff_jobs_add() takes: a job before it has an id and a state. */
+/* What skiff_jobs_add() and skiff_jobs_add_many() take: a job before it has an id and a state. */
 typedef struct skiff_job_request {
     uint64_t rom_id;
     const char *title;
@@ -231,6 +231,24 @@ void skiff_jobs_destroy(skiff_jobs *jobs);
  * offers a download, and tells the player the queue is full.
  */
 skiff_err skiff_jobs_add(skiff_jobs *jobs, const skiff_job_request *request, uint32_t *id);
+
+/*
+ * Queues count downloads, in order, with one save of the queue (a save blocks for a moment on the
+ * Memory Stick, so queueing many games one by one would cost one each). Each request follows
+ * skiff_jobs_add()'s rules: the same file of the same ROM queued or active keeps its job (a second
+ * request for it in the batch gets the first one's id), one that ended is queued again, and
+ * finished jobs make room. The batch stops at the first request that finds SKIFF_JOBS_MAX jobs
+ * queued, active or failed: the requests before it are queued and *added says how many (fewer than
+ * count; the player is told how many were left out). *added counts requests that have a job, new
+ * or not, and ids[i] is set for every i below it. Returns SKIFF_ERR_INVALID_ARG, adding nothing,
+ * for a NULL queue or added, NULL requests or ids with count above 0, or any request
+ * skiff_jobs_add() would refuse, including one whose files (target, .part, .resume) another request
+ * of the batch for another file also uses (ignoring case, as FAT does), all checked before anything
+ * is queued; the storage's error when the queue cannot be saved (nothing is added). count 0 queues
+ * nothing and saves nothing, as does a batch whose files are all queued or active already.
+ */
+skiff_err skiff_jobs_add_many(skiff_jobs *jobs, const skiff_job_request *requests, size_t count,
+                              uint32_t *ids, size_t *added);
 
 /*
  * Cancels a job. A queued or failed one is cancelled now and its partial files deleted; the active

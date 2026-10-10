@@ -1438,6 +1438,319 @@ static void test_a_cancel_as_the_job_ends_is_not_lost(void) {
     assert_locks_used_well();
 }
 
+/* ---- Queueing many with one save ---- */
+
+/* More requests than the queue holds, so a batch can run into its limit. */
+#define BATCH_MAX (SKIFF_JOBS_MAX + 8)
+#define BATCH_NAME_MAX 32
+
+static char batch_names[BATCH_MAX][BATCH_NAME_MAX];
+static char batch_paths[BATCH_MAX][TEMP_DIR_PATH_MAX];
+static skiff_job_request batch[BATCH_MAX];
+static uint32_t batch_ids[BATCH_MAX];
+static char queue_draft[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_DRAFT_SUFFIX];
+static int queue_saves;
+
+/* watch_io(), and every write of the queue file (its draft, which each save writes once). */
+static void count_saves(void *ctx, const char *call, const char *path) {
+    watch_io(ctx, call, path);
+    if (strcmp(call, "open") == 0 && strcmp(path, queue_draft) == 0) {
+        queue_saves++;
+    }
+}
+
+/* A tracked queue whose saves are counted. */
+static void create_counted_jobs(void) {
+    create_tracked_jobs();
+    snprintf(queue_draft, sizeof queue_draft, "%s" SKIFF_STORAGE_DRAFT_SUFFIX, queue_path);
+    queue_saves = 0;
+    storage.on_call = count_saves;
+}
+
+/* Fills batch[0..count) with requests for distinct files of the ROM ("<prefix> NN.iso"), each to
+ * its own path in the ISO folder. */
+static void make_batch(const char *prefix, size_t count) {
+    TEST_ASSERT_TRUE(count <= BATCH_MAX);
+    for (size_t i = 0; i < count; i++) {
+        snprintf(batch_names[i], sizeof batch_names[i], "%s %02zu.iso", prefix, i);
+        batch[i] = request_named(batch_names[i], batch_paths[i], sizeof batch_paths[i]);
+        batch_ids[i] = 0;
+    }
+}
+
+static int queued_lines_in_log(void) {
+    skiff_log_flush(logger);
+    static char log_text[TEXT_MAX * 4];
+    read_text(log_path, log_text, sizeof log_text);
+    int lines = 0;
+    for (const char *at = strstr(log_text, "queued job "); at != NULL;
+         at = strstr(at + 1, "queued job ")) {
+        lines++;
+    }
+    return lines;
+}
+
+static void test_a_batch_is_queued_with_one_save(void) {
+    create_counted_jobs();
+    enum { COUNT = 5 };
+    make_batch("Batch", COUNT);
+    size_t added = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    drain_events();
+    TEST_PRINTF("%zu of %d queued with %d save(s), %zu event(s), %d log line(s)", added, COUNT,
+                queue_saves, event_count, queued_lines_in_log());
+    TEST_ASSERT_EQUAL_size_t(COUNT, added);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, queue_saves, "the queue file must be written once per batch");
+    TEST_ASSERT_EQUAL_size_t(COUNT, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(COUNT, event_count, "one state event per queued job");
+    TEST_ASSERT_EQUAL_INT(COUNT, queued_lines_in_log());
+    for (size_t i = 0; i < COUNT; i++) {
+        TEST_ASSERT_EQUAL_UINT32(batch_ids[0] + i, batch_ids[i]);
+        TEST_ASSERT_EQUAL_INT(SKIFF_JOBS_EVENT_STATE, events[i].kind);
+        TEST_ASSERT_EQUAL_UINT32(batch_ids[i], events[i].job_id);
+        TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, events[i].state);
+        TEST_ASSERT_EQUAL_STRING(batch_names[i], job_with(batch_ids[i]).file_name);
+        TEST_ASSERT_EQUAL_STRING(batch_paths[i], job_with(batch_ids[i]).target);
+    }
+    assert_locks_used_well();
+    TEST_PRINTF("and the file holds them all after a restart");
+    storage.on_call = NULL;
+    skiff_jobs_destroy(jobs);
+    create_jobs();
+    TEST_ASSERT_EQUAL_size_t(COUNT, skiff_jobs_list(jobs, NULL, 0));
+}
+
+static void test_a_batch_the_file_cannot_hold_adds_nothing(void) {
+    create_counted_jobs();
+    const uint32_t first = add_job();
+    drain_events();
+    event_count = 0;
+    skiff_job before[SKIFF_JOBS_MAX];
+    const size_t before_count = skiff_jobs_list(jobs, before, SKIFF_JOBS_MAX);
+    enum { COUNT = 3 };
+    make_batch("Refused", COUNT);
+    storage.fail_suffix = SKIFF_STORAGE_DRAFT_SUFFIX;
+    storage.sync_error = SKIFF_ERR_STORAGE_IO;
+    size_t added = COUNT;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO,
+                          skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    storage.sync_error = SKIFF_OK;
+    drain_events();
+    skiff_job after[SKIFF_JOBS_MAX];
+    const size_t after_count = skiff_jobs_list(jobs, after, SKIFF_JOBS_MAX);
+    TEST_PRINTF("refused save: %zu added, %zu job(s) before and %zu after, %zu event(s)", added,
+                before_count, after_count, event_count);
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    TEST_ASSERT_EQUAL_size_t(before_count, after_count);
+    for (size_t i = 0; i < after_count; i++) {
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(before[i].id, after[i].id,
+                                         "a failed save must leave the table as it was");
+        TEST_ASSERT_EQUAL_INT(before[i].state, after[i].state);
+        TEST_ASSERT_EQUAL_STRING(before[i].target, after[i].target);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, event_count);
+    assert_locks_used_well();
+    TEST_PRINTF("and the ids it would have used are still free");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(COUNT, added);
+    TEST_ASSERT_EQUAL_UINT32(first + 1, batch_ids[0]);
+}
+
+static void test_a_full_queue_stops_the_batch_after_what_fits(void) {
+    create_counted_jobs();
+    enum { ALREADY = SKIFF_JOBS_MAX - 4, MORE = 8 };
+    make_batch("Earlier", ALREADY);
+    size_t added = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, ALREADY, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(ALREADY, added);
+    drain_events();
+    event_count = 0;
+    queue_saves = 0;
+    make_batch("Later", MORE);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, MORE, batch_ids, &added));
+    drain_events();
+    TEST_PRINTF("%zu of %d queued (room for %d), %d save(s), %zu event(s)", added, MORE,
+                SKIFF_JOBS_MAX - ALREADY, queue_saves, event_count);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(SKIFF_JOBS_MAX - ALREADY, added,
+                                     "the prefix that fits is queued, and only that");
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_INT(1, queue_saves);
+    TEST_ASSERT_EQUAL_size_t(added, event_count);
+    for (size_t i = 0; i < added; i++) {
+        TEST_ASSERT_EQUAL_STRING(batch_names[i], job_with(batch_ids[i]).file_name);
+    }
+    TEST_PRINTF("a full queue takes nothing more, and does not save");
+    queue_saves = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, &batch[added], MORE - added,
+                                                        &batch_ids[added], &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    TEST_ASSERT_EQUAL_INT(0, queue_saves);
+    assert_locks_used_well();
+}
+
+static void test_finished_jobs_make_room_for_a_batch(void) {
+    create_counted_jobs();
+    make_batch("Full", SKIFF_JOBS_MAX);
+    size_t added = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_jobs_add_many(jobs, batch, SKIFF_JOBS_MAX, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX, added);
+    enum { CANCELLED = 3, MORE = 5 };
+    uint32_t cancelled[CANCELLED];
+    for (size_t i = 0; i < CANCELLED; i++) {
+        cancelled[i] = batch_ids[i];
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, cancelled[i]));
+    }
+    make_batch("Room", MORE);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, MORE, batch_ids, &added));
+    TEST_PRINTF("%d cancelled job(s) made room for %zu of %d", CANCELLED, added, MORE);
+    TEST_ASSERT_EQUAL_size_t(CANCELLED, added);
+    skiff_job list[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX, skiff_jobs_list(jobs, list, SKIFF_JOBS_MAX));
+    for (size_t i = 0; i < SKIFF_JOBS_MAX; i++) {
+        for (size_t j = 0; j < CANCELLED; j++) {
+            TEST_ASSERT_NOT_EQUAL_UINT32_MESSAGE(cancelled[j], list[i].id,
+                                                 "the finished jobs went, oldest first");
+        }
+    }
+    assert_locks_used_well();
+}
+
+static void test_a_batch_returns_the_jobs_already_queued(void) {
+    create_counted_jobs();
+    const uint32_t first = add_job();
+    drain_events();
+    event_count = 0;
+    queue_saves = 0;
+    make_batch("New", 1);
+    batch[1] = request_for(FILE_NAME, target);
+    batch[2] = batch[0];
+    size_t added = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 3, batch_ids, &added));
+    drain_events();
+    TEST_PRINTF("ids %u %u %u (queued earlier: %u), %d save(s), %zu event(s)",
+                (unsigned)batch_ids[0], (unsigned)batch_ids[1], (unsigned)batch_ids[2],
+                (unsigned)first, queue_saves, event_count);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(3, added, "a request with a job already counts as added");
+    TEST_ASSERT_EQUAL_UINT32(first, batch_ids[1]);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(batch_ids[0], batch_ids[2],
+                                     "the same file twice in one batch is one job");
+    TEST_ASSERT_EQUAL_size_t(2, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_INT(1, queue_saves);
+    TEST_ASSERT_EQUAL_size_t(1, event_count);
+    TEST_ASSERT_EQUAL_UINT32(batch_ids[0], events[0].job_id);
+    TEST_PRINTF("a batch of jobs all queued already saves nothing");
+    queue_saves = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 3, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(3, added);
+    TEST_ASSERT_EQUAL_INT(0, queue_saves);
+    assert_locks_used_well();
+}
+
+static void test_a_batch_queues_a_finished_job_again(void) {
+    const uint32_t id = add_job();
+    run();
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    event_count = 0;
+    make_batch("Next", 1);
+    batch[1] = request_for(FILE_NAME, target);
+    size_t added = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
+    drain_events();
+    TEST_PRINTF("job %u is %s again; %zu event(s)", (unsigned)batch_ids[1],
+                skiff_job_state_name(job_with(id).state), event_count);
+    TEST_ASSERT_EQUAL_size_t(2, added);
+    TEST_ASSERT_EQUAL_UINT32(id, batch_ids[1]);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, job_with(id).state);
+    TEST_ASSERT_EQUAL_size_t(2, event_count);
+    TEST_ASSERT_EQUAL_UINT32(id, events[1].job_id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_QUEUED, events[1].state);
+}
+
+static void test_two_requests_of_a_batch_never_share_a_target(void) {
+    create_counted_jobs();
+    make_batch("Clash", 2);
+    char other_case[TEMP_DIR_PATH_MAX];
+    snprintf(other_case, sizeof other_case, "%s", batch_paths[0]);
+    char *name = strrchr(other_case, '/') + 1;
+    name[0] = (char)(name[0] == 'C' ? 'c' : 'C');
+    batch[1].target = other_case;
+    size_t added = 1;
+    TEST_PRINTF("two files of a batch on one path, in another case: %s and %s", batch[0].target,
+                batch[1].target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    TEST_PRINTF("nor one whose target is another's .part file");
+    char sidecar[TEMP_DIR_PATH_MAX + sizeof SKIFF_DOWNLOAD_PART_SUFFIX];
+    snprintf(sidecar, sizeof sidecar, "%s" SKIFF_DOWNLOAD_PART_SUFFIX, batch_paths[0]);
+    batch[1].target = sidecar;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
+    TEST_PRINTF("nor one on the path of a job already queued");
+    const uint32_t first = add_job();
+    queue_saves = 0;
+    make_batch("Clash", 2);
+    batch[1] = request_for("Another file.iso", target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    TEST_ASSERT_EQUAL_size_t(1, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_STRING(FILE_NAME, job_with(first).file_name);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, queue_saves, "a refused batch must not touch the file");
+    TEST_PRINTF("a path that only starts with another's shares no file with it");
+    make_batch("Prefix", 2);
+    char longer[TEMP_DIR_PATH_MAX + sizeof ".bak"];
+    snprintf(longer, sizeof longer, "%s.bak", batch_paths[0]);
+    batch[1].target = longer;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(2, added);
+    assert_locks_used_well();
+}
+
+static void test_an_unusable_request_anywhere_adds_nothing(void) {
+    create_counted_jobs();
+    enum { COUNT = 3 };
+    size_t added = COUNT;
+    make_batch("Usable", COUNT);
+    batch[COUNT - 1].size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    make_batch("Usable", COUNT);
+    batch[1].file_name = "Bad\x01name.iso";
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    make_batch("Usable", COUNT);
+    batch[0].target = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, &added));
+    TEST_PRINTF("after three refused batches: %zu job(s), %d save(s)",
+                skiff_jobs_list(jobs, NULL, 0), queue_saves);
+    TEST_ASSERT_EQUAL_size_t(0, skiff_jobs_list(jobs, NULL, 0));
+    TEST_ASSERT_EQUAL_INT(0, queue_saves);
+    TEST_PRINTF("NULL arguments are refused; an empty batch queues and saves nothing");
+    make_batch("Usable", COUNT);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(NULL, batch, COUNT, batch_ids, &added));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, NULL, COUNT, batch_ids, &added));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, COUNT, NULL, &added));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_jobs_add_many(jobs, batch, COUNT, batch_ids, NULL));
+    added = COUNT;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 0, batch_ids, &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    added = COUNT;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, NULL, 0, NULL, &added));
+    TEST_ASSERT_EQUAL_size_t(0, added);
+    TEST_ASSERT_EQUAL_INT(0, queue_saves);
+    drain_events();
+    TEST_ASSERT_EQUAL_size_t(0, event_count);
+    assert_locks_used_well();
+}
+
 static void test_bad_arguments_are_refused(void) {
     skiff_jobs *other = NULL;
     skiff_jobs_config config = {
@@ -1525,6 +1838,14 @@ int main(void) {
     RUN_TEST(test_a_cancelled_jobs_files_go_under_the_commit_lock_alone);
     RUN_TEST(test_a_stop_asked_for_during_the_start_save_starts_nothing);
     RUN_TEST(test_a_cancel_as_the_job_ends_is_not_lost);
+    RUN_TEST(test_a_batch_is_queued_with_one_save);
+    RUN_TEST(test_a_batch_the_file_cannot_hold_adds_nothing);
+    RUN_TEST(test_a_full_queue_stops_the_batch_after_what_fits);
+    RUN_TEST(test_finished_jobs_make_room_for_a_batch);
+    RUN_TEST(test_a_batch_returns_the_jobs_already_queued);
+    RUN_TEST(test_a_batch_queues_a_finished_job_again);
+    RUN_TEST(test_two_requests_of_a_batch_never_share_a_target);
+    RUN_TEST(test_an_unusable_request_anywhere_adds_nothing);
     RUN_TEST(test_bad_arguments_are_refused);
     return UNITY_END();
 }

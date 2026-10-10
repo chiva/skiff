@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/chiva/skiff/compare/v0.2.0...v0.3.0) (2026-10-10)
+
+
+### Features
+
+* **app:** run RomM requests on their own thread, so the screen never waits ([#67](https://github.com/chiva/skiff/issues/67)) ([cefa8e2](https://github.com/chiva/skiff/commit/cefa8e2821f44cb8d0faf2c995d9d6c594b8cc6e))
+* **app:** show a game's cover on its details screen ([#74](https://github.com/chiva/skiff/issues/74)) ([973647b](https://github.com/chiva/skiff/commit/973647b5ca0b762f4dbe4199f21284f5be99b6ed))
+* **cover:** decode PNG covers into a picture the PSP can draw ([#71](https://github.com/chiva/skiff/issues/71)) ([38af384](https://github.com/chiva/skiff/commit/38af3841bb2e5f4dab7e3f5fd4be2f6b84b9df55))
+* **cover:** keep decoded covers on the Memory Stick ([#73](https://github.com/chiva/skiff/issues/73)) ([bd31a7a](https://github.com/chiva/skiff/commit/bd31a7a82e1e1a8c248adbdef54f6e3fac8da71e))
+* **romm:** read a game's cover path and build its address ([#70](https://github.com/chiva/skiff/issues/70)) ([ebb7e7f](https://github.com/chiva/skiff/commit/ebb7e7fc897ba35232f1942e201d8ad08e5d681a))
+
+
+### Bug Fixes
+
+* **ci:** give the emulator three tries to start, not two ([#63](https://github.com/chiva/skiff/issues/63)) ([8e6a854](https://github.com/chiva/skiff/commit/8e6a8542efd746562e80d15d1ad6c83c0dcef64a))
+* **net:** bound name lookups on the PSP and the screen's requests ([#66](https://github.com/chiva/skiff/issues/66)) ([8a6869b](https://github.com/chiva/skiff/commit/8a6869b7b66acee3bac0abbb99f84541b9fc32b5))
+* **ui:** lists fill the screen, download details sit under the list, and a round Circle ([#65](https://github.com/chiva/skiff/issues/65)) ([7f991bd](https://github.com/chiva/skiff/commit/7f991bdd22be9bf71ea40031194b17385e0dc759))
+
 ## [0.2.0](https://github.com/chiva/skiff/compare/v0.1.0...v0.2.0) (2026-10-09)
 
 

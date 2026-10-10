@@ -48,6 +48,17 @@ set_target_properties(
   skiff_qrcodegen PROPERTIES IMPORTED_LOCATION "${SKIFF_QRCODEGEN_LIBRARY}"
                              INTERFACE_INCLUDE_DIRECTORIES "${SKIFF_QRCODEGEN_INCLUDE_DIR}")
 
+# libpng for covers (src/cover/): pspdev packages 1.6.53 for the PSP, and the host image builds the
+# same version with the same default options (docker/host.Dockerfile). Found like cJSON.
+find_path(SKIFF_PNG_INCLUDE_DIR png.h REQUIRED)
+find_library(SKIFF_PNG_LIBRARY png16 REQUIRED)
+add_library(skiff_png UNKNOWN IMPORTED)
+set_target_properties(
+  skiff_png PROPERTIES IMPORTED_LOCATION "${SKIFF_PNG_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES
+                                                                "${SKIFF_PNG_INCLUDE_DIR}")
+# libpng inflates with zlib and uses libm (pkg-config: Libs.private).
+set_property(TARGET skiff_png PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB m)
+
 # Portable logic: no PSP system calls, so it builds and is unit-tested on the host too.
 add_library(
   skiff_core STATIC
@@ -62,6 +73,7 @@ add_library(
   src/core/error.c
   src/core/selftest.c
   src/core/version.c
+  src/cover/decode.c
   src/i18n/i18n.c
   src/install/install.c
   src/install/manifest.c
@@ -84,7 +96,7 @@ target_include_directories(
   skiff_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(skiff_core PUBLIC ZLIB::ZLIB skiff_cjson skiff_qrcodegen)
+target_link_libraries(skiff_core PUBLIC skiff_png ZLIB::ZLIB skiff_cjson skiff_qrcodegen)
 skiff_set_warnings(skiff_core)
 
 # Skiff's TLS stack, built with the same profile for both targets (docker/toolchain/build-tls.sh):

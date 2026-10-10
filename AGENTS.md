@@ -39,7 +39,8 @@ All builds and checks run in containers. Docker is the only prerequisite.
 CI runs these same commands, so the compiler matrix lives only in `HOST_COMPILERS` in `dev.sh`.
 PSP builds use the `skiff-toolchain` image (`docker/toolchain.Dockerfile`): pspdev, pinned as
 `tag@digest`, plus Mbed TLS 4.1 and curl 8.22 pinned by SHA256, and Nayuki's QR Code generator
-(pairing address, `docker/qrcodegen/build-qrcodegen.sh`), also built into the host image. The host image builds the same TLS
+(pairing address, `docker/qrcodegen/build-qrcodegen.sh`), also built into the host image. Covers
+use pspdev's libpng 1.6.53; the host image builds the same release, pinned by SHA256. The host image builds the same TLS
 stack from the same script (`docker/toolchain/build-tls.sh`), so versions and checksums live there.
 The toolchain image also holds the CA bundle the app trusts by default (Mozilla's `cacert.pem`,
 date and SHA256 in `docker/ca-bundle/fetch-ca-bundle.sh`); PSP builds copy it next to the app's

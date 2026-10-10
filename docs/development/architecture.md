@@ -40,7 +40,8 @@ what makes it unit-testable and lets sanitizers run over it.
 
 Status: `app/` (screens and state machine, host-tested, and run on the PSP by `src/platform/psp/app_main.c`), `core/`, `config/` (`config.ini`), `log/` (`skiff.log`), `i18n/` (English and Spanish
 text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms, ROM pages),
-`storage/` (the storage seam, logical roots, free space, safe names), `install/` (the PSP
+`storage/` (the storage seam, logical roots, free space, safe names), `cover/` (PNG covers decoded
+and scaled down for the screen, see [Covers](#covers)), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
 policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
 network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other layers arrive with the
@@ -523,6 +524,28 @@ network is back.
   resolves outside its root. Host tests point the roots at a temporary directory.
   `skiff_storage_mkdirs()` creates a missing folder and the ones above it (`ISO` on a new Memory
   Stick).
+
+## Covers
+
+`include/skiff/cover.h` (`src/cover/`) turns RomM's small cover into a picture the PSP's GE draws
+as it is: 16-bit RGB565 (`GU_PSM_5650`), scaled down with area averaging to fit a 160×220 box and
+keeping its shape (a smaller cover keeps its size), transparency drawn over the placeholder grey.
+Decoding a 240×320 cover takes several frames on a PSP, so it runs off the UI thread, and the
+decoded picture (about 70 KB) is what the Memory Stick cache will keep.
+
+- **PNG only**, with libpng 1.6.53: pspdev's package on the PSP, the same release built with the
+  same default options in the host image. RomM saves every cover it downloads as PNG; artwork
+  uploaded in its web UI keeps its own format (JPEG, WebP, GIF, AVIF), which Skiff refuses with
+  210 and shows the game without a cover. stb_image, also in the toolchain, was not used: its own
+  documentation says it is not meant for untrusted input, and a PSP has no memory protection.
+- **Bounded**: a picture over 1024 pixels on a side, or an interlaced one over 1 MB decoded (every
+  Adam7 pass touches every row, so it is read whole), is refused (211), as is anything cut short:
+  the chunks after the picture are read too. Rows are otherwise streamed through the scaler, so a
+  cover never exists whole at full size. libpng's state lives on the heap, not the calling
+  thread's stack, and its errors come back as codes, never on stderr or as an abort.
+- **Tested** with PNGs written in memory by libpng's writer (every colour type and bit depth,
+  interlaced, transparent, cut, and thousands of corrupted copies, some with their CRCs repaired so
+  the damage reaches the decoder) under ASan and UBSan; the self-test decodes a 2×2 PNG on the PSP.
 
 ## Installers (the platform plugin seam)
 

@@ -60,6 +60,8 @@ skiff_add_unit_test(test_romm)
 skiff_add_unit_test(test_romm_pairing)
 # Reaches the shared request helpers the pairing code uses (src/romm/romm_internal.h).
 target_include_directories(test_romm_pairing PRIVATE "${PROJECT_SOURCE_DIR}/src/romm")
+# Builds the PNGs it decodes in memory with libpng's writer: no picture files in the repository.
+skiff_add_unit_test(test_cover)
 skiff_add_unit_test(test_download_state)
 # Tests that write files: the POSIX storage over a temporary directory, through the fake storage.
 skiff_add_unit_test(test_storage_paths)

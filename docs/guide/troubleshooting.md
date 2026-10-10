@@ -38,7 +38,7 @@ with your PSP model and firmware.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–209)
+## RomM errors (200–211)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -52,6 +52,8 @@ with your PSP model and firmware.
 | 207 | Pairing was refused in RomM | Someone chose to deny this PSP on RomM's pairing page. If that was a mistake, start pairing again on the PSP and approve it |
 | 208 | The pairing code expired | The code is valid for a few minutes (the PSP counts them down) and only once. On the PSP choose **New code**, then scan the new QR code or open the new address in time |
 | 209 | Pairing was approved without the permissions Skiff needs | On RomM's pairing page, someone unticked reading platforms or ROMs, so the token could neither browse nor download; Skiff did not keep it. Delete the half-approved device in RomM, pair again and leave those permissions ticked |
+| 210 | A cover in a format Skiff cannot show | Only in `skiff.log`: the game shows without its cover. Skiff shows PNG covers, which RomM makes for every cover it downloads; artwork uploaded in RomM's web UI as JPEG, WebP, GIF or AVIF keeps its format. Upload a PNG instead |
+| 211 | A cover Skiff could not read | Only in `skiff.log`: the game shows without its cover. The picture is damaged, or larger than 1024 pixels on a side (RomM's small covers are a few hundred). Choose another cover for the game in RomM |
 
 ## Memory Stick errors (300–305)
 

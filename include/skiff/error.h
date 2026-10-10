@@ -41,6 +41,8 @@
     X(SKIFF_ERR_ROMM_PAIRING_EXPIRED, 208, "The pairing code expired; start pairing again")        \
     X(SKIFF_ERR_ROMM_PAIRING_SCOPES, 209,                                                          \
       "Pairing was approved without the permissions Skiff needs; pair again and allow them")       \
+    X(SKIFF_ERR_ROMM_COVER_FORMAT, 210, "RomM sent a cover in a format Skiff cannot show")         \
+    X(SKIFF_ERR_ROMM_COVER_DAMAGED, 211, "RomM sent a cover Skiff could not read")                 \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

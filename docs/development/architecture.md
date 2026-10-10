@@ -364,8 +364,8 @@ that, so a page stays well under the cap (cJSON's tree and its strings stay with
 and fills a screen in one request. They also turn off `with_char_index`, `with_filter_values` and
 `with_rom_id_index`: RomM includes those by default, and they grow with the whole library, not the
 page. A page that is not the one asked for (another offset, more ROMs than the limit or than the
-total leaves, a ROM of another platform) is refused, as is a ROM returned under another id or
-listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
+total leaves, a ROM of another platform) is refused, as are a ROM's details returned under another
+id or listing a file of another ROM. List items carry the ROM's name, file name, size and CRC-32;
 `files[]` comes with `GET /api/roms/{id}`, and with a list only when it asks `with_files` (about 0.5
 KB more per ROM). A ROM listed with exactly one file that reads as its own carries that file
 (`skiff_romm_rom_summary.file`), so a download needs no request for its details; anything else

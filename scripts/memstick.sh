@@ -59,7 +59,8 @@ readonly SECRET_SECTIONS=(auth headers)
 readonly SECRET_KEYS=(token "$APP_TEST_HEADER")
 readonly REDACTED="[redacted]"
 # Logs some check EBOOTs append to across runs (kept by install, unlike result.txt).
-readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt skiff.log)
+readonly RUN_LOGS=(kirk-log.txt net-log.txt bench-log.txt resume-log.txt jobs-log.txt
+  backlight-log.txt skiff.log)
 # The network probe talks to the test RomM from `scripts/dev.sh romm-lan`: it gets that server's
 # address (from its certificate's addresses), the test CA and the client certificates. The keys are
 # test material for that throwaway server; uninstall removes them with the folder.

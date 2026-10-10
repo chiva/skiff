@@ -85,6 +85,13 @@ void app_batch_update(skiff_app *app) {
  * room. */
 static void take(skiff_app *app, const skiff_romm_rom_summary *rom) {
     app_batch *batch = &app->batch;
+    /* Offset pages can repeat a game when the favourites change while they are read: once is
+     * enough, and a second copy must not take room another game could use. */
+    for (size_t i = 0; i < batch->count; i++) {
+        if (batch->games[i].id == rom->id) {
+            return;
+        }
+    }
     const int installable =
         rom->has_file && rom->file.size <= SKIFF_STORAGE_MAX_FILE_BYTES &&
         skiff_install_check(app->installer, rom, &rom->file) == SKIFF_INSTALL_SUPPORTED;

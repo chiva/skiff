@@ -1295,6 +1295,16 @@ static void test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue(
     TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 2, jobs[0].rom_id);
 }
 
+static void test_a_favourite_repeated_across_pages_is_taken_once(void) {
+    open_favourites(26);
+    TEST_PRINTF("the favourites changed between pages: page 1 starts with page 0's last game");
+    serve_list_page(BATCH_FILTER, FAVOURITE_ID_BASE, 0, SKIFF_ROMM_PAGE_SIZE, 26);
+    serve_list_page(BATCH_FILTER, FAVOURITE_ID_BASE - 1, SKIFF_ROMM_PAGE_SIZE, 1, 26);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_PRINTF("25 games: 113's name is unusable, 125 comes twice");
+    TEST_ASSERT_TRUE(shows("Download 24 favourites"));
+}
+
 static void test_back_while_favourites_are_checked_stops_download_all(void) {
     open_favourites(3);
     serve_batch_favourites(3);
@@ -2597,6 +2607,7 @@ int main(void) {
     RUN_TEST(test_download_all_takes_what_fits_the_free_space_in_name_order);
     RUN_TEST(test_download_all_keeps_room_for_installed_records);
     RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
+    RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);

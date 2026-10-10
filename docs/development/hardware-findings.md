@@ -297,12 +297,39 @@ loading, a download, all as expected.
 | Worker stack used | 12,424 of 32,768 bytes |
 | Frames still over 100 ms | 3.2 s at launch (the first free-space query); 467 ms while TLS starts; 116–233 ms around queueing a download |
 
+### Covers
+
+2026-10-10 (row A2), the same PSP-1000: #74 against the test RomM with a 60-ROM library, 20 of
+them with a synthetic 600×800 PNG cover (RomM's small cover: 240×320, about 108 KB) and one with a
+JPEG cover, `[log] level = debug`. Opened covered games twice, pressed Back while covers loaded,
+opened the JPEG and coverless games, opened covers during a 64 MiB download, quit and relaunched.
+The maintainer saw the covers beside the details with the text unmoved and no visible banding in
+the 16-bit colour.
+
+| Item | Value |
+|---|---|
+| Cover from RomM | fetch 211–431 ms (the request alone 199–370 ms), **decode 319–325 ms** at 333 MHz |
+| Cover from the Memory Stick cache | 29–44 ms, no decode, also after quitting and relaunching |
+| Time between frames while covers load | longest 16 ms in every 10 s window with a cover, with or without a download |
+| Browsing thread stack used | 9,768 of 32,768 bytes (9,328 before covers) |
+| System memory with both threads | 84 KB free (largest block 80 KB), unchanged |
+| Heap | 1.3 MB browsing, 2.7 MB while downloading |
+| Cache | one 68,196-byte file per covered game opened |
+
+Decoding a cover takes about a third of a second, ten times the guess made before measuring, so
+it belongs where it is, on the browsing thread: a cover seen for the first time appears about half
+a second after the game's details, one seen before in about 40 ms. The JPEG cover was refused
+(210) and left the placeholder; a cover being loaded when the player pressed Back was cancelled
+and dropped.
+
 ## Open questions
 
 - ~~**Stalls while browsing.**~~ Answered: the 2.6 s frame was the first free-space query (now at
   launch, #59), and requests to RomM now run on the browsing thread (#67): no frame over 16 ms
-  while browsing on 2026-10-10. Left: the launch's free-space query, TLS start (467 ms) and
-  queueing a download (up to 233 ms) still block a frame.
+  while browsing on 2026-10-10. Left: the launch's free-space query, TLS start (467 ms),
+  queueing a download (up to 233 ms) and saving `config.ini` (about 110 ms, after the network
+  picker and after pairing) still block a frame, and so does the free-space query a game's details
+  make on the screen's thread: 6–10 ms, but 200 ms while a download writes (A2).
 - **Rejoin failures.** About a third of rejoins failed (0x80410106, 0x80410D16), after a suspend
   or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
   costs. Watch the app's logs.

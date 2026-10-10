@@ -531,7 +531,7 @@ network is back.
 as it is: 16-bit RGB565 (`GU_PSM_5650`), scaled down with area averaging (each source pixel
 weighted by how much of an output pixel it covers, so any ratio keeps the picture's brightness) to
 fit a 160×220 box and keeping its shape (a smaller cover keeps its size), transparency drawn over the placeholder grey.
-Decoding a 240×320 cover takes several frames on a PSP, so it runs off the UI thread, and the
+Decoding a 240×320 cover takes about 0.3 s on a PSP-1000 ([hardware findings](hardware-findings.md#covers)), so it runs off the UI thread, and the
 decoded picture (about 70 KB) is what the Memory Stick cache will keep.
 
 - **PNG only**, with libpng 1.6.53: pspdev's package on the PSP, the same release built with the

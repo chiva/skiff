@@ -28,13 +28,13 @@ static app_page *page_to_replace(skiff_app *app) {
     return oldest;
 }
 
-static const char *display_name(const skiff_romm_rom_summary *rom) {
+const char *app_rom_name(const skiff_romm_rom_summary *rom) {
     return rom->name[0] != '\0' ? rom->name : rom->fs_name;
 }
 
 static void fit_page(const skiff_app *app, app_page *page) {
     for (size_t i = 0; i < page->page.count; i++) {
-        app_fit(app, display_name(&page->page.items[i]), SKIFF_APP_LABEL_WIDTH, page->labels[i],
+        app_fit(app, app_rom_name(&page->page.items[i]), SKIFF_APP_LABEL_WIDTH, page->labels[i],
                 sizeof page->labels[i]);
     }
 }
@@ -255,6 +255,7 @@ void app_request_run(skiff_app *app) {
     if (request == REQUEST_PAGE) {
         app->call.platform_id = app->platform.id;
         app->call.favourites = app->favourites;
+        app->call.with_files = 0;
         app->call.page_index = app->request_page;
         app_call_start(app, CALL_PAGE);
     } else {
@@ -339,6 +340,18 @@ static void switch_list(skiff_app *app) {
 
 void app_library_update(skiff_app *app, unsigned actions) {
     app_request_run(app);
+    /* While the favourites are checked for "Download all", only Back (which stops it) counts. */
+    if (app->batch.step == BATCH_SCANNING || app->batch.step == BATCH_SPACE) {
+        if (actions & SKIFF_UI_ACTION_BACK) {
+            app_batch_cancel(app);
+        }
+        return;
+    }
+    if ((actions & SKIFF_UI_ACTION_START) && app->favourites && app->total_known &&
+        app->total > 0) {
+        app_batch_start(app);
+        return;
+    }
     if ((actions & SKIFF_UI_ACTION_SELECT) && app->has_platform) {
         switch_list(app);
         return;
@@ -399,17 +412,6 @@ skiff_text_id app_details_refusal(const skiff_app *app) {
     return support == SKIFF_INSTALL_SUPPORTED ? SKIFF_TEXT_COUNT : reason_text(support);
 }
 
-static int same_path_ignoring_case(const char *a, const char *b) {
-    for (; *a != '\0' && *b != '\0'; a++, b++) {
-        const char lower_a = (char)(*a >= 'A' && *a <= 'Z' ? *a - 'A' + 'a' : *a);
-        const char lower_b = (char)(*b >= 'A' && *b <= 'Z' ? *b - 'A' + 'a' : *b);
-        if (lower_a != lower_b) {
-            return 0;
-        }
-    }
-    return *a == *b;
-}
-
 /* A logical path a queued download is promised: skiff_install_plan_download()'s taken hook. */
 static int promised(void *ctx, const char *logical_path) {
     const skiff_app *app = ctx;
@@ -419,9 +421,7 @@ static int promised(void *ctx, const char *logical_path) {
     }
     for (size_t i = 0; i < app->queue.count; i++) {
         const skiff_job *job = &app->queue.jobs[i];
-        const int unfinished = job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE ||
-                               job->state == SKIFF_JOB_FAILED;
-        if (unfinished && same_path_ignoring_case(job->target, path)) {
+        if (app_job_unfinished(job) && app_same_path(job->target, path)) {
             return 1;
         }
     }
@@ -448,7 +448,7 @@ static void queue_download(skiff_app *app) {
     if (err == SKIFF_OK) {
         const skiff_job_request request = {
             .rom_id = app->rom.summary.id,
-            .title = display_name(&app->rom.summary),
+            .title = app_rom_name(&app->rom.summary),
             .file_name = file->file_name,
             .target = plan.path,
             .size = file->size,
@@ -469,7 +469,7 @@ static void queue_download(skiff_app *app) {
         return;
     }
     app_queue_refresh(app);
-    const char *args[] = {display_name(&app->rom.summary)};
+    const char *args[] = {app_rom_name(&app->rom.summary)};
     char text[SKIFF_TEXT_MAX];
     app_format(app, SKIFF_TEXT_QUEUE_ADDED, args, 1, text);
     app_note(app, text);
@@ -478,23 +478,32 @@ static void queue_download(skiff_app *app) {
 
 void app_download_confirmed(skiff_app *app) { queue_download(app); }
 
+/* Records installed.json holds, plus one for each queued download that will need its own. Under
+ * the manifest lock. */
+static size_t records_taken(const skiff_app *app) {
+    size_t taken = app->manifest->count;
+    for (size_t i = 0; i < app->queue.count; i++) {
+        const skiff_job *job = &app->queue.jobs[i];
+        taken += (size_t)(app_job_unfinished(job) &&
+                          skiff_install_manifest_find(app->manifest, job->rom_id, job->file_name) ==
+                              NULL);
+    }
+    return taken;
+}
+
 int app_installed_room(skiff_app *app, uint64_t rom_id, const char *file_name) {
     app_lock_manifest(app);
     const int recorded = skiff_install_manifest_find(app->manifest, rom_id, file_name) != NULL;
-    /* Downloads already queued that will each need a record of their own count as taken. */
-    size_t promised_records = 0;
-    for (size_t i = 0; i < app->queue.count; i++) {
-        const skiff_job *job = &app->queue.jobs[i];
-        const int unfinished = job->state == SKIFF_JOB_QUEUED || job->state == SKIFF_JOB_ACTIVE ||
-                               job->state == SKIFF_JOB_FAILED;
-        promised_records +=
-            (size_t)(unfinished && skiff_install_manifest_find(app->manifest, job->rom_id,
-                                                               job->file_name) == NULL);
-    }
-    const int room =
-        recorded || app->manifest->count + promised_records < SKIFF_INSTALL_RECORDS_MAX;
+    const int room = recorded || records_taken(app) < SKIFF_INSTALL_RECORDS_MAX;
     app_unlock_manifest(app);
     return room;
+}
+
+size_t app_installed_records_free(skiff_app *app) {
+    app_lock_manifest(app);
+    const size_t taken = records_taken(app);
+    app_unlock_manifest(app);
+    return taken < SKIFF_INSTALL_RECORDS_MAX ? SKIFF_INSTALL_RECORDS_MAX - taken : 0;
 }
 
 static void download(skiff_app *app) {

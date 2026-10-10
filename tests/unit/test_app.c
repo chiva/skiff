@@ -1258,6 +1258,28 @@ static void test_download_all_takes_what_fits_the_free_space_in_name_order(void)
     TEST_ASSERT_EQUAL_UINT64(FAVOURITE_ID_BASE + 2, jobs[1].rom_id);
 }
 
+static void test_a_download_that_ends_while_favourites_are_checked_frees_its_room(void) {
+    open_paired_library(2);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    serve_favourites(3);
+    serve_batch_favourites(3);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("room for three favourites, or two while Game 1's download is still to come");
+    storage.free_bytes = SKIFF_STORAGE_FREE_MARGIN_BYTES + 3 * BODY_BYTES + BODY_BYTES / 2;
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_START);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(app->jobs, jobs[0].id));
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 3 favourites"));
+}
+
 static void test_download_all_keeps_room_for_installed_records(void) {
     open_favourites(3);
     serve_batch_favourites(3);
@@ -2651,6 +2673,7 @@ int main(void) {
     RUN_TEST(test_download_all_with_a_full_queue_queues_nothing_and_says_why);
     RUN_TEST(test_download_all_takes_what_fits_the_free_space_in_name_order);
     RUN_TEST(test_download_all_keeps_room_for_installed_records);
+    RUN_TEST(test_a_download_that_ends_while_favourites_are_checked_frees_its_room);
     RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
     RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
     RUN_TEST(test_nothing_else_runs_while_download_all_queues);

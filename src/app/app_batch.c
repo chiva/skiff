@@ -46,7 +46,6 @@ void app_batch_start(skiff_app *app) {
     const size_t unfinished = app_queue_unfinished(app);
     batch->queue_room = unfinished < SKIFF_JOBS_MAX ? SKIFF_JOBS_MAX - unfinished : 0;
     batch->record_room = app_installed_records_free(app);
-    batch->pending_bytes = app_queue_unfinished_bytes(app);
     batch->step = BATCH_SCANNING;
     app->dirty = 1;
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
@@ -232,6 +231,10 @@ void app_batch_space_done(skiff_app *app) {
     if (batch->step != BATCH_SPACE) {
         return;
     }
+    /* What unfinished downloads still need, as the queue stands now: one that finished while the
+     * favourites were read is already in the free space. */
+    app_queue_refresh(app);
+    batch->pending_bytes = app_queue_unfinished_bytes(app);
     /* A Memory Stick that cannot say is not held against the batch: each download checks room. */
     batch->free_known = call->err == SKIFF_OK;
     batch->free_bytes = batch->free_known ? call->free_bytes : 0;

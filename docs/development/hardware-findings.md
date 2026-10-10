@@ -190,6 +190,22 @@ Storage time in the second run (238 s in total):
 | Sync | 35 | 0.24 s | 20 ms |
 | Open, close, rename, remove | 50 | 0.34 s | 22 ms |
 
+### Backlight
+
+[Backlight probe](testing.md#backlight-probe), 2026-10-11 (row B4), the same PSP-1000 started on
+battery (100%), its Backlight Auto-Off at 5 min. The keep-awake tick stops only the auto-sleep, so
+the firmware turns the screen off during downloads at the player's own setting; the question was
+what a user-mode program can change about that.
+
+| Question | Answer |
+|---|---|
+| Off times down to 30 s, below the XMB's shortest (2 min) (`sceImposeSetBacklightOffTime()`) | 30, 60 and 120 s all accepted and read back |
+| 60 s and no input, on battery | the screen went dark after about a minute (X pressed at 66 s), with no dimmed step first |
+| The same on AC power | dark too (X at 64 s): the charger does not keep the backlight on |
+| The press that lights the screen again | reaches the program as an ordinary button press |
+| After HOME → Quit | the XMB's menu showed the player's 5 min |
+| After a power cycle | the player's 300 s: the probe's 60 s did not last |
+
 ## Download speed
 
 The resume runs downloaded at 210–275 KB/s, against 462 KB/s for the benchmark's transport, which
@@ -321,6 +337,31 @@ it belongs where it is, on the browsing thread: a cover seen for the first time 
 after the game's details (fetch and decode), one seen before in about 40 ms. The JPEG cover was refused
 (210) and left the placeholder; a cover being loaded when the player pressed Back was cancelled
 and dropped.
+
+### Favourites
+
+2026-10-11 (row A3), the same PSP-1000: `main` after #77–#83 against the test RomM with a 67-ROM
+library, 36 of them favourites in two collections, `[log] level = debug`. Switched to the
+favourites and back, scrolled both pages, opened a favourite, started "Download all" and backed out
+of its confirmation, queued all of it, pressed START again while it downloaded, quit in the middle
+and relaunched.
+
+| Item | Value |
+|---|---|
+| Favourites page request (25 and 11 ROMs, 62 and 27 KB of JSON) | 396–444 ms and 220–456 ms |
+| Checking every favourite (both pages with their files, 76 and 33 KB) | 0.55 s; 1.3 s when the first request took 1.06 s, and while downloading |
+| What the check found | 34 to download (67,500,032 bytes), 2 refused (the `.zip` and the name with a control character); the long name downloaded under its shortened name |
+| Queueing the 34 games | one save of `queue.json`; no slow frame, longest frame 33 ms (a single game queued alone took 116–233 ms) |
+| START again while downloading | 1 installed, 33 already queued, nothing queued twice |
+| Quit and relaunch mid-batch | the interrupted download resumed (2 attempts) and the rest followed, in name order |
+| Browsing thread stack used | 9,272 of 32,768 bytes |
+| System memory with both threads | 84 KB free (largest block 80 KB), unchanged |
+
+The check finished in about half a second on the LAN, so Back during "Checking favourites" was
+not caught on hardware (the unit tests cover it); Back at the confirmation queued nothing. The
+only frames over 16 ms were one 33 ms frame in each of the two 10 s windows that first showed the
+confirmation and the "Added 34 downloads" message. One library page requested seconds after the
+64 MiB download started took 5.1 s (the next took 191 ms).
 
 ## Open questions
 

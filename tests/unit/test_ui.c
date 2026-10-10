@@ -189,7 +189,7 @@ static void test_a_press_within_the_margin_counts_as_waking(void) {
     int64_t now = 0;
     idle_until(&wake, &now, OFF_MS - SKIFF_UI_WAKE_MARGIN_MS, OFF_MS);
     unsigned buttons = SKIFF_UI_BUTTON_CIRCLE;
-    TEST_PRINTF("Circle %lld ms before the off time: held", (long long)(OFF_MS - now));
+    TEST_PRINTF("Circle %lld ms before the off time: held", (long long)OFF_MS - (long long)now);
     TEST_ASSERT_EQUAL_INT(1, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
     TEST_ASSERT_EQUAL_HEX(0, buttons);
 }
@@ -230,7 +230,7 @@ static void test_a_backlight_that_never_turns_off_holds_nothing(void) {
     skiff_ui_wake wake;
     skiff_ui_wake_init(&wake, 0);
     int64_t now = 0;
-    idle_until(&wake, &now, 3600 * 1000, 0);
+    idle_until(&wake, &now, 3600LL * 1000, 0);
     unsigned buttons = SKIFF_UI_BUTTON_CROSS;
     TEST_PRINTF("an hour without a change, Backlight Auto-Off set to never");
     TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, 0, &buttons));

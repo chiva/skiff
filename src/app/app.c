@@ -422,6 +422,8 @@ skiff_err app_reset_server(skiff_app *app) {
     app->has_platform = 0;
     app->total_known = 0;
     app->has_rom = 0;
+    /* A cover of the old server's: a ROM of the new one may have the same id. */
+    app->has_cover = 0;
     app->request = REQUEST_NONE;
     app->failed_request = REQUEST_NONE;
     memset(app->pages, 0, sizeof app->pages);

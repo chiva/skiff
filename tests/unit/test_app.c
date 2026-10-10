@@ -354,6 +354,8 @@ static const unsigned char COVER_PNG[] = {
     "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10 04:26:25"
 #define COVER_URL(id)                                                                              \
     "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10%2004:26:25"
+#define NEWER_COVER_PATH "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11 08:00:00"
+#define NEWER_COVER_URL "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11%2008:00:00"
 
 /* Answers the cover at url with status_line and body. */
 static fake_route *serve_cover(const char *url, const char *status_line, const unsigned char *data,
@@ -1465,7 +1467,7 @@ static void assert_lines_beside_the_cover(void) {
 
 static void test_a_game_shows_its_cover_and_keeps_it_on_the_memory_stick(void) {
     open_paired_library(2);
-    serve_rom_with_cover(1, COVER_PATH(1));
+    fake_route *details = serve_rom_with_cover(1, COVER_PATH(1));
     fake_route *cover = serve_cover(COVER_URL(1), "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
     const int calls = env_state.calls_started;
     frame(SKIFF_UI_ACTION_CONFIRM);
@@ -1491,6 +1493,30 @@ static void test_a_game_shows_its_cover_and_keeps_it_on_the_memory_stick(void) {
     TEST_ASSERT_EQUAL_INT(1, cover->uses);
     TEST_ASSERT_NOT_NULL(view()->cover);
     TEST_ASSERT_EQUAL_HEX16(skiff_cover_rgb565(0, 0xFF, 0), view()->cover->pixels[1]);
+    TEST_PRINTF("a cover changed in RomM (new ts) is fetched again, not the one in memory reused");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    /* Later routes for a path answer once the earlier one is used up. */
+    details->max_uses = details->uses;
+    details = serve_rom_with_cover(1, NEWER_COVER_PATH);
+    fake_route *newer =
+        serve_cover(NEWER_COVER_URL, "HTTP/1.1 200 OK", COVER_PNG, sizeof COVER_PNG);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_INT(1, newer->uses);
+    TEST_ASSERT_NOT_NULL(view()->cover);
+    TEST_PRINTF("a cover removed in RomM is not shown");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    details->max_uses = details->uses;
+    serve_rom(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_NULL(view()->cover);
+    TEST_PRINTF("a new server forgets the cover in memory: its ROM 1 is another game");
+    TEST_ASSERT_TRUE(app->has_cover);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_reset_server(app));
+    TEST_ASSERT_FALSE(app->has_cover);
 }
 
 static void test_a_game_without_a_usable_cover_keeps_its_placeholder(void) {

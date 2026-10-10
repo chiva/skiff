@@ -213,10 +213,11 @@ struct skiff_app {
     app_page pages[SKIFF_APP_CACHED_PAGES];
     /* The ROM on the details screen. */
     skiff_romm_rom rom;
-    /* Its cover (when cover_rom is its id), and the buffer the next one is decoded into. */
+    /* Its cover (when cover_key is its key, see app_cover_shown()), and the buffer the next one is
+     * decoded into. */
     skiff_cover *cover;
     skiff_cover *cover_spare;
-    uint64_t cover_rom;
+    skiff_cover_key cover_key;
     /* Free space on the Memory Stick, read when a screen showing it opens. */
     uint64_t free_bytes;
 
@@ -254,7 +255,7 @@ struct skiff_app {
     app_request request;
     app_request failed_request;
     int has_rom;
-    /* app->cover holds cover_rom's cover. */
+    /* app->cover holds the cover cover_key names. */
     int has_cover;
     /* A new pairing waits for the Wi-Fi to be joined again. */
     int pairing_requested;
@@ -341,6 +342,9 @@ void app_request_run(skiff_app *app);
 void app_page_done(skiff_app *app);
 void app_rom_done(skiff_app *app);
 void app_cover_done(skiff_app *app);
+/* app->cover is the cover of the ROM on the details screen as the server names it now: the same
+ * server, ROM and cover path ("?ts=" included). */
+int app_cover_shown(const skiff_app *app);
 /* Why the ROM on the details screen cannot be downloaded, or SKIFF_TEXT_COUNT when it can. */
 skiff_text_id app_details_refusal(const skiff_app *app);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */

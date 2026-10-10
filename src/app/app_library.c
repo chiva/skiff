@@ -147,10 +147,26 @@ void app_rom_done(skiff_app *app) {
     app->rom = *fetched;
     app->has_rom = 1;
     /* The cover after the details: they decide whether the game downloads, it is decoration. */
-    if (app->rom.cover_path[0] != '\0' &&
-        !(app->has_cover && app->cover_rom == app->rom.summary.id)) {
+    if (app->rom.cover_path[0] != '\0' && !app_cover_shown(app)) {
         app->request = REQUEST_COVER;
     }
+}
+
+/* The key of the details screen's ROM's cover, from the server it is browsed on. */
+static skiff_cover_key current_cover_key(const skiff_app *app) {
+    return skiff_cover_key_of(app->romm.base_url, app->rom.summary.id, app->rom.cover_path);
+}
+
+static int same_cover(const skiff_cover_key *a, const skiff_cover_key *b) {
+    return a->rom_id == b->rom_id && a->server == b->server && a->cover_path == b->cover_path;
+}
+
+int app_cover_shown(const skiff_app *app) {
+    if (!app->has_cover || app->rom.cover_path[0] == '\0') {
+        return 0;
+    }
+    const skiff_cover_key key = current_cover_key(app);
+    return same_cover(&key, &app->cover_key);
 }
 
 /* Starts the cover call for the ROM on the details screen, its inputs and results reset. */
@@ -158,7 +174,7 @@ static void start_cover(skiff_app *app) {
     app_call *call = &app->call;
     call->rom_id = app->rom.summary.id;
     snprintf(call->cover_path, sizeof call->cover_path, "%s", app->rom.cover_path);
-    call->cover_key = skiff_cover_key_of(app->romm.base_url, call->rom_id, call->cover_path);
+    call->cover_key = current_cover_key(app);
     call->storage = app->config.storage;
     call->roots = app->config.roots;
     call->now_ms = app->env.now_ms;
@@ -189,13 +205,14 @@ void app_cover_done(skiff_app *app) {
         app_network_failed(app, err);
         return;
     }
-    if (app->screen != SKIFF_APP_SCREEN_DETAILS || call->rom_id != app->rom.summary.id) {
+    const skiff_cover_key key = current_cover_key(app);
+    if (app->screen != SKIFF_APP_SCREEN_DETAILS || !same_cover(&call->cover_key, &key)) {
         return;
     }
     skiff_cover *shown = app->cover;
     app->cover = app->cover_spare;
     app->cover_spare = shown;
-    app->cover_rom = call->rom_id;
+    app->cover_key = call->cover_key;
     app->has_cover = 1;
 }
 

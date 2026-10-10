@@ -389,7 +389,7 @@ static void details_view(skiff_app *app) {
     /* The cover box is there from the first frame, so the text never re-wraps when it arrives. */
     const float width = SKIFF_APP_COVER_TEXT_WIDTH;
     view->has_cover_box = 1;
-    view->cover = app->has_cover && app->cover_rom == rom->id ? app->cover : NULL;
+    view->cover = app_cover_shown(app) ? app->cover : NULL;
     add_wrapped_within(app, rom->name[0] != '\0' ? rom->name : rom->fs_name, width);
     if (!app->has_rom) {
         add_text_within(app, SKIFF_TEXT_LIBRARY_LOADING, width);

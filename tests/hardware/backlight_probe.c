@@ -84,9 +84,9 @@ static void note(skiff_psp_report *report, const char *line) {
     }
 }
 
-/* The next new press among mask within timeout_s, or PRESS_NONE (also on HOME → Quit). Frames are
- * waited on, never the power timers ticked, so the firmware's idle timers keep running. *waited_ms
- * says when it came. */
+/* The next new press among mask within timeout_s, or PRESS_NONE (also on HOME → Quit). Only the
+ * auto-sleep timer is ticked, as during a download (skiff_psp_keep_awake()), so the PSP does not
+ * sleep mid-watch while the backlight's timers keep running. *waited_ms says when it came. */
 static press wait_press(unsigned mask, int timeout_s, int *waited_ms) {
     SceCtrlData pad;
     sceCtrlPeekBufferPositive(&pad, 1);
@@ -94,6 +94,7 @@ static press wait_press(unsigned mask, int timeout_s, int *waited_ms) {
     const int64_t started = now_us();
     while (!skiff_psp_exit_requested() && now_us() - started < (int64_t)timeout_s * US_PER_SECOND) {
         sceDisplayWaitVblankStart();
+        skiff_psp_keep_awake();
         sceCtrlPeekBufferPositive(&pad, 1);
         const unsigned pressed = pad.Buttons & ~held & mask;
         held = pad.Buttons;

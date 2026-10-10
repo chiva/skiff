@@ -54,11 +54,15 @@ typedef struct selftest_check {
 /* 2^31 seconds after 1970, in milliseconds: past what a 32-bit time_t holds. */
 #define SKIFF_SELFTEST_LOG_MS 2147483648123LL
 #define SKIFF_SELFTEST_LOG_TIMESTAMP "2038-01-19 03:14:08.123Z"
-/* A RomM page whose numbers need more than 32 bits, and a CRC-32 with a leading zero. */
+/* A RomM page whose numbers need more than 32 bits, and a CRC-32 with a leading zero, listing the
+ * ROM's only file (as a list asked with_files gives it). */
 #define SKIFF_SELFTEST_ROMM_PAGE                                                                   \
     "{\"items\":[{\"id\":1099511627776,\"platform_id\":1,\"name\":\"Caf\xC3\xA9\",\"fs_name\":"    \
     "\"a.iso\","                                                                                   \
-    "\"fs_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\"}],\"total\":1,\"offset\":0}"
+    "\"fs_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\",\"files\":[{\"rom_id\":1099511627776," \
+    "\"file_name\":\"Caf\xC3\xA9.iso\",\"file_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\"}]" \
+    "}],"                                                                                          \
+    "\"total\":1,\"offset\":0}"
 #define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
 #define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL
 #define SKIFF_SELFTEST_ROMM_CRC32 0x0a1b2c3dU
@@ -255,7 +259,10 @@ static const char *check_romm_json(void) {
     return page.items[0].id == SKIFF_SELFTEST_ROMM_ID &&
                    page.items[0].size == SKIFF_SELFTEST_ROMM_SIZE && page.items[0].has_crc32 &&
                    page.items[0].crc32 == SKIFF_SELFTEST_ROMM_CRC32 &&
-                   strcmp(page.items[0].name, "Caf\xC3\xA9") == 0
+                   strcmp(page.items[0].name, "Caf\xC3\xA9") == 0 && page.items[0].has_file &&
+                   page.items[0].file.size == SKIFF_SELFTEST_ROMM_SIZE &&
+                   page.items[0].file.crc32 == SKIFF_SELFTEST_ROMM_CRC32 &&
+                   strcmp(page.items[0].file.file_name, "Caf\xC3\xA9.iso") == 0
                ? NULL
                : "a RomM page came back with other values";
 }

@@ -21,6 +21,9 @@
 #define ROM_LIST_QUERY                                                                             \
     "&order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false"                  \
     "&with_rom_id_index=false"
+/* What a ROM list adds for SKIFF_ROMM_LIST_FAVOURITES and for with_files. */
+#define ROM_LIST_FAVOURITES "&favorite=true"
+#define ROM_LIST_WITH_FILES "&with_files=true"
 #define UNRESERVED_SYMBOLS "-._~"
 /* Kept as they are in a cover URL besides the unreserved ones: they separate the path's segments
  * and its query. */
@@ -207,6 +210,39 @@ static int read_flag(const cJSON *object, const char *name) {
     return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object, name));
 }
 
+static int parse_file(const cJSON *item, uint64_t rom_id, skiff_romm_file *out) {
+    memset(out, 0, sizeof *out);
+    uint64_t owner = 0;
+    /* A file listed under another ROM would download the wrong bytes under this one's name. */
+    return cJSON_IsObject(item) && read_count(item, "rom_id", &owner) && owner == rom_id &&
+           read_name(item, "file_name", 1, out->file_name, sizeof out->file_name,
+                     &out->name_status) &&
+           read_count(item, "file_size_bytes", &out->size) &&
+           read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32);
+}
+
+/* A file of a ROM whose own names are not usable is not downloadable either. */
+static void take_rom_name_status(const skiff_romm_rom_summary *summary, skiff_romm_file *file) {
+    if (file->name_status == SKIFF_ROMM_NAME_OK) {
+        file->name_status = summary->name_status;
+    }
+}
+
+/* The summary's only file, when the answer lists exactly one that reads as this ROM's. Anything
+ * else leaves has_file 0 and keeps the ROM listed: one odd file must not refuse a page. */
+static void read_only_file(const cJSON *item, skiff_romm_rom_summary *out) {
+    const cJSON *files = cJSON_GetObjectItemCaseSensitive(item, "files");
+    if (!cJSON_IsArray(files) || cJSON_GetArraySize(files) != 1) {
+        return;
+    }
+    if (!parse_file(cJSON_GetArrayItem(files, 0), out->id, &out->file)) {
+        memset(&out->file, 0, sizeof out->file);
+        return;
+    }
+    take_rom_name_status(out, &out->file);
+    out->has_file = 1;
+}
+
 static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     memset(out, 0, sizeof *out);
     if (!cJSON_IsObject(item) || !read_count(item, "id", &out->id) ||
@@ -218,18 +254,8 @@ static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
         return 0;
     }
     out->multiple_files = read_flag(item, "has_multiple_files");
+    read_only_file(item, out);
     return 1;
-}
-
-static int parse_file(const cJSON *item, uint64_t rom_id, skiff_romm_file *out) {
-    memset(out, 0, sizeof *out);
-    uint64_t owner = 0;
-    /* A file listed under another ROM would download the wrong bytes under this one's name. */
-    return cJSON_IsObject(item) && read_count(item, "rom_id", &owner) && owner == rom_id &&
-           read_name(item, "file_name", 1, out->file_name, sizeof out->file_name,
-                     &out->name_status) &&
-           read_count(item, "file_size_bytes", &out->size) &&
-           read_crc32(item, "crc_hash", &out->has_crc32, &out->crc32);
 }
 
 /* A segment of a path that a server resolves to the folder itself or the one above it. */
@@ -450,10 +476,7 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
             return 0;
         }
         if (i < SKIFF_ROMM_FILES_MAX) {
-            /* A file of a ROM whose own names are not usable is not downloadable either. */
-            if (file.name_status == SKIFF_ROMM_NAME_OK) {
-                file.name_status = out->summary.name_status;
-            }
+            take_rom_name_status(&out->summary, &file);
             out->files[i] = file;
             out->stored_count++;
         }
@@ -813,17 +836,22 @@ skiff_err skiff_romm_find_platform(skiff_romm_client *client, const char *slug,
     return err;
 }
 
-skiff_err skiff_romm_list_roms(skiff_romm_client *client, uint64_t platform_id, uint64_t offset,
-                               size_t limit, skiff_romm_rom_page *out) {
+skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_query *query,
+                               uint64_t offset, size_t limit, skiff_romm_rom_page *out) {
     if (out != NULL) {
         memset(out, 0, sizeof *out);
     }
-    if (!client_ready(client) || out == NULL || limit == 0 || limit > SKIFF_ROMM_PAGE_SIZE) {
+    if (!client_ready(client) || query == NULL || out == NULL || limit == 0 ||
+        limit > SKIFF_ROMM_PAGE_SIZE) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    const uint64_t platform_id = query->platform_id;
     char path[SKIFF_ROMM_URL_MAX];
-    snprintf(path, sizeof path, PATH_ROMS "?platform_ids=%llu&limit=%zu&offset=%llu" ROM_LIST_QUERY,
-             (unsigned long long)platform_id, limit, (unsigned long long)offset);
+    snprintf(path, sizeof path,
+             PATH_ROMS "?platform_ids=%llu&limit=%zu&offset=%llu" ROM_LIST_QUERY "%s%s",
+             (unsigned long long)platform_id, limit, (unsigned long long)offset,
+             query->filter == SKIFF_ROMM_LIST_FAVOURITES ? ROM_LIST_FAVOURITES : "",
+             query->with_files ? ROM_LIST_WITH_FILES : "");
     cJSON *root = NULL;
     skiff_err err = get_json(client, path, 1, &root);
     /* The page must be the one asked for: never show another page's ROMs under this offset. */

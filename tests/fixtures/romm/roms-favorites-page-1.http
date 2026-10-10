@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+Content-Length: 292
+Content-Type: application/json
+Server: nginx/1.30.5
+Via: 1.1 Caddy
+
+{"items":[],"total":1,"limit":1,"offset":1,"char_index":{},"rom_id_index":[],"filter_values":{"genres":[],"franchises":[],"collections":[],"companies":[],"publishers":[],"developers":[],"game_modes":[],"age_ratings":[],"player_counts":[],"regions":[],"languages":[],"tags":[],"platforms":[]}}

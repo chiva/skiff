@@ -20,6 +20,9 @@ readonly REQUEST_TIMEOUT_SECONDS=30
 # per-library extras RomM adds by default turned off (docs/development/architecture.md, "RomM
 # integration"). Pages of one ROM, so the two seeded ROMs make two pages and an empty third.
 readonly ROM_LIST_QUERY="order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false&with_rom_id_index=false"
+# What it adds for the player's favourites with each ROM's files (SKIFF_ROMM_LIST_FAVOURITES,
+# with_files). The seed's only favourite is the payload: one page, then an empty one.
+readonly FAVOURITES_QUERY="favorite=true&with_files=true"
 
 TOKEN="$(jq -r .token "$SEED")"
 PLATFORM_ID="$(jq -r .platform_id "$SEED")"
@@ -49,6 +52,11 @@ record platforms /api/platforms "${auth[@]}"
 for offset in 0 1 2; do
   record "roms-page-$offset" \
     "/api/roms?platform_ids=$PLATFORM_ID&limit=1&offset=$offset&$ROM_LIST_QUERY" "${auth[@]}"
+done
+for offset in 0 1; do
+  record "roms-favorites-page-$offset" \
+    "/api/roms?platform_ids=$PLATFORM_ID&limit=1&offset=$offset&$ROM_LIST_QUERY&$FAVOURITES_QUERY" \
+    "${auth[@]}"
 done
 record rom "/api/roms/$ROM_ID" "${auth[@]}"
 record rom-extra "/api/roms/$EXTRA_ROM_ID" "${auth[@]}"

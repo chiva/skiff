@@ -351,9 +351,9 @@ static const unsigned char COVER_PNG[] = {
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
 /* A cover path as RomM gives it, and the URL path Skiff requests it under. */
 #define COVER_PATH(id)                                                                             \
-    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10 04:26:25"
+    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10 16:35:18"
 #define COVER_URL(id)                                                                              \
-    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10%2004:26:25"
+    "/assets/romm/resources/roms/1/" #id "/cover/small.png?ts=2026-10-10%2016:35:18"
 #define NEWER_COVER_PATH "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11 08:00:00"
 #define NEWER_COVER_URL "/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11%2008:00:00"
 

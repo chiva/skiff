@@ -67,7 +67,7 @@ void app_batch_cancel(skiff_app *app) {
 }
 
 void app_batch_update(skiff_app *app) {
-    app_batch *batch = &app->batch;
+    const app_batch *batch = &app->batch;
     if (app_call_busy(app) || (batch->step != BATCH_SCANNING && batch->step != BATCH_SPACE)) {
         return;
     }
@@ -102,8 +102,9 @@ static void take(skiff_app *app, const skiff_romm_rom_summary *rom) {
             return;
         }
     }
+    /* An empty file is refused by the queue, and would take the whole batch down with it. */
     const int installable =
-        rom->has_file && rom->file.size <= SKIFF_STORAGE_MAX_FILE_BYTES &&
+        rom->has_file && rom->file.size > 0 && rom->file.size <= SKIFF_STORAGE_MAX_FILE_BYTES &&
         skiff_install_check(app->installer, rom, &rom->file) == SKIFF_INSTALL_SUPPORTED;
     if (!installable) {
         batch->refused++;

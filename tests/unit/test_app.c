@@ -1246,7 +1246,8 @@ static void test_download_all_takes_what_fits_the_free_space_in_name_order(void)
     open_favourites(5);
     serve_batch_favourites(5);
     TEST_PRINTF("room for two games past the 8 MiB margin");
-    storage.free_bytes = SKIFF_STORAGE_FREE_MARGIN_BYTES + 2 * BODY_BYTES + BODY_BYTES / 2;
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)2 * BODY_BYTES + BODY_BYTES / 2;
     start_download_all(SKIFF_APP_SCREEN_CONFIRM);
     TEST_ASSERT_TRUE(shows("Download 2 favourites"));
     TEST_ASSERT_TRUE(shows("3 don't fit on the Memory Stick"));
@@ -1270,7 +1271,8 @@ static void test_a_download_that_ends_while_favourites_are_checked_frees_its_roo
     frame(SKIFF_UI_ACTION_SELECT);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_PRINTF("room for three favourites, or two while Game 1's download is still to come");
-    storage.free_bytes = SKIFF_STORAGE_FREE_MARGIN_BYTES + 3 * BODY_BYTES + BODY_BYTES / 2;
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)3 * BODY_BYTES + BODY_BYTES / 2;
     env_state.hold_calls = 1;
     frame(SKIFF_UI_ACTION_START);
     frame(0);
@@ -1370,6 +1372,25 @@ static void test_download_all_drops_a_library_page_still_loading(void) {
     run_until(SKIFF_APP_SCREEN_CONFIRM);
     TEST_PRINTF("the page's failure showed no error; the batch asks as usual");
     TEST_ASSERT_TRUE(shows("Download 29 favourites"));
+}
+
+static void test_an_empty_favourite_cannot_be_installed_and_spoils_nothing(void) {
+    open_favourites(2);
+    TEST_PRINTF("Game 101's only file is empty: the queue would refuse the whole batch");
+    serve_raw("/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY BATCH_FILTER,
+              JSON_OK "{\"items\":[{\"id\":101,\"platform_id\":1,\"name\":\"Game 101\","
+                      "\"fs_name\":\"Game 101.iso\",\"fs_size_bytes\":0,\"files\":[{\"rom_id\":"
+                      "101,\"file_name\":\"Game 101.iso\",\"file_size_bytes\":0}]},"
+                      "{\"id\":102,\"platform_id\":1,\"name\":\"Game 102\",\"fs_name\":"
+                      "\"Game 102.iso\",\"fs_size_bytes\":3000,\"files\":[{\"rom_id\":102,"
+                      "\"file_name\":\"Game 102.iso\",\"file_size_bytes\":3000}]}],"
+                      "\"total\":2,\"limit\":25,\"offset\":0}");
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Download 1 favourites"));
+    TEST_ASSERT_TRUE(shows("1 can't be installed"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Added 1 downloads"));
 }
 
 static void test_back_while_favourites_are_checked_stops_download_all(void) {
@@ -2678,6 +2699,7 @@ int main(void) {
     RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
     RUN_TEST(test_nothing_else_runs_while_download_all_queues);
     RUN_TEST(test_download_all_drops_a_library_page_still_loading);
+    RUN_TEST(test_an_empty_favourite_cannot_be_installed_and_spoils_nothing);
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);

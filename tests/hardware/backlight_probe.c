@@ -32,9 +32,16 @@
 #define PART_ONE_MARKER "SKIFF BACKLIGHT PROBE PART 1 OK"
 #define FAIL_MARKER "SKIFF BACKLIGHT PROBE FAIL"
 #define STATE_FILE_NAME "backlight-probe.state"
+/* The value run 1 left, apart from the state file so that is written once. */
+#define LEFT_FILE_NAME "backlight-probe.left"
 #define LOG_FILE_NAME "backlight-log.txt"
-#define STATE_FORMAT "original=%d\n"
-#define STATE_FIELDS 1
+#define STATE_KEY_ORIGINAL "original"
+#define STATE_KEY_LEFT "left"
+#define STATE_KEY_MAX 16
+#define STATE_FIELDS 2
+/* What sceIoGetstat() returns for a file that is not there (SCE_ERROR_ERRNO_ENOENT); any other
+ * failure may hide a file that is. */
+#define IO_NOT_FOUND ((int)0x80010002)
 #define ACTION_PREFIX "ACTION: "
 
 enum {
@@ -64,8 +71,9 @@ typedef enum press {
     PRESS_SKIP,
 } press;
 
-/* backlight-log.txt next to the EBOOT; empty when there is no folder for it. */
+/* Next to the EBOOT; empty when there is no folder for them. */
 static char log_path[PATH_MAX_LENGTH];
+static char left_path[PATH_MAX_LENGTH];
 
 static int64_t now_us(void) { return (int64_t)sceKernelGetSystemTimeWide(); }
 
@@ -170,10 +178,15 @@ typedef enum state_found {
     STATE_DAMAGED,
 } state_found;
 
-static state_found read_state(const char *path, int *original) {
+/* "key=value" from path. */
+static state_found read_value(const char *path, const char *key, int *value) {
     SceIoStat stat;
-    if (sceIoGetstat(path, &stat) < 0) {
+    const int found = sceIoGetstat(path, &stat);
+    if (found == IO_NOT_FOUND) {
         return STATE_MISSING;
+    }
+    if (found < 0) {
+        return STATE_DAMAGED;
     }
     char text[STATE_TEXT_MAX] = "";
     const SceUID file = sceIoOpen(path, PSP_O_RDONLY, 0);
@@ -186,12 +199,15 @@ static state_found read_state(const char *path, int *original) {
         return STATE_DAMAGED;
     }
     text[read] = '\0';
-    return sscanf(text, STATE_FORMAT, original) == STATE_FIELDS ? STATE_READ : STATE_DAMAGED;
+    char read_key[STATE_KEY_MAX] = "";
+    return sscanf(text, "%15[^=]=%d", read_key, value) == STATE_FIELDS && strcmp(read_key, key) == 0
+               ? STATE_READ
+               : STATE_DAMAGED;
 }
 
-static int write_state(const char *path, int original) {
+static int write_value(const char *path, const char *key, int value) {
     char text[STATE_TEXT_MAX];
-    const int length = snprintf(text, sizeof text, STATE_FORMAT, original);
+    const int length = snprintf(text, sizeof text, "%s=%d\n", key, value);
     const SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
     if (file < 0) {
         return 0;
@@ -212,7 +228,7 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
         return 0;
     }
     /* Kept first and never rewritten, so whatever happens next, run 2 puts it back. */
-    if (!write_state(state_path, original)) {
+    if (!write_value(state_path, STATE_KEY_ORIGINAL, original)) {
         note(report, "FAIL cannot write " STATE_FILE_NAME);
         return 0;
     }
@@ -222,6 +238,9 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     const int watch_s = set_off_time(report, WATCH_OFF_TIME_S) == WATCH_OFF_TIME_S
                             ? WATCH_OFF_TIME_S
                             : set_off_time(report, PLAN_OFF_TIME_S);
+    if (left_path[0] == '\0' || !write_value(left_path, STATE_KEY_LEFT, watch_s)) {
+        note(report, "cannot write " LEFT_FILE_NAME ": run 2 will not tell whether it lasted");
+    }
     watch(report, scePowerIsPowerOnline() ? "ac" : "battery", watch_s);
     if (!scePowerIsPowerOnline()) {
         note(report, ACTION_PREFIX "plug in the AC adapter, then press X (O to skip).");
@@ -244,17 +263,21 @@ static int part_one(skiff_psp_report *report, const char *state_path) {
     return 1;
 }
 
-/* Run 2: did the setting last, and the player's back. Run 1 left a value other than the player's
- * (its log says which), unless the player's own is one the probe uses: then it cannot tell. */
+/* Run 2: did the value run 1 left last, and the player's back. It cannot tell when run 1 left the
+ * player's own value, when that value was not recorded, or when the getter fails. */
 static int part_two(skiff_psp_report *report, const char *state_path, int original) {
     const int now = sceImposeGetBacklightOffTime();
+    int left = 0;
+    const int left_known =
+        left_path[0] != '\0' && read_value(left_path, STATE_KEY_LEFT, &left) == STATE_READ;
     char line[LINE_MAX_LENGTH];
-    snprintf(line, sizeof line, "run 2: off time %d s now, player's %d s", now, original);
+    snprintf(line, sizeof line,
+             "run 2: off time %d s now, run 1 left %d s (known %d), player's %d s", now, left,
+             left_known, original);
     note(report, line);
-    note(report, original == WATCH_OFF_TIME_S || original == PLAN_OFF_TIME_S
-                     ? "setting lasted: unknown (the player's value is one the probe sets)"
-                 : now != original ? "setting lasted: yes"
-                                   : "setting lasted: no");
+    note(report, !left_known || now < 0 || left == original ? "setting lasted: unknown"
+                 : now == left                              ? "setting lasted: yes"
+                                                            : "setting lasted: no");
     const int restored = set_off_time(report, original);
     if (restored != original) {
         snprintf(line, sizeof line, "FAIL could not put back %d s (reads %d)", original, restored);
@@ -262,6 +285,9 @@ static int part_two(skiff_psp_report *report, const char *state_path, int origin
         return 0;
     }
     sceIoRemove(state_path);
+    if (left_path[0] != '\0') {
+        sceIoRemove(left_path);
+    }
     note(report, "player's setting put back; " STATE_FILE_NAME " removed");
     return 1;
 }
@@ -279,13 +305,16 @@ int main(int argc, char *argv[]) {
     if (!sibling_path(program, LOG_FILE_NAME, log_path)) {
         log_path[0] = '\0';
     }
+    if (!sibling_path(program, LEFT_FILE_NAME, left_path)) {
+        left_path[0] = '\0';
+    }
     int ok = sibling_path(program, STATE_FILE_NAME, state_path);
     int original = 0;
     state_found found = STATE_MISSING;
     const char *marker = FAIL_MARKER;
     if (!ok) {
         note(&report, "FAIL no folder for " STATE_FILE_NAME);
-    } else if ((found = read_state(state_path, &original)) == STATE_READ) {
+    } else if ((found = read_value(state_path, STATE_KEY_ORIGINAL, &original)) == STATE_READ) {
         ok = part_two(&report, state_path, original);
         marker = ok ? OK_MARKER : FAIL_MARKER;
     } else if (found == STATE_DAMAGED) {

@@ -502,7 +502,7 @@ pspsdk), so the person holding the PSP answers with Up (yes) or Down (no).
 2. **Then**: HOME → Quit, look at Settings → Power Save Settings → Backlight Auto-Off, turn the PSP
    off and on.
 3. **Second run** (`SKIFF BACKLIGHT PROBE OK`): `setting lasted: yes|no` (whether the firmware kept
-   the probe's value across the power cycle; `unknown` when yours is 60 or 120 s), then puts your
+   the value run 1 left across the power cycle; `unknown` when that was yours already), then puts your
    setting back and removes the state file. Run it again whenever a first run ended early: it
    always restores.
 

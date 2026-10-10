@@ -64,6 +64,8 @@ typedef enum app_request {
     REQUEST_NONE,
     REQUEST_PAGE,
     REQUEST_ROM,
+    /* The ROM's cover, once its details are in. */
+    REQUEST_COVER,
 } app_request;
 
 /* A request to RomM, which runs off the screen's thread (env.call_start), one at a time. Its inputs
@@ -78,6 +80,8 @@ typedef enum app_call_kind {
     CALL_ROM,
     CALL_PAIRING_START,
     CALL_PAIRING_POLL,
+    /* The details screen's cover, from the Memory Stick cache or RomM (decoded and cached). */
+    CALL_COVER,
 } app_call_kind;
 
 typedef struct app_call {
@@ -96,6 +100,21 @@ typedef struct app_call {
     skiff_romm_pairing pairing;
     skiff_romm_pairing_result pairing_result;
     char device_identifier[SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX];
+    /* A cover: in, where it is, its cache key, the Memory Stick and a clock; out, the cover
+     * decoded into the app's spare buffer, and how it went (for the log). */
+    char cover_path[SKIFF_ROMM_COVER_PATH_MAX];
+    skiff_cover_key cover_key;
+    skiff_storage *storage;
+    skiff_storage_roots roots;
+    int64_t (*now_ms)(void *ctx);
+    void *clock_ctx;
+    skiff_cover *cover;
+    int cover_cached;
+    size_t cover_bytes;
+    int64_t cover_fetch_ms;
+    int64_t cover_decode_ms;
+    skiff_err cover_cache_err;
+    skiff_err cover_store_err;
     skiff_err err;
     app_call_kind kind;
     /* It could not start: err says why, and the next update applies it as the request's error. */
@@ -194,6 +213,10 @@ struct skiff_app {
     app_page pages[SKIFF_APP_CACHED_PAGES];
     /* The ROM on the details screen. */
     skiff_romm_rom rom;
+    /* Its cover (when cover_rom is its id), and the buffer the next one is decoded into. */
+    skiff_cover *cover;
+    skiff_cover *cover_spare;
+    uint64_t cover_rom;
     /* Free space on the Memory Stick, read when a screen showing it opens. */
     uint64_t free_bytes;
 
@@ -231,6 +254,8 @@ struct skiff_app {
     app_request request;
     app_request failed_request;
     int has_rom;
+    /* app->cover holds cover_rom's cover. */
+    int has_cover;
     /* A new pairing waits for the Wi-Fi to be joined again. */
     int pairing_requested;
     int free_known;
@@ -315,6 +340,7 @@ void app_download_confirmed(skiff_app *app);
 void app_request_run(skiff_app *app);
 void app_page_done(skiff_app *app);
 void app_rom_done(skiff_app *app);
+void app_cover_done(skiff_app *app);
 /* Why the ROM on the details screen cannot be downloaded, or SKIFF_TEXT_COUNT when it can. */
 skiff_text_id app_details_refusal(const skiff_app *app);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */

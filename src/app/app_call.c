@@ -1,8 +1,36 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "app_internal.h"
 
 /* ---- On the platform's thread ---- */
+
+/* A cover: from its slot in the Memory Stick cache, or else fetched from RomM, decoded and cached.
+ * A cover that cannot be cached is still shown. */
+static skiff_err fetch_cover(app_call *call) {
+    const int64_t started = call->now_ms(call->clock_ctx);
+    call->cover_cache_err =
+        skiff_cover_cache_load(call->storage, &call->roots, &call->cover_key, call->cover);
+    call->cover_cached = call->cover_cache_err == SKIFF_OK;
+    if (call->cover_cached) {
+        call->cover_fetch_ms = call->now_ms(call->clock_ctx) - started;
+        return SKIFF_OK;
+    }
+    unsigned char *bytes = NULL;
+    skiff_err err = skiff_romm_get_cover(call->romm, call->cover_path, &bytes, &call->cover_bytes);
+    const int64_t fetched = call->now_ms(call->clock_ctx);
+    call->cover_fetch_ms = fetched - started;
+    if (err == SKIFF_OK) {
+        err = skiff_cover_decode_png(bytes, call->cover_bytes, call->cover);
+        call->cover_decode_ms = call->now_ms(call->clock_ctx) - fetched;
+    }
+    free(bytes);
+    if (err == SKIFF_OK) {
+        call->cover_store_err =
+            skiff_cover_cache_store(call->storage, &call->roots, &call->cover_key, call->cover);
+    }
+    return err;
+}
 
 /* The request itself: it reads the call's inputs and the browse client, and writes only the
  * call's results. */
@@ -28,6 +56,9 @@ static void run(void *arg) {
         break;
     case CALL_PAIRING_POLL:
         call->err = skiff_romm_pairing_poll(call->romm, &call->pairing, &call->pairing_result);
+        break;
+    case CALL_COVER:
+        call->err = fetch_cover(call);
         break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
@@ -92,6 +123,9 @@ static void apply(skiff_app *app, app_call_kind kind) {
         break;
     case CALL_PAIRING_POLL:
         app_pairing_polled(app);
+        break;
+    case CALL_COVER:
+        app_cover_done(app);
         break;
     case CALL_NONE:
         break;

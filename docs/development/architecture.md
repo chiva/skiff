@@ -553,6 +553,13 @@ decoded picture (about 70 KB) is what the Memory Stick cache will keep.
   are one write without a sync (a lost cover is fetched again), and whatever a slot file grows by
   needs 16 MB free beyond the 8 MB margin, so covers never take the last of the Memory Stick from
   downloads.
+- **Shown on the details screen**, in a 160×220 box on the right with the text wrapped beside it
+  from the first frame, so nothing moves when the cover arrives. Once the game's details are in
+  (they decide whether it downloads), the browsing thread reads its slot, or fetches the cover from
+  RomM, decodes and caches it; the app swaps it in. A cover is best effort: missing, in another
+  format, damaged or lost with the connection, the box keeps its placeholder and `skiff.log` gets a
+  line, never an error screen. Back stops a cover still loading, and a lost connection is only
+  joined again for a request that needs it, never for a cover.
 - **Tested** with PNGs written in memory by libpng's writer (every colour type and bit depth,
   interlaced, transparent, cut, and thousands of corrupted copies, some with their CRCs repaired so
   the damage reaches the decoder) under ASan and UBSan; the self-test decodes a 2×2 PNG on the PSP.

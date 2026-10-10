@@ -1093,6 +1093,60 @@ static void test_the_longest_cover_path_fits_the_cover_url_buffer(void) {
     TEST_PRINTF("longest cover URL: %zu of %d bytes", strlen(url) + 1, SKIFF_ROMM_COVER_URL_MAX);
 }
 
+static void test_a_cover_is_fetched_without_the_token(void) {
+    static const char raw[] = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n\x89PNG-bytes";
+    TEST_ASSERT_NOT_NULL(fake_transport_add_raw(
+        &fake, COVER_PREFIX "roms/1/2/cover/small.png?ts=2026-10-09%2023:02:27", raw,
+        sizeof raw - 1));
+    unsigned char *bytes = NULL;
+    size_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_cover(&client, COVER_PATH, &bytes, &size));
+    TEST_PRINTF("GET %s: %zu bytes, headers '%s'", fake.log[0].url, size, fake.log[0].headers);
+    TEST_ASSERT_EQUAL_size_t(10, size);
+    TEST_ASSERT_EQUAL_MEMORY("\x89PNG-bytes", bytes, size);
+    TEST_ASSERT_NULL(strstr(fake.log[0].headers, "Authorization"));
+    free(bytes);
+}
+
+static void test_a_cover_that_is_missing_empty_or_too_large_is_refused(void) {
+    static const char missing[] = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n<html>";
+    static const char empty[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    static const char large[] = "HTTP/1.1 200 OK\r\nContent-Length: 600000\r\n\r\nxxxx";
+    const struct {
+        const char *raw;
+        size_t size;
+        skiff_err expected;
+    } CASES[] = {
+        {missing, sizeof missing - 1, SKIFF_ERR_ROMM_NOT_FOUND},
+        {empty, sizeof empty - 1, SKIFF_ERR_ROMM_COVER_DAMAGED},
+        {large, sizeof large - 1, SKIFF_ERR_ROMM_BAD_RESPONSE},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char path[64];
+        snprintf(path, sizeof path, COVER_PREFIX "case%zu.png", i);
+        TEST_ASSERT_NOT_NULL(fake_transport_add_raw(&fake, path, CASES[i].raw, CASES[i].size));
+        unsigned char *bytes = (unsigned char *)"untouched";
+        size_t size = 99;
+        const skiff_err err = skiff_romm_get_cover(&client, path, &bytes, &size);
+        TEST_PRINTF("case %zu -> %s", i, skiff_err_name(err));
+        TEST_ASSERT_EQUAL_INT(CASES[i].expected, err);
+        TEST_ASSERT_NULL(bytes);
+        TEST_ASSERT_EQUAL_size_t(0, size);
+    }
+    unsigned char *bytes = NULL;
+    size_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_get_cover(&client, "/api/heartbeat", &bytes, &size));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_get_cover(NULL, COVER_PATH, &bytes, &size));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_get_cover(&client, NULL, &bytes, &size));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_get_cover(&client, COVER_PATH, NULL, &size));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_get_cover(&client, COVER_PATH, &bytes, NULL));
+}
+
 /* ---- The client ---- */
 
 static void test_the_client_checks_its_settings(void) {
@@ -1207,6 +1261,8 @@ int main(void) {
     RUN_TEST(test_cover_urls_encode_what_a_request_line_cannot_carry);
     RUN_TEST(test_a_cover_url_is_refused_when_it_would_lead_elsewhere_or_not_fit);
     RUN_TEST(test_the_longest_cover_path_fits_the_cover_url_buffer);
+    RUN_TEST(test_a_cover_is_fetched_without_the_token);
+    RUN_TEST(test_a_cover_that_is_missing_empty_or_too_large_is_refused);
     RUN_TEST(test_the_client_checks_its_settings);
     RUN_TEST(test_the_token_header_is_offered_and_wiped);
     RUN_TEST(test_requests_refuse_bad_arguments);

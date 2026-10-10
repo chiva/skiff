@@ -927,3 +927,44 @@ skiff_err skiff_romm_cover_url(const skiff_romm_client *client, const char *cove
     }
     return write_encoded(out, out_size, client->base_url, cover_path, COVER_URL_SYMBOLS);
 }
+
+skiff_err skiff_romm_get_cover(skiff_romm_client *client, const char *cover_path,
+                               unsigned char **out, size_t *size) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (size != NULL) {
+        *size = 0;
+    }
+    if (!client_ready(client) || cover_path == NULL || out == NULL || size == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    char url[SKIFF_ROMM_COVER_URL_MAX];
+    skiff_err err = skiff_romm_cover_url(client, cover_path, url, sizeof url);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    skiff_http_response response;
+    body_sink sink = {&response, 0, 0, NULL, 0, 0};
+    skiff_http_request request;
+    memset(&request, 0, sizeof request);
+    request.method = SKIFF_HTTP_GET;
+    request.url = url;
+    request.on_body = collect_body;
+    request.body_ctx = &sink;
+    /* RomM's web server serves covers to anyone: the token stays off this request. */
+    err = skiff_transport_perform(client->transport, &request, &response);
+    if (err == SKIFF_OK) {
+        err = skiff_http_status_error(response.status);
+    }
+    if (err == SKIFF_OK && sink.used == 0) {
+        err = SKIFF_ERR_ROMM_COVER_DAMAGED;
+    }
+    if (err != SKIFF_OK) {
+        free(sink.data);
+        return err;
+    }
+    *out = (unsigned char *)sink.data;
+    *size = sink.used;
+    return SKIFF_OK;
+}

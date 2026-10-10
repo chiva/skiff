@@ -236,6 +236,17 @@ skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_i
 skiff_err skiff_romm_cover_url(const skiff_romm_client *client, const char *cover_path, char *out,
                                size_t out_size);
 
+/*
+ * GET the cover at cover_path (skiff_romm_rom.cover_path) without the token: its bytes in a new
+ * buffer *out of *size bytes (at most SKIFF_ROMM_BODY_MAX), which the caller frees. Returns the
+ * transport's error, the RomM error for an HTTP status (a cover RomM no longer has is
+ * SKIFF_ERR_ROMM_NOT_FOUND), SKIFF_ERR_ROMM_BAD_RESPONSE for a body over the cap,
+ * SKIFF_ERR_ROMM_COVER_DAMAGED for an empty one, skiff_romm_cover_url()'s refusals, and
+ * SKIFF_ERR_NO_MEMORY. *out is NULL and *size 0 on error.
+ */
+skiff_err skiff_romm_get_cover(skiff_romm_client *client, const char *cover_path,
+                               unsigned char **out, size_t *size);
+
 /* ---- Parsing, exposed for the tests and the self-test ---- */
 
 /* A /api/roms response body: SKIFF_OK, or SKIFF_ERR_ROMM_BAD_RESPONSE. */

@@ -1717,6 +1717,44 @@ static void test_cancel_retry_and_clear_from_the_downloads_screen(void) {
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_QUEUE_EMPTY)));
 }
 
+static void test_downloading_lasts_while_the_worker_has_a_download_to_run(void) {
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_downloading(NULL));
+    open_paired_library(2);
+    TEST_PRINTF("the worker runs with nothing queued: not downloading");
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_downloading(app));
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("a download queued: downloading");
+    TEST_ASSERT_EQUAL_INT(1, skiff_app_downloading(app));
+    TEST_PRINTF("the worker stopped (a new server, a quit) with it still queued: not downloading");
+    TEST_ASSERT_TRUE(app_stop_worker(app));
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_downloading(app));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_start_worker(app));
+    TEST_ASSERT_EQUAL_INT(1, skiff_app_downloading(app));
+    TEST_PRINTF("active, as the worker reports it: downloading");
+    app->queue.jobs[0].state = SKIFF_JOB_ACTIVE;
+    TEST_ASSERT_EQUAL_INT(1, skiff_app_downloading(app));
+    TEST_PRINTF("it failed and waits for the player: not downloading");
+    serve_content(1);
+    transport.routes[transport.route_count - 1].fail_before_response = SKIFF_ERR_STORAGE_NAME_TAKEN;
+    run_worker_once();
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_FAILED, app->queue.jobs[0].state);
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_downloading(app));
+    TEST_PRINTF("another one queued, then done: downloading, then not");
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(2);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(1, skiff_app_downloading(app));
+    serve_content(2);
+    run_worker_once();
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, app->queue.jobs[1].state);
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_downloading(app));
+}
+
 /* ---- Settings ---- */
 
 static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
@@ -2712,6 +2750,7 @@ int main(void) {
     RUN_TEST(test_the_downloads_list_stays_put_as_the_details_come_and_go);
     RUN_TEST(test_every_error_fits_under_the_downloads_list);
     RUN_TEST(test_cancel_retry_and_clear_from_the_downloads_screen);
+    RUN_TEST(test_downloading_lasts_while_the_worker_has_a_download_to_run);
     RUN_TEST(test_a_new_server_stops_the_worker_and_asks_to_pair);
     RUN_TEST(test_a_worker_that_will_not_stop_changes_nothing);
     RUN_TEST(test_an_address_without_a_scheme_is_refused);

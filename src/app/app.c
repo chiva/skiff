@@ -740,6 +740,19 @@ int skiff_app_quit_requested(const skiff_app *app) { return app != NULL && app->
 
 skiff_log *skiff_app_log(const skiff_app *app) { return app != NULL ? app->log : NULL; }
 
+int skiff_app_downloading(const skiff_app *app) {
+    if (app == NULL || !app->worker_running) {
+        return 0;
+    }
+    for (size_t i = 0; i < app->queue.count; i++) {
+        const skiff_job_state state = app->queue.jobs[i].state;
+        if (state == SKIFF_JOB_QUEUED || state == SKIFF_JOB_ACTIVE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 skiff_err skiff_app_transport_settings_from(const skiff_config *config,
                                             const skiff_storage_roots *roots,
                                             skiff_app_transport_settings *out) {

@@ -608,6 +608,16 @@ lines (none while the favourites are checked or queued), the `download all favou
 (counts and bytes) and `stats:` (longest frame at most 33 ms, the browsing thread's lowest free
 stack at least 8 KB, system memory unchanged).
 
+**Backlight (B5).** On battery, with Settings → Power Save Settings → Backlight Auto-Off at 2, 5
+or 10 minutes: queue the 64 MiB file, open Downloads and put the PSP down. About a minute later the
+screen goes dark while the download carries on. Press □ (Cancel download): the screen lights and
+nothing else happens (no cancel question opens). Once the queue is done, press a button and leave the PSP for
+two minutes: the screen stays lit, on the player's time again. Queue a game again and quit (HOME →
+Quit) while it downloads: Backlight Auto-Off still shows the player's setting. With Backlight
+Auto-Off set to Off, a download never darkens the screen. Read back: the `backlight:` lines in
+`skiff.log` (60 s while downloading, the player's time when done and at quit, and each press that
+only lit the screen).
+
 ## UI prototype
 
 `tests/prototype/ui_proto.c` checks the UI stack chosen in

@@ -4,7 +4,8 @@
 /*
  * The parts of the UI that are not drawing, so they run and are tested on the host: buttons to
  * actions (with repeat for a held d-pad), a scrolling list, text cut to a width, UTF-8 to and from
- * the UTF-16 the system dialogs use, download progress with its rate and time left, and QR codes.
+ * the UTF-16 the system dialogs use, the backlight's off time and the press that wakes the screen,
+ * download progress with its rate and time left, and QR codes.
  * src/platform/psp/ui_psp.h draws them with GU and intraFont; src/platform/psp/dialog_psp.h runs
  * the dialogs.
  */
@@ -69,6 +70,44 @@ void skiff_ui_input_init(skiff_ui_input *input, int confirm_is_cross);
 /* Actions for this frame from the buttons down now: a button counts when pressed, and a held
  * direction or shoulder button again when it repeats. Call once per frame. 0 for NULL. */
 unsigned skiff_ui_input_update(skiff_ui_input *input, unsigned buttons);
+
+/* ---- The backlight ---- */
+
+/* While a download runs, the firmware's backlight-off time is shortened to this many seconds, so a
+ * PSP left downloading does not light its screen for the player's 5 or 10 minutes: on a PSP-1000
+ * the screen then went dark after a minute, on battery and on AC power (hardware row B4). */
+#define SKIFF_UI_DOWNLOAD_BACKLIGHT_OFF_S 60
+/* The firmware's timer and the app's frames are not in step: a press this close to the off time
+ * already counts as one that may light a dark screen. */
+#define SKIFF_UI_WAKE_MARGIN_MS 1000U
+
+/* The backlight-off time to set, in seconds, 0 meaning never: the player's own, or
+ * SKIFF_UI_DOWNLOAD_BACKLIGHT_OFF_S while downloading when the player's is longer. A player who
+ * chose never (0) keeps it, and so does one whose time is shorter. */
+int skiff_ui_backlight_off_s(int player_s, int downloading);
+
+typedef struct skiff_ui_wake {
+    unsigned buttons;
+    int64_t changed_ms;
+    /* The off time passed since the last button change: the screen may be dark. */
+    int dark;
+    /* A press that lit the screen is held until every button is up. */
+    int holding;
+} skiff_ui_wake;
+
+void skiff_ui_wake_init(skiff_ui_wake *wake, int64_t now_ms);
+
+/*
+ * The firmware turns the backlight off once no button changed for its off time, and the press that
+ * lights it again reaches the program too: it must not act on a screen the player could not see.
+ * Call once per frame, before skiff_ui_input_update(), with the buttons down and the off time in
+ * force (off_ms 0: never off). From a press after that long without a change (less
+ * SKIFF_UI_WAKE_MARGIN_MS) until every button is up, *buttons becomes 0. A screen that may be dark
+ * stays so for this until a button changes, even when the off time grows (the player's setting
+ * put back after a download). Returns 1 on the frame such a press is held; 0, changing nothing,
+ * for NULL.
+ */
+int skiff_ui_wake_filter(skiff_ui_wake *wake, int64_t now_ms, uint32_t off_ms, unsigned *buttons);
 
 /* ---- A scrolling list ---- */
 

@@ -81,7 +81,9 @@ on their own thread since (#67).
   for one frame at most. See [Hardware findings](hardware-findings.md#favourites).
   **Collections** need `collections.read`: they come with Phase 5's pairing again rather than ask
   players to pair twice.
-- Backlight dimming during long downloads.
+- **Screen off during downloads**: while games download, the firmware turns the backlight off after
+  60 s without a press instead of the player's 2, 5 or 10 minutes (a player's Off is left alone),
+  and the press that lights it again does nothing else. Waiting for hardware run B5.
 
 ## Phase 4: PS1
 

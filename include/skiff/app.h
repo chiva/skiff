@@ -311,6 +311,11 @@ int skiff_app_quit_requested(const skiff_app *app);
 /* The logger, once started (NULL before), for the platform's own lines. */
 skiff_log *skiff_app_log(const skiff_app *app);
 
+/* 1 while the download worker runs with a download queued or active (its recovery included), so
+ * the platform may let the backlight turn off sooner (skiff_ui_backlight_off_s()); 0 otherwise,
+ * also with only failed downloads left, and for NULL. */
+int skiff_app_downloading(const skiff_app *app);
+
 /* ---- Exposed for the tests and the platform ---- */
 
 /*

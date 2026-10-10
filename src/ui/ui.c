@@ -90,6 +90,47 @@ unsigned skiff_ui_input_update(skiff_ui_input *input, unsigned buttons) {
     return actions;
 }
 
+/* ---- The backlight ---- */
+
+int skiff_ui_backlight_off_s(int player_s, int downloading) {
+    if (!downloading || player_s <= SKIFF_UI_DOWNLOAD_BACKLIGHT_OFF_S) {
+        return player_s;
+    }
+    return SKIFF_UI_DOWNLOAD_BACKLIGHT_OFF_S;
+}
+
+void skiff_ui_wake_init(skiff_ui_wake *wake, int64_t now_ms) {
+    if (wake == NULL) {
+        return;
+    }
+    memset(wake, 0, sizeof *wake);
+    wake->changed_ms = now_ms;
+}
+
+int skiff_ui_wake_filter(skiff_ui_wake *wake, int64_t now_ms, uint32_t off_ms, unsigned *buttons) {
+    if (wake == NULL || buttons == NULL) {
+        return 0;
+    }
+    if (off_ms > 0 && !wake->dark) {
+        const int64_t dark_after =
+            off_ms > SKIFF_UI_WAKE_MARGIN_MS ? (int64_t)off_ms - SKIFF_UI_WAKE_MARGIN_MS : 0;
+        wake->dark = now_ms - wake->changed_ms >= dark_after;
+    }
+    int held = 0;
+    if (*buttons != wake->buttons) {
+        held = wake->dark && (*buttons & ~wake->buttons) != 0;
+        wake->holding = wake->holding || held;
+        wake->dark = 0;
+        wake->buttons = *buttons;
+        wake->changed_ms = now_ms;
+    }
+    if (wake->holding) {
+        wake->holding = *buttons != 0;
+        *buttons = 0;
+    }
+    return held;
+}
+
 /* ---- A scrolling list ---- */
 
 static void keep_visible(skiff_ui_list *list) {

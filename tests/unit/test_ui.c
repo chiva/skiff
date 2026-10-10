@@ -118,6 +118,130 @@ static void test_changing_direction_restarts_the_delay(void) {
         skiff_ui_input_update(&input, SKIFF_UI_BUTTON_DOWN | SKIFF_UI_BUTTON_SQUARE));
 }
 
+/* ---- The backlight ---- */
+
+#define OFF_MS (SKIFF_UI_DOWNLOAD_BACKLIGHT_OFF_S * 1000U)
+#define PLAYER_OFF_MS (300U * 1000U)
+#define FRAME_MS 16
+
+static void test_downloads_shorten_only_a_longer_backlight_time(void) {
+    const int player[] = {300, 600, 120, 61, 60, 30, 0, -1};
+    const int downloading[] = {60, 60, 60, 60, 60, 30, 0, -1};
+    for (size_t i = 0; i < sizeof player / sizeof player[0]; i++) {
+        TEST_PRINTF("player's %d s: %d s while downloading, %d s otherwise", player[i],
+                    skiff_ui_backlight_off_s(player[i], 1), skiff_ui_backlight_off_s(player[i], 0));
+        TEST_ASSERT_EQUAL_INT(downloading[i], skiff_ui_backlight_off_s(player[i], 1));
+        TEST_ASSERT_EQUAL_INT(player[i], skiff_ui_backlight_off_s(player[i], 0));
+    }
+}
+
+/* Frames from now_ms on, no button down, until *now_ms reaches until_ms. */
+static void idle_until(skiff_ui_wake *wake, int64_t *now_ms, int64_t until_ms, uint32_t off_ms) {
+    for (; *now_ms < until_ms; *now_ms += FRAME_MS) {
+        unsigned buttons = 0;
+        TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(wake, *now_ms, off_ms, &buttons));
+    }
+}
+
+static void test_a_press_before_the_off_time_passes_through(void) {
+    skiff_ui_wake wake;
+    skiff_ui_wake_init(&wake, 0);
+    int64_t now = 0;
+    idle_until(&wake, &now, OFF_MS - SKIFF_UI_WAKE_MARGIN_MS - FRAME_MS, OFF_MS);
+    unsigned buttons = SKIFF_UI_BUTTON_CROSS;
+    TEST_PRINTF("Cross after %lld ms without a change (off time %u ms)", (long long)now, OFF_MS);
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_BUTTON_CROSS, buttons);
+}
+
+static void test_the_press_that_lights_the_screen_does_nothing_until_released(void) {
+    skiff_ui_wake wake;
+    skiff_ui_input input;
+    skiff_ui_wake_init(&wake, 0);
+    skiff_ui_input_init(&input, 1);
+    int64_t now = 0;
+    idle_until(&wake, &now, OFF_MS + 5000, OFF_MS);
+    unsigned buttons = SKIFF_UI_BUTTON_CROSS;
+    TEST_PRINTF("Cross after %lld ms without a change: held", (long long)now);
+    TEST_ASSERT_EQUAL_INT(1, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(0, skiff_ui_input_update(&input, buttons));
+    TEST_PRINTF("still held while Cross stays down and Down joins it, for longer than a repeat");
+    for (int frame = 0; frame < 2 * SKIFF_UI_REPEAT_DELAY_FRAMES; frame++) {
+        now += FRAME_MS;
+        buttons = SKIFF_UI_BUTTON_CROSS | SKIFF_UI_BUTTON_DOWN;
+        TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+        TEST_ASSERT_EQUAL_HEX(0, skiff_ui_input_update(&input, buttons));
+    }
+    TEST_PRINTF("released; the next press acts");
+    now += FRAME_MS;
+    buttons = 0;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(0, skiff_ui_input_update(&input, buttons));
+    now += FRAME_MS;
+    buttons = SKIFF_UI_BUTTON_CROSS;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_ACTION_CONFIRM, skiff_ui_input_update(&input, buttons));
+}
+
+static void test_a_press_within_the_margin_counts_as_waking(void) {
+    skiff_ui_wake wake;
+    skiff_ui_wake_init(&wake, 0);
+    int64_t now = 0;
+    idle_until(&wake, &now, OFF_MS - SKIFF_UI_WAKE_MARGIN_MS, OFF_MS);
+    unsigned buttons = SKIFF_UI_BUTTON_CIRCLE;
+    TEST_PRINTF("Circle %lld ms before the off time: held", (long long)OFF_MS - (long long)now);
+    TEST_ASSERT_EQUAL_INT(1, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(0, buttons);
+}
+
+static void test_a_dark_screen_stays_dark_when_the_off_time_grows(void) {
+    skiff_ui_wake wake;
+    skiff_ui_wake_init(&wake, 0);
+    int64_t now = 0;
+    idle_until(&wake, &now, OFF_MS + 1000, OFF_MS);
+    TEST_PRINTF("the download ended after %lld ms: the player's %u ms is back", (long long)now,
+                PLAYER_OFF_MS);
+    idle_until(&wake, &now, now + 10000, PLAYER_OFF_MS);
+    unsigned buttons = SKIFF_UI_BUTTON_START;
+    TEST_ASSERT_EQUAL_INT(1, skiff_ui_wake_filter(&wake, now, PLAYER_OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(0, buttons);
+}
+
+static void test_a_held_button_keeps_the_timer_and_its_release_is_not_held(void) {
+    skiff_ui_wake wake;
+    skiff_ui_wake_init(&wake, 0);
+    unsigned buttons = SKIFF_UI_BUTTON_UP;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, 0, OFF_MS, &buttons));
+    int64_t now = OFF_MS + 2000;
+    TEST_PRINTF("Up held for %lld ms, then released: the release lights nothing to act on",
+                (long long)now);
+    buttons = SKIFF_UI_BUTTON_UP;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_BUTTON_UP, buttons);
+    buttons = 0;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    now += FRAME_MS;
+    buttons = SKIFF_UI_BUTTON_DOWN;
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_BUTTON_DOWN, buttons);
+}
+
+static void test_a_backlight_that_never_turns_off_holds_nothing(void) {
+    skiff_ui_wake wake;
+    skiff_ui_wake_init(&wake, 0);
+    int64_t now = 0;
+    idle_until(&wake, &now, 3600LL * 1000, 0);
+    unsigned buttons = SKIFF_UI_BUTTON_CROSS;
+    TEST_PRINTF("an hour without a change, Backlight Auto-Off set to never");
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, 0, &buttons));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_BUTTON_CROSS, buttons);
+    TEST_PRINTF("NULL changes nothing");
+    skiff_ui_wake_init(NULL, 0);
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(NULL, now, OFF_MS, &buttons));
+    TEST_ASSERT_EQUAL_INT(0, skiff_ui_wake_filter(&wake, now, OFF_MS, NULL));
+    TEST_ASSERT_EQUAL_HEX(SKIFF_UI_BUTTON_CROSS, buttons);
+}
+
 /* ---- A scrolling list ---- */
 
 static void assert_list(const skiff_ui_list *list, size_t selected, size_t first) {
@@ -554,6 +678,13 @@ int main(void) {
     RUN_TEST(test_a_held_direction_repeats_after_a_delay);
     RUN_TEST(test_buttons_that_are_not_moves_never_repeat);
     RUN_TEST(test_changing_direction_restarts_the_delay);
+    RUN_TEST(test_downloads_shorten_only_a_longer_backlight_time);
+    RUN_TEST(test_a_press_before_the_off_time_passes_through);
+    RUN_TEST(test_the_press_that_lights_the_screen_does_nothing_until_released);
+    RUN_TEST(test_a_press_within_the_margin_counts_as_waking);
+    RUN_TEST(test_a_dark_screen_stays_dark_when_the_off_time_grows);
+    RUN_TEST(test_a_held_button_keeps_the_timer_and_its_release_is_not_held);
+    RUN_TEST(test_a_backlight_that_never_turns_off_holds_nothing);
     RUN_TEST(test_up_and_down_wrap_and_scroll);
     RUN_TEST(test_pages_stop_at_the_ends);
     RUN_TEST(test_a_list_shorter_than_the_screen_never_scrolls);

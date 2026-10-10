@@ -84,6 +84,10 @@ installed. The games themselves stay on the Memory Stick.
   games in name order until one does not fit. Press **Back** while it checks to stop.
 - **Downloads** shows each download's progress, speed and time left. Downloads carry on while you
   browse. A failed download can be retried or cancelled, and **Clear finished** tidies the list.
+- While games download, the screen turns off after a minute without a button press, to save
+  battery; the downloads carry on. Any button lights it again, and that press does nothing else,
+  so you never confirm something you could not see. Once the downloads are done, and when you
+  quit, your own Backlight Auto-Off setting is back. If you set it to Off, Skiff leaves it alone.
 - Games go to the `ISO/` folder of the Memory Stick. Play them from Game → Memory Stick, like any
   game you copied there yourself.
 - Quitting Skiff (HOME, then quit) pauses the downloads; the next start carries on where they

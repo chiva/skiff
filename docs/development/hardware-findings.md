@@ -310,15 +310,15 @@ the 16-bit colour.
 |---|---|
 | Cover from RomM | fetch 211–431 ms (the request alone 199–370 ms), **decode 319–325 ms** at 333 MHz |
 | Cover from the Memory Stick cache | 29–44 ms, no decode, also after quitting and relaunching |
-| Time between frames while covers load | longest 16 ms in every 10 s window with a cover, with or without a download |
+| Time between frames while covers load | no frame over 16 ms from fetching, decoding or caching a cover, with or without a download; the only longer frames in those windows were the details' free-space query (200 ms while a download wrote) and queueing a download (183 ms), both from before covers |
 | Browsing thread stack used | 9,768 of 32,768 bytes (9,328 before covers) |
 | System memory with both threads | 84 KB free (largest block 80 KB), unchanged |
 | Heap | 1.3 MB browsing, 2.7 MB while downloading |
 | Cache | one 68,196-byte file per covered game opened |
 
 Decoding a cover takes about a third of a second, ten times the guess made before measuring, so
-it belongs where it is, on the browsing thread: a cover seen for the first time appears about half
-a second after the game's details, one seen before in about 40 ms. The JPEG cover was refused
+it belongs where it is, on the browsing thread: a cover seen for the first time appears 0.5–0.8 s
+after the game's details (fetch and decode), one seen before in about 40 ms. The JPEG cover was refused
 (210) and left the placeholder; a cover being loaded when the player pressed Back was cancelled
 and dropped.
 

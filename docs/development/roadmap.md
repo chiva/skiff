@@ -72,8 +72,8 @@ on their own thread since (#67).
 
 - **Cover art** ✅: a game's cover beside its details, from RomM's small cover (PNG, decoded and
   scaled on the browsing thread) and kept on the Memory Stick (64 covers, about 4.5 MB). On a
-  PSP-1000 a cover decodes in about 0.3 s, reads back from the Memory Stick in about 40 ms, and no
-  frame takes over 16 ms while one loads. See [Architecture](architecture.md#covers).
+  PSP-1000 a cover decodes in about 0.3 s and reads back from the Memory Stick in about 40 ms, and
+  loading one never holds up the screen. See [Architecture](architecture.md#covers).
 - Favourites and collections, "download all favourites".
 - Backlight dimming during long downloads.
 

@@ -483,6 +483,30 @@ before any network I/O (`SKIFF_ERR_NET_NEEDS_ARK`), checks that the queue file o
 Stick and the log say so and that the thread stops, and ends with `SKIFF JOBS PROBE NO ARK OK`
 (`scripts/dev.sh jobs-probe`, run in CI).
 
+## Backlight probe
+
+`tests/hardware/backlight_probe.c` (`skiff_backlight_probe`, hardware only: it waits for answers)
+checks what Skiff can do about the backlight during a long download from user mode, before it does
+it. The keep-awake tick resets only the auto-sleep timer, so the firmware already dims the screen
+after a minute and turns it off at the player's Backlight Auto-Off setting; the plan is to shorten
+that setting while a download runs (`sceImposeSetBacklightOffTime()`) and put the player's back
+afterwards. Nothing here reads the brightness (`sceDisplayGetBrightness()` is kernel-only in
+pspsdk), so the person holding the PSP answers with Up (yes) or Down (no).
+
+1. **First run** (`SKIFF BACKLIGHT PROBE PART 1 OK`): records the player's off time, sets 30, 60
+   and 120 s and reads each back (`set <v> -> <returned>, reads <v>`), then with 60 s (or 120 s if
+   60 is refused) asks you to leave the PSP alone and press X once the screen has gone dark. It
+   logs whether X reached the probe and asks whether the screen dimmed, went dark and lit again.
+   On battery it then offers the same watch on AC power. It leaves the short setting on purpose
+   and saves yours in `backlight-probe.state` next to the EBOOT.
+2. **Then**: HOME → Quit, look at Settings → Power Save Settings → Backlight Auto-Off, turn the PSP
+   off and on.
+3. **Second run** (`SKIFF BACKLIGHT PROBE OK`): `setting lasted: yes|no` (whether the firmware kept
+   the probe's value across the power cycle), then puts your setting back and removes the state
+   file. Run it again whenever a first run ended early: it always restores.
+
+Read back with `scripts/memstick.sh results`.
+
 ## App smoke test
 
 `skiff_app_smoke` is the app itself (`src/platform/psp/app_main.c`) built with `SKIFF_APP_SMOKE`,

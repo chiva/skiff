@@ -1446,6 +1446,8 @@ static void test_a_cancel_as_the_job_ends_is_not_lost(void) {
 
 static char batch_names[BATCH_MAX][BATCH_NAME_MAX];
 static char batch_paths[BATCH_MAX][TEMP_DIR_PATH_MAX];
+/* A target made from another request's (static: batch keeps pointing at it). */
+static char batch_variant[TEMP_DIR_PATH_MAX + sizeof SKIFF_DOWNLOAD_PART_SUFFIX];
 static skiff_job_request batch[BATCH_MAX];
 static uint32_t batch_ids[BATCH_MAX];
 static char queue_draft[TEMP_DIR_PATH_MAX + sizeof SKIFF_STORAGE_DRAFT_SUFFIX];
@@ -1670,11 +1672,10 @@ static void test_a_batch_queues_a_finished_job_again(void) {
 static void test_two_requests_of_a_batch_never_share_a_target(void) {
     create_counted_jobs();
     make_batch("Clash", 2);
-    char other_case[TEMP_DIR_PATH_MAX];
-    snprintf(other_case, sizeof other_case, "%s", batch_paths[0]);
-    char *name = strrchr(other_case, '/') + 1;
+    snprintf(batch_variant, sizeof batch_variant, "%s", batch_paths[0]);
+    char *name = strrchr(batch_variant, '/') + 1;
     name[0] = (char)(name[0] == 'C' ? 'c' : 'C');
-    batch[1].target = other_case;
+    batch[1].target = batch_variant;
     size_t added = 1;
     TEST_PRINTF("two files of a batch on one path, in another case: %s and %s", batch[0].target,
                 batch[1].target);
@@ -1682,9 +1683,7 @@ static void test_two_requests_of_a_batch_never_share_a_target(void) {
                           skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
     TEST_ASSERT_EQUAL_size_t(0, added);
     TEST_PRINTF("nor one whose target is another's .part file");
-    char sidecar[TEMP_DIR_PATH_MAX + sizeof SKIFF_DOWNLOAD_PART_SUFFIX];
-    snprintf(sidecar, sizeof sidecar, "%s" SKIFF_DOWNLOAD_PART_SUFFIX, batch_paths[0]);
-    batch[1].target = sidecar;
+    snprintf(batch_variant, sizeof batch_variant, "%s" SKIFF_DOWNLOAD_PART_SUFFIX, batch_paths[0]);
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
     TEST_PRINTF("nor one on the path of a job already queued");
@@ -1700,9 +1699,8 @@ static void test_two_requests_of_a_batch_never_share_a_target(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, queue_saves, "a refused batch must not touch the file");
     TEST_PRINTF("a path that only starts with another's shares no file with it");
     make_batch("Prefix", 2);
-    char longer[TEMP_DIR_PATH_MAX + sizeof ".bak"];
-    snprintf(longer, sizeof longer, "%s.bak", batch_paths[0]);
-    batch[1].target = longer;
+    snprintf(batch_variant, sizeof batch_variant, "%s.bak", batch_paths[0]);
+    batch[1].target = batch_variant;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add_many(jobs, batch, 2, batch_ids, &added));
     TEST_ASSERT_EQUAL_size_t(2, added);
     assert_locks_used_well();

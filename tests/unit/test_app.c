@@ -1327,6 +1327,29 @@ static void test_nothing_else_runs_while_download_all_queues(void) {
     TEST_ASSERT_TRUE(shows("Added 3 downloads"));
 }
 
+static void test_download_all_drops_a_library_page_still_loading(void) {
+    open_paired_library(2);
+    serve_favourites(30);
+    serve_page(25, 5, 30);
+    serve_batch_favourites(30);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("scroll to the favourites' second page, held on its way, then START");
+    serve_raw("/api/roms?platform_ids=1&limit=25&offset=25" LIST_QUERY FAVOURITES_FILTER,
+              "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, (int)app->call.kind);
+    frame(SKIFF_UI_ACTION_START);
+    TEST_ASSERT_EQUAL_INT(1, env_state.cancels);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_PRINTF("the page's failure showed no error; the batch asks as usual");
+    TEST_ASSERT_TRUE(shows("Download 29 favourites"));
+}
+
 static void test_back_while_favourites_are_checked_stops_download_all(void) {
     open_favourites(3);
     serve_batch_favourites(3);
@@ -2631,6 +2654,7 @@ int main(void) {
     RUN_TEST(test_a_game_that_cannot_be_planned_is_named_apart_from_a_full_queue);
     RUN_TEST(test_a_favourite_repeated_across_pages_is_taken_once);
     RUN_TEST(test_nothing_else_runs_while_download_all_queues);
+    RUN_TEST(test_download_all_drops_a_library_page_still_loading);
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);

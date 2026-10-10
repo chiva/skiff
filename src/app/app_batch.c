@@ -29,6 +29,17 @@ void app_batch_start(skiff_app *app) {
     if (app->batch.step != BATCH_NONE) {
         return;
     }
+    /* The batch's calls are the only ones while it runs: a library page still on its way is
+     * dropped (its error would otherwise show over the batch), and loads again afterwards. */
+    if (app_call_busy(app) && app->call.kind == CALL_PAGE) {
+        app_call_abandon(app);
+    }
+    if (app->request == REQUEST_PAGE) {
+        app->request = REQUEST_NONE;
+    }
+    if (app->failed_request == REQUEST_PAGE) {
+        app->failed_request = REQUEST_NONE;
+    }
     app_batch *batch = &app->batch;
     memset(batch, 0, offsetof(app_batch, games));
     app_queue_refresh(app);

@@ -544,6 +544,14 @@ decoded picture (about 70 KB) is what the Memory Stick cache will keep.
   the chunks after the picture are read too. Rows are otherwise streamed through the scaler, so a
   cover never exists whole at full size. libpng's state lives on the heap, not the calling
   thread's stack, and its errors come back as codes, never on stderr or as an abort.
+- **Cached on the Memory Stick** in 64 slot files, `app:/covers/<rom_id % 64>.cov`: about 4.5 MB
+  at most by construction, with no index to keep and no folder to list, and no text from RomM in a
+  file name. A slot names the cover it holds (ROM id, CRC-32 of the server address and of the cover
+  path with RomM's `?ts=`), so another ROM sharing the slot, another server or a changed cover is a
+  miss and is overwritten; a header with the box size and a CRC-32 over the whole file turns a cut
+  or edited file into a miss too, never garbage on screen. A hit is one read of about 68 KB. Writes
+  are one write without a sync (a lost cover is fetched again), and a new slot file needs 16 MB
+  free beyond the 8 MB margin, so covers never take the last of the Memory Stick from downloads.
 - **Tested** with PNGs written in memory by libpng's writer (every colour type and bit depth,
   interlaced, transparent, cut, and thousands of corrupted copies, some with their CRCs repaired so
   the damage reaches the decoder) under ASan and UBSan; the self-test decodes a 2×2 PNG on the PSP.

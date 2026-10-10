@@ -16,6 +16,8 @@
 #include <stdint.h>
 
 #include "skiff/error.h"
+#include "skiff/storage.h"
+#include "skiff/storage_paths.h"
 
 /* The box a cover is fitted into on the details screen, in pixels: the cover keeps its shape, so
  * one side may be shorter. A cover smaller than the box keeps its size. */
@@ -59,5 +61,54 @@ skiff_err skiff_cover_decode_png(const unsigned char *data, size_t size, skiff_c
 
 /* One RGB colour as a GU_PSM_5650 pixel. */
 uint16_t skiff_cover_rgb565(uint8_t red, uint8_t green, uint8_t blue);
+
+/* ---- The Memory Stick cache ---- */
+
+/*
+ * Decoded covers are kept in SKIFF_COVER_CACHE_SLOTS files, "app:/covers/<rom_id % slots>.cov",
+ * so the cache is bounded by construction (about 4.5 MB), needs no index and no folder listing, and
+ * no text from RomM reaches a file name. Two ROMs sharing a slot evict each other. Each file names
+ * the cover it holds (ROM, server, cover path with RomM's "?ts=", so a changed cover misses) and
+ * ends a CRC-32 over all of it: a file cut by a power loss or written by another server reads as a
+ * miss and is overwritten. Writes are not synced: a lost cover is fetched again.
+ */
+#define SKIFF_COVER_CACHE_FOLDER SKIFF_STORAGE_ROOT_APP "/covers"
+#define SKIFF_COVER_CACHE_SLOTS 64
+#define SKIFF_COVER_CACHE_EXTENSION ".cov"
+/* Free space a new slot file leaves on top of SKIFF_STORAGE_FREE_MARGIN_BYTES: covers never take
+ * the last of the Memory Stick from downloads. */
+#define SKIFF_COVER_CACHE_ROOM_BYTES ((uint64_t)16 * 1024 * 1024)
+
+/* Which cover a slot file holds. */
+typedef struct skiff_cover_key {
+    uint64_t rom_id;
+    /* CRC-32 of the server address: ROM ids repeat across servers. */
+    uint32_t server;
+    /* CRC-32 of the cover path RomM gave, "?ts=" included. */
+    uint32_t cover_path;
+} skiff_cover_key;
+
+/* The key of rom_id's cover at cover_path on the server at base_url. */
+skiff_cover_key skiff_cover_key_of(const char *base_url, uint64_t rom_id, const char *cover_path);
+
+/*
+ * Reads key's cover from its slot into out. SKIFF_ERR_STORAGE_NOT_FOUND when the slot is empty or
+ * holds another cover; SKIFF_ERR_ROMM_COVER_DAMAGED when the file is not a whole cover (cut,
+ * changed, from another Skiff version); otherwise the storage's error. out is all zero unless
+ * SKIFF_OK.
+ */
+skiff_err skiff_cover_cache_load(skiff_storage *storage, const skiff_storage_roots *roots,
+                                 const skiff_cover_key *key, skiff_cover *out);
+
+/*
+ * Writes cover into key's slot, replacing whatever it held, and creates the folder first. A slot
+ * file that does not exist yet is only made with SKIFF_COVER_CACHE_ROOM_BYTES free beyond the
+ * margin (SKIFF_ERR_STORAGE_NO_SPACE otherwise); replacing one never takes more room. A device that
+ * cannot report its free space is written to anyway. SKIFF_ERR_INVALID_ARG for a NULL argument or a
+ * cover larger than the box; otherwise the storage's error, and the slot may then hold a cut file,
+ * which loads as damaged.
+ */
+skiff_err skiff_cover_cache_store(skiff_storage *storage, const skiff_storage_roots *roots,
+                                  const skiff_cover_key *key, const skiff_cover *cover);
 
 #endif

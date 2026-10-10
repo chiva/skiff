@@ -73,6 +73,7 @@ add_library(
   src/core/error.c
   src/core/selftest.c
   src/core/version.c
+  src/cover/cache.c
   src/cover/decode.c
   src/i18n/i18n.c
   src/install/install.c

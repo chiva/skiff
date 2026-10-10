@@ -37,6 +37,8 @@ readonly TEST_SERVER_TLS_PORT=8443
 readonly APP_QUEUE="queue.json"
 readonly APP_MANIFEST="installed.json"
 readonly APP_FILES=("$APP_MANIFEST" "$APP_QUEUE")
+# The app's cover cache (src/cover/cache.c): decoded covers, one file per slot.
+readonly APP_COVERS="covers"
 # A download in progress keeps these next to its target (include/skiff/download.h).
 readonly DOWNLOAD_SUFFIXES=(.part .resume)
 # A save cut short leaves the file's next version beside it, which the app's next load finishes
@@ -442,6 +444,14 @@ print_results() {
           echo
         fi
       done
+      local covers="$GAME_DIR/${FOLDERS[$i]}/$APP_COVERS"
+      if [[ -d "$covers" ]]; then
+        local count bytes
+        count="$(find "$covers" -maxdepth 1 -name '*.cov' -type f | wc -l | tr -d ' ')"
+        bytes="$(du -sk "$covers" | cut -f1)"
+        echo "-- $APP_COVERS/: $count cover file(s), ${bytes} KB"
+        echo
+      fi
       if [[ -f "$result" ]]; then
         echo "-- $RESULT_FILE (the launch check, a game Skiff downloaded)"
         print_file "$result"

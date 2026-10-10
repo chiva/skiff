@@ -10,10 +10,12 @@ the seed has no metadata providers, so it is the only cover. RomM keeps the uplo
 cover and resizes it into the small one Skiff shows. The extra ROM gets none: every ROM update in
 RomM 5.3.1 also cleans the file's name on disk, which would drop the '+' its name is there for.
 
-With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware session (A1):
-that many small numbered ROMs (several pages), a file the app cannot install (.zip), a name with a
-control character and a name too long for the Memory Stick. Files already in the platform's folder are scanned too: scripts/dev.sh
-copies the launch check's disc images there first (tests/hardware/make_launch_disc.py).
+With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware sessions (A1,
+A2): that many small numbered ROMs (several pages), every third with a PNG cover of its own and
+Skiff Library 02 with a JPEG one; a file the app cannot install (.zip), a name with a control
+character and a name too long for the Memory Stick. Files already in the platform's folder are
+scanned too: scripts/dev.sh copies the launch check's disc images there first
+(tests/hardware/make_launch_disc.py).
 
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
 SKIFF_LIBRARY_ROMS (optional).
@@ -72,6 +74,10 @@ SCAN_TIMEOUT_SECONDS = 120
 COVER_SIZE = (600, 800)
 COVER_NOISE = 32
 COVER_SEED = 2026
+# The hardware library (SKIFF_LIBRARY_ROMS): every third numbered ROM gets a PNG cover of its own,
+# and one a JPEG cover, which Skiff shows as a placeholder (it decodes PNG only).
+LIBRARY_COVER_EVERY = 3
+LIBRARY_JPEG_COVER_INDEX = 2
 COVER_LABEL = "SKIFF SYNTHETIC COVER"
 COVER_LABEL_BOX = (60, 60, 540, 200)
 COVER_LABEL_AT = (80, 110)
@@ -139,9 +145,9 @@ def request(method, path, auth, body=None):
         return error.code, None
 
 
-def cover_png():
-    """A synthetic PNG cover, the same bytes on every run."""
-    noise = random.Random(COVER_SEED)
+def cover_image(seed=COVER_SEED, image_format="PNG"):
+    """A synthetic cover (PNG or JPEG), the same bytes on every run for a seed."""
+    noise = random.Random(seed)
     width, height = COVER_SIZE
     image = Image.new("RGB", COVER_SIZE)
     pixels = image.load()
@@ -157,18 +163,19 @@ def cover_png():
     draw.rectangle(COVER_LABEL_BOX, fill=(250, 250, 250))
     draw.text(COVER_LABEL_AT, COVER_LABEL, fill=(0, 0, 0))
     out = io.BytesIO()
-    image.save(out, "PNG")
+    image.save(out, image_format)
     return out.getvalue()
 
 
-def set_cover(auth, rom_id, fs_name):
+def set_cover(auth, rom_id, fs_name, seed=COVER_SEED, jpeg=False):
     """Upload a synthetic cover as the ROM's custom artwork; returns RomM's small cover path. RomM
     also cleans the ROM's file name on disk, so only a ROM whose name is already clean may get one."""
+    extension, content_type = ("jpg", "image/jpeg") if jpeg else ("png", "image/png")
     body = (
         f"--{MULTIPART_BOUNDARY}\r\n"
-        'Content-Disposition: form-data; name="artwork"; filename="cover.png"\r\n'
-        "Content-Type: image/png\r\n\r\n"
-    ).encode() + cover_png() + f"\r\n--{MULTIPART_BOUNDARY}--\r\n".encode()
+        f'Content-Disposition: form-data; name="artwork"; filename="cover.{extension}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode() + cover_image(seed, "JPEG" if jpeg else "PNG") + f"\r\n--{MULTIPART_BOUNDARY}--\r\n".encode()
     req = urllib.request.Request(f"{API}/api/roms/{rom_id}", data=body, method="PUT")
     req.add_header("Authorization", auth)
     req.add_header("Content-Type", f"multipart/form-data; boundary={MULTIPART_BOUNDARY}")
@@ -288,6 +295,19 @@ def find_roms(auth, names):
     return platform["id"], ids
 
 
+def set_library_covers(auth, count):
+    """Covers for the hardware library's numbered ROMs: PNG on every third, JPEG on one."""
+    names = {
+        index: LIBRARY_NAME_FORMAT.format(index=index)
+        for index in range(1, count + 1)
+        if index % LIBRARY_COVER_EVERY == 1 or index == LIBRARY_JPEG_COVER_INDEX
+    }
+    _, ids = find_roms(auth, list(names.values()))
+    for (index, name), rom_id in zip(names.items(), ids):
+        set_cover(auth, rom_id, name, COVER_SEED + index, jpeg=index == LIBRARY_JPEG_COVER_INDEX)
+    log(f"library covers: {len(names)} ROMs ({LIBRARY_JPEG_COVER_INDEX:02d} as JPEG)")
+
+
 def create_token(auth):
     status, token = request(
         "POST", "/api/client-tokens", auth, {"name": TOKEN_NAME, "scopes": TOKEN_SCOPES}
@@ -318,6 +338,8 @@ def main():
     if library:
         log(f"library: {len(library)} more files, and every other file in {LIBRARY_DIR}")
     payload["cover_path"] = set_cover(auth, rom_id, PAYLOAD_NAME)
+    if library:
+        set_library_covers(auth, library_roms)
     extra["rom_id"] = extra_rom_id
     print(
         json.dumps(

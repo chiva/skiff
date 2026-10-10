@@ -3,6 +3,8 @@
 #include <pspdisplay.h>
 #include <pspkernel.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "skiff/app.h"
 #include "skiff/i18n.h"
@@ -110,6 +112,54 @@ static int smoke_calls(smoke *s, skiff_psp_app *platform) {
     skiff_psp_report_line_offscreen(&s->report, line);
     return counted && cancelled;
 }
+
+/* A cover as the details screen draws it: a red square from a 5650 texture, read back from the
+ * frame. PPSSPP's software renderer draws what the GE would. */
+#define SMOKE_COVER_SIDE 16
+#define SMOKE_COVER_X 100
+#define SMOKE_COVER_Y 100
+#define SMOKE_RGB_MASK 0x00FFFFFFU
+/* Full red in the 8888 frame buffer (ABGR). */
+#define SMOKE_RED 0x000000FFU
+
+static int smoke_cover(smoke *s, skiff_psp_app *platform) {
+    skiff_cover *cover = aligned_alloc(SKIFF_COVER_ALIGNMENT, sizeof *cover);
+    if (cover == NULL) {
+        skiff_psp_report_line_offscreen(&s->report, "cover texture: no memory");
+        return 0;
+    }
+    memset(cover, 0, sizeof *cover);
+    cover->width = SMOKE_COVER_SIDE;
+    cover->height = SMOKE_COVER_SIDE;
+    for (int y = 0; y < SMOKE_COVER_SIDE; y++) {
+        for (int x = 0; x < SMOKE_COVER_SIDE; x++) {
+            cover->pixels[y * SKIFF_COVER_WIDTH + x] = skiff_cover_rgb565(0xFF, 0, 0);
+        }
+    }
+    skiff_psp_ui_begin_frame(&platform->ui);
+    skiff_psp_ui_cover(&platform->ui, SMOKE_COVER_X, SMOKE_COVER_Y, cover);
+    skiff_psp_ui_end_frame(&platform->ui);
+    const uint32_t *frame = skiff_psp_ui_drawn_frame(&platform->ui);
+    int red = 0;
+    for (int y = 0; y < SMOKE_COVER_SIDE; y++) {
+        for (int x = 0; x < SMOKE_COVER_SIDE; x++) {
+            const uint32_t pixel =
+                frame[(SMOKE_COVER_Y + y) * SKIFF_PSP_UI_BUFFER_WIDTH + SMOKE_COVER_X + x];
+            red += (pixel & SMOKE_RGB_MASK) == SMOKE_RED;
+        }
+    }
+    const uint32_t beside =
+        frame[SMOKE_COVER_Y * SKIFF_PSP_UI_BUFFER_WIDTH + SMOKE_COVER_X + SMOKE_COVER_SIDE];
+    skiff_psp_ui_present(&platform->ui);
+    free(cover);
+    const int ok =
+        red == SMOKE_COVER_SIDE * SMOKE_COVER_SIDE && (beside & SMOKE_RGB_MASK) != SMOKE_RED;
+    char line[SKIFF_TEXT_MAX];
+    snprintf(line, sizeof line, "cover texture: %d of %d pixels red, beside it %08lx: %s", red,
+             SMOKE_COVER_SIDE * SMOKE_COVER_SIDE, (unsigned long)beside, ok ? "ok" : "FAILED");
+    skiff_psp_report_line_offscreen(&s->report, line);
+    return ok;
+}
 #endif
 
 #ifndef SKIFF_APP_SMOKE
@@ -174,6 +224,9 @@ int main(int argc, char *argv[]) {
 #ifdef SKIFF_APP_SMOKE
     if (s.ok) {
         s.ok = smoke_calls(&s, &platform);
+    }
+    if (s.ok) {
+        s.ok = smoke_cover(&s, &platform);
     }
 #endif
     const int released = skiff_psp_app_finish(&platform);

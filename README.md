@@ -25,13 +25,14 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 
 ## What it will do
 
-| | First release | Later |
+| | Now | Later |
 |---|---|---|
 | Browse your RomM PSP library with installed / not installed status | ✅ | |
 | Download PSP games (ISO, CSO) to `ms0:/ISO/`, resuming broken downloads | ✅ | |
 | Pair with RomM by approving a code in the web UI (no typing tokens) | ✅ | |
 | HTTPS, your own certificate authority, and client certificates (mTLS) | ✅ | |
-| Cover art, favourites, "download all my favourites" | | ✅ |
+| Cover art beside each game's details, kept on the Memory Stick (0.3.0) | ✅ | |
+| Favourites, collections, "download all my favourites" | | ✅ |
 | PS1 games | | ✅ |
 | Sync PSP saves with RomM (works with RomM's web player and PPSSPP) | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |

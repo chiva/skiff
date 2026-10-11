@@ -438,7 +438,7 @@ device grant):
    `name` "Skiff on PSP", `client` "skiff", `platform` "psp", `client_version` and the scopes Skiff
    asks for: `platforms.read` and `roms.read`, all that browsing and downloading need (checked
    against RomM 5.3.1), favourites included, so the token on the Memory Stick can only read. Save
-   sync (Phase 5) needs `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair
+   sync (Phase 4) needs `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair
    again, and collections (`collections.read`) wait for that pairing rather than ask for a second. RomM answers
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`

@@ -33,8 +33,8 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | HTTPS, your own certificate authority, and client certificates (mTLS) | ✅ | |
 | Cover art beside each game's details, kept on the Memory Stick (0.3.0) | ✅ | |
 | Favourites, collections, "download all my favourites" | | ✅ |
-| PS1 games | | ✅ |
 | Sync PSP saves with RomM (works with RomM's web player and PPSSPP) | | ✅ |
+| PS1 games | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |
 
 ## What you need

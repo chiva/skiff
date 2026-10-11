@@ -28,7 +28,7 @@ enum {
 /*
  * What Skiff asks RomM for: browsing the platforms and ROMs and downloading them (roms.read covers
  * a file's content), nothing more, so the token on a removable Memory Stick can only read. Save
- * sync (Phase 5) needs devices.* and, in RomM 5.3.1, assets.* too: it will ask the player to pair
+ * sync (Phase 4) needs devices.* and, in RomM 5.3.1, assets.* too: it will ask the player to pair
  * again for them. RomM's approval page lists the scopes and the player may grant fewer; Skiff
  * cannot work without any of these, so a token missing one is refused rather than saved.
  */

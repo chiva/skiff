@@ -79,21 +79,21 @@ on their own thread since (#67).
   pairing), and START queues every favourite that fits, with one save of the queue. On a PSP-1000,
   checking 36 favourites takes about half a second and queueing 34 of them holds up the screen
   for one frame at most. See [Hardware findings](hardware-findings.md#favourites).
-  **Collections** need `collections.read`: they come with Phase 5's pairing again rather than ask
+  **Collections** need `collections.read`: they come with Phase 4's pairing again rather than ask
   players to pair twice.
 - **Screen off during downloads**: while games download, the firmware turns the backlight off after
   60 s without a press instead of the player's 2, 5 or 10 minutes (a player's Off is left alone),
   and the press that lights it again does nothing else. Waiting for hardware run B5.
 
-## Phase 4: PS1
-
-Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device packaging),
-then add the PS1 installer.
-
-## Phase 5: Save sync
+## Phase 4: Save sync
 
 PSP saves to and from RomM via argosy-sigil and `/api/sync/negotiate`, compatible with RomM's web
 player and PPSSPP. No silent overwrites.
+
+## Phase 5: PS1
+
+Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device packaging),
+then add the PS1 installer.
 
 ## Phase 6: More systems
 

@@ -740,6 +740,19 @@ installs left out, as a stored zip identical to argosy-sigil's (checked against 
 cannot represent (307). It computes RomM's `content_hash` with its own MD5 (RFC 1321), since Mbed
 TLS's PSA hashes need `psa_crypto_init()`, and so ARK, first.
 
+Restores, backups and the sync baseline live there too (`saves_restore.h`, `saves_sync.h`). A
+restore never changes a live folder before a crash-safe journal says how to finish it: the unit is
+checked and extracted to `app:/saves-work/stage/`, the live folders are backed up as a unit
+(`app:/saves-backup/<id>/<n>.zip`, three per game and 32 MiB in all, numbered across games so the
+oldest goes first without a clock), the journal is written, and only then are the live folders
+replaced, file by file, each synced. `skiff_saves_recover()` finishes a restore cut short from its
+stage at launch (notice 308), or leaves the saves alone when the stage is gone (309, the backup
+holds the old save). Installs are never touched, folders match ignoring case, and a folder reaches
+rmdir only once emptied. `app:/saves.json` keeps Skiff's own baseline per game, and
+`skiff_saves_decide()` picks each game's transfer from hashes alone: never a download over a local
+change, never an upload over a server change, and always a question before an empty unit is
+restored.
+
 ## Testing seams
 
 - `net/` exposes a `transport` interface (`include/skiff/transport.h`). Host tests use a fake

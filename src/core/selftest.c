@@ -887,7 +887,7 @@ static const char *const SELFTEST_RESTORE_OUTPUTS[] = {
     "/app/saves-work/journal",
     "/app/saves-backup/" SKIFF_SELFTEST_SAVES_TARGET "/1.zip.tmp",
     "/app/saves-backup/" SKIFF_SELFTEST_SAVES_TARGET "/1.zip",
-    "/app/saves-backup/" SKIFF_SELFTEST_SAVES_TARGET,
+    ("/app/saves-backup/" SKIFF_SELFTEST_SAVES_TARGET),
     "/app/saves-backup",
 };
 

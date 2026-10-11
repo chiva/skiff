@@ -60,6 +60,9 @@ typedef struct journal {
 } journal;
 
 typedef struct listing {
+    /* Only names starting with this, ignoring case (a game's folders in the save root, which may
+     * hold hundreds of other entries), or every name (NULL). */
+    const char *prefix;
     size_t count;
     /* A name too long to list, or more than LISTING_MAX entries: the folder cannot be emptied
      * safely, since not every entry was seen. */
@@ -101,6 +104,9 @@ static int is_gone(skiff_err err) { return err == SKIFF_OK || err == SKIFF_ERR_S
 
 static skiff_storage_list_step note_entry(void *ctx, const skiff_storage_entry *entry) {
     listing *l = ctx;
+    if (l->prefix != NULL && !saves_has_prefix(entry->name, l->prefix)) {
+        return SKIFF_STORAGE_LIST_CONTINUE;
+    }
     if (l->count == LISTING_MAX) {
         l->incomplete = 1;
         return SKIFF_STORAGE_LIST_STOP;
@@ -111,8 +117,10 @@ static skiff_storage_list_step note_entry(void *ctx, const skiff_storage_entry *
     return SKIFF_STORAGE_LIST_CONTINUE;
 }
 
-/* Lists the folder at the device path into l, again when the listing fails part-way. */
-static skiff_err list_folder(restorer *r, const char *path, listing *l) {
+/* Lists the folder at the device path into l (only names starting with prefix, unless NULL),
+ * again when the listing fails part-way. */
+static skiff_err list_folder(restorer *r, const char *path, const char *prefix, listing *l) {
+    l->prefix = prefix;
     skiff_err err = SKIFF_ERR_STORAGE_IO;
     for (int attempt = 0; attempt < ATTEMPTS && err == SKIFF_ERR_STORAGE_IO; attempt++) {
         l->count = 0;
@@ -128,7 +136,7 @@ static skiff_err list_folder(restorer *r, const char *path, listing *l) {
  * or an entry that could not be listed: nothing is removed then. SKIFF_ERR_STORAGE_NOT_FOUND for a
  * missing folder. */
 static skiff_err clear_files(restorer *r, const char *path) {
-    skiff_err err = list_folder(r, path, &r->files);
+    skiff_err err = list_folder(r, path, NULL, &r->files);
     if (err != SKIFF_OK) {
         return err;
     }
@@ -167,7 +175,7 @@ static skiff_err remove_stage(restorer *r) {
     char child[SKIFF_STORAGE_PATH_MAX];
     skiff_err err = resolve(r, SKIFF_SAVES_STAGE_FOLDER, stage);
     if (err == SKIFF_OK) {
-        err = list_folder(r, stage, &r->folders);
+        err = list_folder(r, stage, NULL, &r->folders);
     }
     if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
         return SKIFF_OK;
@@ -675,11 +683,16 @@ static skiff_err plan(restorer *r, const char *save_target, skiff_saves_restore_
     char root[SKIFF_STORAGE_PATH_MAX];
     skiff_err err = resolve(r, SKIFF_STORAGE_ROOT_SAVES, root);
     if (err == SKIFF_OK) {
-        err = list_folder(r, root, &r->folders);
+        err = list_folder(r, root, save_target, &r->folders);
     }
     if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
         r->folders.count = 0;
         err = SKIFF_OK;
+    }
+    /* Every one of the game's names must be seen, or an install could pass for a missing folder;
+     * a name too long to list cannot be a save folder's and is ignored, as the collect does. */
+    if (err == SKIFF_OK && r->folders.count == LISTING_MAX) {
+        err = SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE;
     }
     const skiff_saves_unit *in = r->incoming;
     for (size_t i = 0; err == SKIFF_OK && i < in->folder_count; i++) {

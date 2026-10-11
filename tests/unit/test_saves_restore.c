@@ -47,6 +47,8 @@
 /* 11 MiB: three of them pass the 32 MiB cap on backups. */
 #define BIG_BACKUP_BYTES ((size_t)11 * 1024 * 1024)
 #define CHUNK_BYTES ((size_t)64 * 1024)
+/* Other games' folders in the save root: more than one listing of the restore keeps. */
+#define OTHER_FOLDERS 300
 
 static char dir[TEMP_DIR_PATH_MAX];
 static skiff_storage *posix;
@@ -373,6 +375,26 @@ static void test_an_install_is_never_touched_even_when_the_unit_carries_it(void)
     assert_text(NEW_DATA00, SAVES "/" DATA00 "/DATA.BIN");
     assert_others_untouched();
     assert_work_clean();
+}
+
+/* A Memory Stick full of other games' saves: the install is still found among them, however far
+ * down the listing it comes. */
+static void test_an_install_is_found_among_hundreds_of_other_folders(void) {
+    for (int i = 0; i < OTHER_FOLDERS; i++) {
+        char folder[SKIFF_STORAGE_PATH_MAX];
+        snprintf(folder, sizeof folder, "%s/ULUS%05dDATA00", SAVES, i);
+        put_folder(folder);
+    }
+    put_live();
+    put_folder(SOURCE "/" DATA00);
+    put_text(SOURCE "/" DATA00 "/DATA.BIN", NEW_DATA00);
+    put_folder(SOURCE "/" INSTALL);
+    put_text(SOURCE "/" INSTALL "/GAME.BIN", "a unit's own copy");
+    write_source_unit();
+    skiff_saves_restore_report report;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, restore_on(&storage.base, &report));
+    TEST_ASSERT_EQUAL_size_t(1, report.installs_kept);
+    assert_others_untouched();
 }
 
 /* An empty unit (22 bytes): the save was deleted elsewhere. Restoring it removes the game's save
@@ -1004,6 +1026,7 @@ int main(void) {
     RUN_TEST(test_a_restore_of_the_same_unit_twice_ends_the_same);
     RUN_TEST(test_live_folders_match_the_unit_ignoring_case);
     RUN_TEST(test_an_install_is_never_touched_even_when_the_unit_carries_it);
+    RUN_TEST(test_an_install_is_found_among_hundreds_of_other_folders);
     RUN_TEST(test_an_empty_unit_removes_the_save_folders_after_a_backup);
     RUN_TEST(test_a_game_without_saves_gets_the_unit_and_no_backup);
     RUN_TEST(test_a_full_memory_stick_is_refused_before_anything_is_written);

@@ -14,9 +14,9 @@ enum { BODY_MAX = 8192, RESUME_OFFSET = 1000 };
 
 /* Recorded from the integration RomM with a 4096-byte synthetic file. */
 #define CONTENT_PATH "/api/roms/1/content/Skiff%20Test%20Payload.iso"
-#define CONTENT_ETAG "\"6ac9be68-1000\""
+#define CONTENT_ETAG "\"6acba45e-1000\""
 #define CONTENT_BYTES 4096U
-#define HEARTBEAT_BYTES 1351U
+#define HEARTBEAT_BYTES 1570U
 
 typedef struct body_sink {
     unsigned char bytes[BODY_MAX];
@@ -90,7 +90,7 @@ static void test_replays_a_recorded_json_response(void) {
     TEST_ASSERT_EQUAL_INT64(200, response.status);
     TEST_ASSERT_EQUAL_UINT64(HEARTBEAT_BYTES, response.body_bytes);
     TEST_ASSERT_FALSE_MESSAGE(response.has_content_length, "recorded with chunked encoding");
-    TEST_ASSERT_NOT_NULL(strstr((const char *)sink.bytes, "\"VERSION\":\"5.3.1\""));
+    TEST_ASSERT_NOT_NULL(strstr((const char *)sink.bytes, "\"VERSION\":\"5.4.0\""));
 }
 
 static void test_replays_a_download_in_chunks_with_its_etag(void) {

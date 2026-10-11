@@ -34,7 +34,7 @@
 #define SKIFF_ROMM_MIN_MINOR 3
 /* The newest RomM release line Skiff was tested against; a newer one gets a one-time notice. */
 #define SKIFF_ROMM_TESTED_MAJOR 5
-#define SKIFF_ROMM_TESTED_MINOR 3
+#define SKIFF_ROMM_TESTED_MINOR 4
 
 /* ROMs per page. An unidentified ROM is about 2.6 KB of JSON and one with metadata (summary,
  * alternative names, screenshots) several times that, so 25 keeps a page well under the body cap

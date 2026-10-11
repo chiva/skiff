@@ -1,5 +1,5 @@
 /*
- * Pairing with RomM (skiff/romm_pairing.h) against the fake transport replaying RomM 5.3.1's
+ * Pairing with RomM (skiff/romm_pairing.h) against the fake transport replaying RomM 5.4.0's
  * answers to the device-code flow (tests/fixtures/romm/device-*.http, recorded by
  * tests/integration/record-pairing-fixtures.sh with every code, token and id made synthetic): the
  * start, pending, slow_down, the approved token, a refused and an expired pairing, and every way an

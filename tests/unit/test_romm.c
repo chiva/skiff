@@ -1,6 +1,6 @@
 /*
  * The RomM client (skiff/romm.h) against the fake transport replaying responses recorded from RomM
- * 5.3.1 (tests/fixtures/romm/): the version policy, the PSP platform, two pages of one ROM and the
+ * 5.4.0 (tests/fixtures/romm/): the version policy, the PSP platform, two pages of one ROM and the
  * empty page after them, a ROM's files and cover, download URLs that survive any file name, and
  * cover URLs that only ever lead to RomM's own pictures. Every way a
  * response can be wrong (a proxy's login page, a cut or oversized body, a field that does not fit)
@@ -90,7 +90,9 @@ static void test_the_version_policy(void) {
         {"5.3.0", SKIFF_OK, 1, 0},
         {"5.3", SKIFF_OK, 1, 0},
         {"5.3.2-beta.1", SKIFF_OK, 1, 0},
-        {"5.4.0", SKIFF_OK, 1, 1},
+        {"5.4.0", SKIFF_OK, 1, 0},
+        {"5.4.1-beta.1", SKIFF_OK, 1, 0},
+        {"5.5.0", SKIFF_OK, 1, 1},
         {"5.10.0", SKIFF_OK, 1, 1},
         {"6.0.0", SKIFF_OK, 1, 1},
         {"5.2.9", SKIFF_ERR_ROMM_UNSUPPORTED_VERSION, 1, 0},
@@ -122,7 +124,7 @@ static void test_heartbeat_reads_the_recorded_version_without_the_token(void) {
     serve_fixture("/api/heartbeat", "romm/heartbeat.http");
     skiff_romm_server server;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_heartbeat(&client, &server));
-    TEST_ASSERT_EQUAL_STRING("5.3.1", server.version);
+    TEST_ASSERT_EQUAL_STRING("5.4.0", server.version);
     TEST_ASSERT_EQUAL_INT(0, server.newer_than_tested);
     TEST_PRINTF("request headers: '%s'", fake.log[0].headers);
     TEST_ASSERT_NULL(strstr(fake.log[0].headers, TOKEN));

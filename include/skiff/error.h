@@ -53,6 +53,9 @@
       "File is larger than 4 GB, which the PSP cannot store")                                      \
     X(SKIFF_ERR_STORAGE_NAME_TAKEN, 305,                                                           \
       "A file Skiff did not install already has this game's name")                                 \
+    X(SKIFF_ERR_STORAGE_SAVE_DAMAGED, 306, "A save is damaged or unsafe, so Skiff did not use it") \
+    X(SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE, 307,                                                      \
+      "A save folder on the Memory Stick holds something Skiff cannot sync")                       \
     X(SKIFF_ERR_CONFIG_PARSE, 400, "The settings file is damaged")                                 \
     X(SKIFF_ERR_CONFIG_MISSING_KEY, 401, "A required setting is missing")                          \
     X(SKIFF_ERR_CONFIG_INVALID_VALUE, 402, "A setting has an invalid value")

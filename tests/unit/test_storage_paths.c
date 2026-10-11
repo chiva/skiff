@@ -418,6 +418,22 @@ static void test_a_name_shortened_into_a_dos_device_still_gets_its_mark(void) {
     TEST_ASSERT_EQUAL_STRING("_COM1.txt", out);
 }
 
+static void test_dos_device_names_are_recognised_in_any_case_and_with_an_extension(void) {
+    static const char *const DEVICES[] = {"CON", "prn", "Aux.txt", "NUL  .bin", "COM9", "lpt1.x"};
+    static const char *const NAMES[] = {"CONSOLE", "COM10", "LPT", "XCON", "COM0", ""};
+    for (size_t i = 0; i < sizeof DEVICES / sizeof DEVICES[0]; i++) {
+        TEST_PRINTF("\"%s\" is a device", DEVICES[i]);
+        TEST_ASSERT_TRUE(skiff_storage_is_dos_device(DEVICES[i], strlen(DEVICES[i])));
+    }
+    for (size_t i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
+        TEST_PRINTF("\"%s\" is not", NAMES[i]);
+        TEST_ASSERT_FALSE(skiff_storage_is_dos_device(NAMES[i], strlen(NAMES[i])));
+    }
+    TEST_PRINTF("only the first length bytes count: \"CONSOLE\" cut to 3 is CON");
+    TEST_ASSERT_TRUE(skiff_storage_is_dos_device("CONSOLE", 3));
+    TEST_ASSERT_FALSE(skiff_storage_is_dos_device(NULL, 3));
+}
+
 static void test_input_limits_and_arguments(void) {
     char text[SKIFF_STORAGE_NAME_INPUT_MAX + 2];
     memset(text, 'x', sizeof text);
@@ -471,6 +487,7 @@ int main(void) {
     RUN_TEST(test_names_that_clean_to_nothing_are_refused);
     RUN_TEST(test_long_names_keep_their_extension_and_whole_characters);
     RUN_TEST(test_a_name_shortened_into_a_dos_device_still_gets_its_mark);
+    RUN_TEST(test_dos_device_names_are_recognised_in_any_case_and_with_an_extension);
     RUN_TEST(test_input_limits_and_arguments);
     RUN_TEST(test_a_safe_name_resolves_under_its_root);
     return UNITY_END();

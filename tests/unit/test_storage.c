@@ -108,6 +108,27 @@ static void test_write_at_past_the_end_or_on_a_missing_file_is_refused(void) {
                           skiff_storage_open(storage, other, SKIFF_FILE_READ, 0, &file));
 }
 
+static void test_read_starts_at_an_offset_within_the_file(void) {
+    skiff_file *file = NULL;
+    char text[CONTENT_BYTES + 1];
+    size_t got = 0;
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_open(storage, path, SKIFF_FILE_READ, 4, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_read(file, text, sizeof text, &got));
+    text[got] = '\0';
+    TEST_PRINTF("from offset 4: \"%s\"", text);
+    TEST_ASSERT_EQUAL_STRING("456789", text);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_open(storage, path, SKIFF_FILE_READ, CONTENT_BYTES, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_read(file, text, sizeof text, &got));
+    TEST_ASSERT_EQUAL_size_t(0, got);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_open(storage, path, SKIFF_FILE_READ,
+                                                                    CONTENT_BYTES + 1, &file));
+    TEST_ASSERT_NULL(file);
+}
+
 static void test_missing_files_are_not_found(void) {
     uint64_t size = 1;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, skiff_storage_size(storage, path, &size));
@@ -163,7 +184,7 @@ static void test_arguments_are_checked_before_the_implementation(void) {
                           skiff_storage_open(storage, NULL, SKIFF_FILE_REPLACE, 0, &file));
     TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_INVALID_ARG,
                                   skiff_storage_open(storage, path, SKIFF_FILE_REPLACE, 1, &file),
-                                  "only WRITE_AT takes an offset");
+                                  "REPLACE takes no offset");
     // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_storage_open(storage, path, (skiff_file_mode)99, 0, &file));
@@ -812,6 +833,29 @@ static void test_fake_fails_stats_of_matching_paths(void) {
     skiff_storage_destroy(&fake.base);
 }
 
+static void test_fake_fails_reads_of_matching_files_only(void) {
+    fake_storage fake;
+    char text[CONTENT_BYTES];
+    size_t got = 1;
+    skiff_file *file = NULL;
+    fake_storage_init(&fake, storage);
+    fake.fail_suffix = "file.bin";
+    fake.read_error = SKIFF_ERR_STORAGE_IO;
+    write_file(path, CONTENT);
+    write_file(other, CONTENT);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_open(&fake.base, path, SKIFF_FILE_READ, 0, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, skiff_file_read(file, text, sizeof text, &got));
+    TEST_ASSERT_EQUAL_size_t(0, got);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_storage_open(&fake.base, other, SKIFF_FILE_READ, 0, &file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_read(file, text, sizeof text, &got));
+    TEST_ASSERT_EQUAL_size_t(CONTENT_BYTES, got);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_file_close(file));
+    skiff_storage_destroy(&fake.base);
+}
+
 static void test_fake_fails_folder_removals_and_leaves_the_folder(void) {
     fake_storage fake;
     char folder[TEMP_DIR_PATH_MAX];
@@ -837,6 +881,7 @@ int main(void) {
     RUN_TEST(test_replace_write_read_and_size);
     RUN_TEST(test_write_at_overwrites_from_the_offset_and_keeps_the_rest);
     RUN_TEST(test_write_at_past_the_end_or_on_a_missing_file_is_refused);
+    RUN_TEST(test_read_starts_at_an_offset_within_the_file);
     RUN_TEST(test_missing_files_are_not_found);
     RUN_TEST(test_rename_refuses_to_replace_and_remove_deletes);
     RUN_TEST(test_reading_past_the_end_gets_nothing);
@@ -868,6 +913,7 @@ int main(void) {
     RUN_TEST(test_fake_fails_a_listing_part_way_through);
     RUN_TEST(test_fake_lets_a_listing_shorter_than_the_failure_complete);
     RUN_TEST(test_fake_fails_stats_of_matching_paths);
+    RUN_TEST(test_fake_fails_reads_of_matching_files_only);
     RUN_TEST(test_fake_fails_folder_removals_and_leaves_the_folder);
     return UNITY_END();
 }

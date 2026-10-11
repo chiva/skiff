@@ -81,6 +81,15 @@ skiff_add_unit_test(test_config)
 target_link_libraries(test_config PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_install)
 target_link_libraries(test_install PRIVATE skiff_host_storage)
+# Save units: the MD5 and PARAM.SFO readers, then units over the POSIX storage, reading the
+# synthetic units in fixtures/saves/ (made by fixtures/saves/make_units.py).
+skiff_add_unit_test(test_md5)
+skiff_add_unit_test(test_param_sfo)
+skiff_add_unit_test(test_saves)
+target_link_libraries(test_saves PRIVATE skiff_host_storage)
+target_compile_definitions(test_saves PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+skiff_add_unit_test(test_saves_refusals)
+target_link_libraries(test_saves_refusals PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_cover_cache)
 target_link_libraries(test_cover_cache PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_log)
@@ -99,6 +108,12 @@ skiff_add_tls_unit_test(test_curl_transport)
 skiff_add_unit_test(test_probe_support)
 target_sources(test_probe_support PRIVATE hardware/probe_support.c)
 target_include_directories(test_probe_support PRIVATE hardware)
+
+# Skiff's side of the sigil cross-check, not under ctest: scripts/dev.sh sigil-check
+# (tests/sigil/check.sh). Built with every host build so it always compiles.
+add_executable(skiff_unit_tool sigil/skiff_unit_tool.c)
+target_link_libraries(skiff_unit_tool PRIVATE skiff_core skiff_host_storage)
+skiff_set_warnings(skiff_unit_tool)
 
 # Run against the integration RomM, not under ctest: scripts/dev.sh romm-test
 # (tests/integration/transport-test.sh). Built with every host build so they always compile.

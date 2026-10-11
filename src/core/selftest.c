@@ -16,8 +16,10 @@
 #include "skiff/install.h"
 #include "skiff/jobs.h"
 #include "skiff/log.h"
+#include "skiff/param_sfo.h"
 #include "skiff/romm.h"
 #include "skiff/romm_saves.h"
+#include "skiff/saves.h"
 #include "skiff/storage_paths.h"
 #include "skiff/ui.h"
 #include "skiff/version.h"
@@ -140,6 +142,35 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_SCRATCH_FILE_NAME "file.bin"
 #define SKIFF_SELFTEST_SCRATCH_SUBFOLDER_NAME "folder"
 #define SKIFF_SELFTEST_SCRATCH_TEXT "skiff selftest"
+
+/* The saves-unit check: the live probe's two save folders of the made-up game SKIF00001
+ * (tests/fixtures/saves/make_units.py), whose unit RomM 5.4.0 hashed to SKIFF_SELFTEST_SAVES_HASH,
+ * under SKIFF_SELFTEST_SAVES_FOLDER. */
+#define SKIFF_SELFTEST_SAVES_TARGET "SKIF00001"
+#define SKIFF_SELFTEST_SAVES_DATA00 SKIFF_SELFTEST_SAVES_TARGET "DATA00"
+#define SKIFF_SELFTEST_SAVES_DATA01 SKIFF_SELFTEST_SAVES_TARGET "DATA01"
+#define SKIFF_SELFTEST_SAVES_ROOT SKIFF_SELFTEST_SAVES_FOLDER "/saves"
+#define SKIFF_SELFTEST_SAVES_UNIT SKIFF_SELFTEST_SAVES_FOLDER "/unit.zip"
+#define SKIFF_SELFTEST_SAVES_STAGING SKIFF_SELFTEST_SAVES_FOLDER "/stage"
+#define SKIFF_SELFTEST_SAVES_HASH "f0c9413915f1a6c3df66129ee6bc744b"
+#define SKIFF_SELFTEST_SAVES_SFO "\0PSF" SKIFF_SELFTEST_SAVES_TARGET " synthetic"
+#define SKIFF_SELFTEST_SAVES_SLOT_TEXT "slot one"
+#define SKIFF_SELFTEST_SAVES_DATA_BYTES 4096U
+#define SKIFF_SELFTEST_SAVES_FILLER 'A'
+#define SKIFF_SELFTEST_SAVES_FOLDERS 2U
+#define SKIFF_SELFTEST_SAVES_FILES 4U
+/* A name with a byte above 0x7F, which a signed char (the PSP's) must not let through. */
+#define SKIFF_SELFTEST_SAVES_HIGH_NAME "CAF\xC9.BIN"
+/* A PARAM.SFO of two keys: TITLE (text "Skiff") and LEVEL (the number 0x01020304), little-endian
+ * as the PSP writes it, so a reader with the wrong byte order gets 0x04030201. */
+#define SKIFF_SELFTEST_SFO_TITLE "Skiff"
+#define SKIFF_SELFTEST_SFO_LEVEL 0x01020304U
+static const unsigned char SELFTEST_SFO[] = {
+    0x00, 'P',  'S',  'F',  0x01, 0x01, 0x00, 0x00, 0x34, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x02, 0x06, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x04, 0x04, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 'T',  'I',  'T',  'L',  'E',  0x00, 'L',  'E',  'V',  'E',  'L',  0x00,
+    'S',  'k',  'i',  'f',  'f',  0x00, 0x00, 0x00, 0x04, 0x03, 0x02, 0x01};
 
 /* The storage the current run was given, for the checks that touch the device. */
 static const skiff_selftest_env *run_env;
@@ -634,6 +665,173 @@ static const char *check_storage_list(void) {
     return failure;
 }
 
+/* The saves-unit check's files and folders, relative to SKIFF_SELFTEST_SAVES_FOLDER: created in
+ * this order and removed in the reverse one. NULL text is the 4 KiB DATA.BIN. */
+typedef struct selftest_save_path {
+    const char *path;
+    int is_folder;
+    const char *text;
+    size_t text_bytes;
+} selftest_save_path;
+
+#define SAVES_TEXT(text) text, sizeof text - 1
+static const selftest_save_path SELFTEST_SAVE_TREE[] = {
+    {"", 1, NULL, 0},
+    {"/saves", 1, NULL, 0},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA00, 1, NULL, 0},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA00 "/PARAM.SFO", 0, SAVES_TEXT(SKIFF_SELFTEST_SAVES_SFO)},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA00 "/DATA.BIN", 0, NULL, 0},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA01, 1, NULL, 0},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA01 "/PARAM.SFO", 0, SAVES_TEXT(SKIFF_SELFTEST_SAVES_SFO)},
+    {"/saves/" SKIFF_SELFTEST_SAVES_DATA01 "/DATA.BIN", 0,
+     SAVES_TEXT(SKIFF_SELFTEST_SAVES_SLOT_TEXT)},
+};
+
+/* What the check writes besides the tree, removed with it. */
+static const char *const SELFTEST_SAVE_OUTPUTS[] = {
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA00 "/PARAM.SFO",
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA00 "/DATA.BIN",
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA01 "/PARAM.SFO",
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA01 "/DATA.BIN",
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA00,
+    "/stage/" SKIFF_SELFTEST_SAVES_DATA01,
+    "/stage",
+    "/unit.zip",
+};
+
+typedef struct selftest_saves {
+    skiff_saves_unit *unit;
+    unsigned char *data;
+    char path[SKIFF_STORAGE_PATH_MAX];
+    char logical[SKIFF_STORAGE_PATH_MAX];
+} selftest_saves;
+
+static skiff_err saves_path(selftest_saves *s, const char *relative) {
+    snprintf(s->logical, sizeof s->logical, "%s%s", SKIFF_SELFTEST_SAVES_FOLDER, relative);
+    return skiff_storage_resolve(run_env->roots, s->logical, s->path, sizeof s->path);
+}
+
+static skiff_err make_save_tree(selftest_saves *s) {
+    skiff_err err = SKIFF_OK;
+    for (size_t i = 0;
+         err == SKIFF_OK && i < sizeof SELFTEST_SAVE_TREE / sizeof SELFTEST_SAVE_TREE[0]; i++) {
+        const selftest_save_path *entry = &SELFTEST_SAVE_TREE[i];
+        err = saves_path(s, entry->path);
+        if (err == SKIFF_OK && entry->is_folder) {
+            err = skiff_storage_mkdir(run_env->storage, s->path);
+        } else if (err == SKIFF_OK) {
+            err = entry->text != NULL
+                      ? skiff_storage_replace_whole(run_env->storage, s->path, entry->text,
+                                                    entry->text_bytes)
+                      : skiff_storage_replace_whole(run_env->storage, s->path, s->data,
+                                                    SKIFF_SELFTEST_SAVES_DATA_BYTES);
+        }
+    }
+    return err;
+}
+
+/* Everything the check may have made, files before their folders; missing ones are fine. */
+static skiff_err remove_save_tree(selftest_saves *s) {
+    for (size_t i = 0; i < sizeof SELFTEST_SAVE_OUTPUTS / sizeof SELFTEST_SAVE_OUTPUTS[0]; i++) {
+        if (saves_path(s, SELFTEST_SAVE_OUTPUTS[i]) == SKIFF_OK) {
+            (void)skiff_storage_remove(run_env->storage, s->path);
+            (void)skiff_storage_rmdir(run_env->storage, s->path);
+        }
+    }
+    skiff_err err = SKIFF_OK;
+    for (size_t i = sizeof SELFTEST_SAVE_TREE / sizeof SELFTEST_SAVE_TREE[0]; i-- > 0;) {
+        if (saves_path(s, SELFTEST_SAVE_TREE[i].path) != SKIFF_OK) {
+            continue;
+        }
+        err = SELFTEST_SAVE_TREE[i].is_folder ? skiff_storage_rmdir(run_env->storage, s->path)
+                                              : skiff_storage_remove(run_env->storage, s->path);
+    }
+    /* Only the last removal, the folder itself, decides: the rest may not exist. */
+    return err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
+}
+
+static const char *check_save_round_trip(selftest_saves *s) {
+    skiff_storage *storage = run_env->storage;
+    skiff_err err = make_save_tree(s);
+    if (err != SKIFF_OK) {
+        return storage_failure("could not write the save folders under app:", err);
+    }
+    err = skiff_saves_collect(storage, run_env->roots, SKIFF_SELFTEST_SAVES_ROOT,
+                              SKIFF_SELFTEST_SAVES_TARGET, s->unit);
+    if (err != SKIFF_OK || s->unit->folder_count != SKIFF_SELFTEST_SAVES_FOLDERS ||
+        s->unit->file_count != SKIFF_SELFTEST_SAVES_FILES) {
+        return storage_failure("the game's save folders were not collected", err);
+    }
+    err = skiff_saves_write_unit(storage, run_env->roots, s->unit, SKIFF_SELFTEST_SAVES_UNIT);
+    if (err != SKIFF_OK || strcmp(s->unit->content_hash, SKIFF_SELFTEST_SAVES_HASH) != 0) {
+        return storage_failure("the unit was not written with RomM's content_hash", err);
+    }
+    err = skiff_saves_read_unit(storage, run_env->roots, SKIFF_SELFTEST_SAVES_UNIT,
+                                SKIFF_SELFTEST_SAVES_TARGET, SKIFF_SELFTEST_SAVES_STAGING, s->unit);
+    if (err != SKIFF_OK || strcmp(s->unit->content_hash, SKIFF_SELFTEST_SAVES_HASH) != 0 ||
+        s->unit->file_count != SKIFF_SELFTEST_SAVES_FILES) {
+        return storage_failure("the unit did not read back the same", err);
+    }
+    size_t length = 0;
+    err = saves_path(s, "/stage/" SKIFF_SELFTEST_SAVES_DATA00 "/DATA.BIN");
+    if (err == SKIFF_OK) {
+        err = skiff_storage_read_whole(storage, s->path, s->data, SKIFF_SELFTEST_SAVES_DATA_BYTES,
+                                       &length);
+    }
+    for (size_t i = 0; err == SKIFF_OK && i < length; i++) {
+        err = s->data[i] == SKIFF_SELFTEST_SAVES_FILLER ? SKIFF_OK : SKIFF_ERR_STORAGE_IO;
+    }
+    if (err != SKIFF_OK || length != SKIFF_SELFTEST_SAVES_DATA_BYTES) {
+        return storage_failure("an extracted save file differs", err);
+    }
+    return NULL;
+}
+
+/* Save units: PARAM.SFO's little-endian fields, names checked byte by byte with the PSP's signed
+ * char, then a unit written from save folders under app:, read back, extracted and hashed with
+ * Skiff's own MD5 and zlib's CRC-32 and inflate. */
+static const char *check_saves_unit(void) {
+    skiff_sfo sfo;
+    char title[sizeof SKIFF_SELFTEST_SFO_TITLE];
+    uint32_t level = 0;
+    if (skiff_sfo_parse(SELFTEST_SFO, sizeof SELFTEST_SFO, &sfo) != SKIFF_OK ||
+        skiff_sfo_text(&sfo, "TITLE", title, sizeof title) != SKIFF_OK ||
+        strcmp(title, SKIFF_SELFTEST_SFO_TITLE) != 0 ||
+        skiff_sfo_number(&sfo, "LEVEL", &level) != SKIFF_OK || level != SKIFF_SELFTEST_SFO_LEVEL ||
+        skiff_sfo_is_save(&sfo)) {
+        return "PARAM.SFO read back other values";
+    }
+    if (skiff_saves_name_valid(SKIFF_SELFTEST_SAVES_HIGH_NAME) ||
+        !skiff_saves_target_valid(SKIFF_SELFTEST_SAVES_TARGET)) {
+        return "a save name above ASCII was accepted";
+    }
+    if (run_env == NULL || run_env->storage == NULL || run_env->roots == NULL) {
+        return "no storage to check";
+    }
+    selftest_saves *s = calloc(1, sizeof *s);
+    if (s == NULL) {
+        return "out of memory";
+    }
+    s->data = malloc(SKIFF_SELFTEST_SAVES_DATA_BYTES);
+    const char *failure = NULL;
+    if (s->data == NULL || skiff_saves_unit_create(&s->unit) != SKIFF_OK) {
+        failure = "out of memory";
+    } else if (saves_path(s, SELFTEST_SAVE_OUTPUTS[0]) != SKIFF_OK) {
+        failure = "the save folders do not fit under app:";
+    } else {
+        memset(s->data, SKIFF_SELFTEST_SAVES_FILLER, SKIFF_SELFTEST_SAVES_DATA_BYTES);
+        failure = check_save_round_trip(s);
+        const skiff_err removed = remove_save_tree(s);
+        if (removed != SKIFF_OK && failure == NULL) {
+            failure = storage_failure("the save folders were not removed", removed);
+        }
+    }
+    skiff_saves_unit_destroy(s->unit);
+    free(s->data);
+    free(s);
+    return failure;
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -658,6 +856,7 @@ static const selftest_check CHECKS[] = {
     {"jobs-queue", check_jobs_queue},
     {"install-manifest", check_install_manifest},
     {"storage-list", check_storage_list},
+    {"saves-unit", check_saves_unit},
 };
 // clang-format on
 

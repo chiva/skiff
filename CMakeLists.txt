@@ -21,8 +21,8 @@ option(SKIFF_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 configure_file(src/core/version_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version_config.h"
                @ONLY)
 
-# zlib's CRC-32, for downloads (src/jobs/): pspdev packages zlib for the PSP, the host image ships
-# zlib1g-dev.
+# zlib's CRC-32, for downloads (src/jobs/) and save units (src/saves/), and its inflate for save
+# units other clients deflated: pspdev packages zlib for the PSP, the host image ships zlib1g-dev.
 find_package(ZLIB REQUIRED)
 
 # cJSON for RomM's responses (src/romm/): pspdev packages 1.7.16 for the PSP, and the host image
@@ -90,6 +90,11 @@ add_library(
   src/romm/pairing.c
   src/romm/romm.c
   src/romm/saves.c
+  src/saves/md5.c
+  src/saves/param_sfo.c
+  src/saves/unit.c
+  src/saves/unit_read.c
+  src/saves/unit_write.c
   src/storage/paths.c
   src/storage/storage.c
   src/storage/whole_file.c

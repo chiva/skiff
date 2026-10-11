@@ -43,7 +43,9 @@ text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms
 `storage/` (the storage seam, logical roots, free space, safe names), `cover/` (PNG covers decoded
 and scaled down for the screen, see [Covers](#covers)), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
-policy), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
+policy), `saves/` (the `PARAM.SFO` reader and save units: a game's folders collected, written as
+argosy-sigil's PSP unit byte for byte, units read back and checked, RomM's `content_hash` with
+Skiff's own MD5; see [Saves](#saves)), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
 network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other layers arrive with the
 [roadmap](roadmap.md) phases that need them.
 
@@ -701,6 +703,13 @@ saves as single files. Skiff:
    chooses.
 
 A game and Skiff never run at the same time, so a save is never synced while it is being written.
+
+The `saves/` layer (`include/skiff/saves.h`, `param_sfo.h`, `md5.h`) already reads and writes the
+unit a game's saves travel in: every folder of `saves:` starting with RomM's `save_target`, game-data
+installs left out, as a stored zip identical to argosy-sigil's (checked against sigil itself by
+`scripts/dev.sh sigil-check`), and refuses an unsafe or damaged unit whole (306) or a save folder it
+cannot represent (307). It computes RomM's `content_hash` with its own MD5 (RFC 1321), since Mbed
+TLS's PSA hashes need `psa_crypto_init()`, and so ARK, first.
 
 ## Testing seams
 

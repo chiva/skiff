@@ -90,6 +90,14 @@ target_link_libraries(test_saves PRIVATE skiff_host_storage)
 target_compile_definitions(test_saves PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 skiff_add_unit_test(test_saves_refusals)
 target_link_libraries(test_saves_refusals PRIVATE skiff_host_storage)
+# Restores cut at every step and finished by the recovery, backups, the baseline and the decision
+# rule, over the POSIX storage through the fake storage.
+skiff_add_unit_test(test_saves_restore)
+target_link_libraries(test_saves_restore PRIVATE skiff_host_storage)
+# Calls the backups' pruning directly (src/saves/saves_internal.h).
+target_include_directories(test_saves_restore PRIVATE "${PROJECT_SOURCE_DIR}/src/saves")
+skiff_add_unit_test(test_saves_sync)
+target_link_libraries(test_saves_sync PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_cover_cache)
 target_link_libraries(test_cover_cache PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_log)

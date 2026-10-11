@@ -6,6 +6,7 @@
  * unit is written and read in. Field offsets are from the start of each record.
  */
 
+#include <cjson/cJSON.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -145,5 +146,46 @@ void saves_sort(skiff_saves_unit *unit);
 /* Records why a unit or folder was refused, and the name at fault. */
 void saves_refuse(skiff_saves_unit *unit, skiff_saves_problem problem, const char *name,
                   size_t length);
+
+/* ---- Backups (backups.c), for the restore ---- */
+
+/* Writes live (collected from "saves:") as the next backup, numbered one above the highest kept,
+ * into *number (0 on any error, which leaves no backup file behind). */
+skiff_err saves_backup_write(skiff_storage *storage, const skiff_storage_roots *roots,
+                             skiff_saves_unit *live, uint32_t *number);
+
+/* Drops what the backup caps no longer allow (skiff_saves_backups_list()), never backup keep, and
+ * drafts a cut backup left. Tidying only: a failure leaves more backups, never fewer. */
+void saves_backups_prune(skiff_storage *storage, const skiff_storage_roots *roots, uint32_t keep);
+
+/* ---- JSON state files (the restore journal, saves.json) ---- */
+
+/* 2^53: cJSON reads numbers as doubles, exact for every whole number below it. */
+#define SAVES_JSON_INTEGER_LIMIT 9007199254740992.0
+
+/* Whether hash is RomM's content_hash form: SKIFF_MD5_HEX_SIZE - 1 lowercase hex digits. */
+int saves_hash_valid(const char *hash);
+
+/* The whole number at key in object, from 0 to limit and exact, into *out; 0 when it is missing,
+ * not a number, or not such a number. */
+int saves_json_number(const cJSON *object, const char *key, double limit, double *out);
+
+/* The string at key, which must fit out_size with its terminator; empty allowed only with
+ * allow_empty. 0 otherwise. */
+int saves_json_string(const cJSON *object, const char *key, int allow_empty, char *out,
+                      size_t out_size);
+
+/*
+ * Parses length bytes of text (no NUL in them) as one JSON value with nothing but blanks after it,
+ * into *out (free it with cJSON_Delete()). A text with more than tokens_max structural characters
+ * (':' ',' '[' '{') outside strings is refused before cJSON builds a tree of it, and the memory
+ * cJSON can need for a text that size is checked first, since cJSON reports a failed allocation as
+ * a parse error. SKIFF_ERR_INVALID_ARG for a text that is not such JSON, SKIFF_ERR_NO_MEMORY.
+ */
+skiff_err saves_json_parse(const char *text, size_t length, size_t tokens_max, cJSON **out);
+
+/* Prints root unformatted into out (terminated), its length in *length. SKIFF_ERR_NO_MEMORY,
+ * SKIFF_ERR_BUFFER_TOO_SMALL. root is not freed. */
+skiff_err saves_json_print(const cJSON *root, char *out, size_t out_size, size_t *length);
 
 #endif

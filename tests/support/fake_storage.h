@@ -6,8 +6,8 @@
  * real storage (the POSIX one over a temporary directory) and injects what a Memory Stick does to a
  * long download: it fills up mid-write, a read, sync or rename fails, or every open file handle
  * stops working, as one may after the PSP suspends; a folder listing, stat or removal fails, also
- * part-way through a listing. Failures can be limited to paths with a given suffix (".part"), so
- * the rest keeps working.
+ * part-way through a listing; the power goes after a given number of changes. Failures can be
+ * limited to paths with a given suffix (".part"), so the rest keeps working.
  */
 
 #include <stddef.h>
@@ -56,11 +56,19 @@ typedef struct fake_storage {
      * SKIFF_OK for none. */
     skiff_err list_error;
     int list_error_after;
+    /* Listings report every entry without a date (SKIFF_STORAGE_MTIME_UNKNOWN), as a device that
+     * holds none for it. */
+    int hide_mtimes;
     /* Every stat of a matching path fails with this; SKIFF_OK for none. */
     skiff_err stat_error;
     /* Every folder removal of a matching path fails with this, leaving the folder; SKIFF_OK for
      * none. */
     skiff_err rmdir_error;
+    /* Once this many changes reached the device (an open for writing, a write, sync, rename,
+     * removal, folder creation or removal that succeeded, on any path), every later call fails with
+     * SKIFF_ERR_STORAGE_NO_MEDIA before reaching the inner storage, as if the power went: what was
+     * done stays done, nothing more happens. 0 for never. */
+    int cut_after_changes;
     /* Called at every open and remove, before the inner storage acts ("open" or "remove", and the
      * path): a test runs code "during" Memory Stick I/O here. NULL for none. */
     void (*on_call)(void *ctx, const char *call, const char *path);
@@ -76,6 +84,8 @@ typedef struct fake_storage {
     int opens;
     int closes;
     int handles_lost;
+    /* Changes that reached the inner storage, counted on every path (see cut_after_changes). */
+    int changes;
     /* Bumped when open handles go stale; a file remembers the value it was opened under. */
     int generation;
 } fake_storage;

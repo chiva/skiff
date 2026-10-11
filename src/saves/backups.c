@@ -42,6 +42,9 @@ typedef struct backup_scan {
     const char *folder;
     size_t count;
     uint32_t highest;
+    /* Game folders or backups past what the scan keeps: the highest number may be unknown, so no
+     * backup is numbered and nothing is pruned. */
+    int overflow;
     backup_entry entries[SCAN_MAX];
     size_t folder_count;
     char folders[SCAN_GAMES_MAX][SKIFF_SAVES_TARGET_SIZE];
@@ -89,8 +92,11 @@ static skiff_storage_list_step note_backup(void *ctx, const skiff_storage_entry 
         !parse_backup_name(entry->name, &number, &draft)) {
         return SKIFF_STORAGE_LIST_CONTINUE;
     }
+    /* A draft's number may be taken again: the backup written then replaces it. */
+    scan->highest = !draft && number > scan->highest ? number : scan->highest;
     if (scan->count == SCAN_MAX) {
-        return SKIFF_STORAGE_LIST_STOP;
+        scan->overflow = 1;
+        return SKIFF_STORAGE_LIST_CONTINUE;
     }
     backup_entry *backup = &scan->entries[scan->count++];
     memset(backup, 0, sizeof *backup);
@@ -100,8 +106,6 @@ static skiff_storage_list_step note_backup(void *ctx, const skiff_storage_entry 
     backup->size = entry->info.size;
     backup->mtime = entry->info.mtime;
     backup->draft = draft;
-    /* A draft's number may be taken again: the backup written then replaces it. */
-    scan->highest = !draft && number > scan->highest ? number : scan->highest;
     return SKIFF_STORAGE_LIST_CONTINUE;
 }
 
@@ -113,6 +117,7 @@ static skiff_storage_list_step note_game(void *ctx, const skiff_storage_entry *e
         return SKIFF_STORAGE_LIST_CONTINUE;
     }
     if (scan->folder_count == SCAN_GAMES_MAX) {
+        scan->overflow = 1;
         return SKIFF_STORAGE_LIST_STOP;
     }
     memcpy(scan->folders[scan->folder_count++], entry->name, length + 1);
@@ -127,6 +132,7 @@ static skiff_err scan_backups(backup_scan *scan) {
     scan->count = 0;
     scan->folder_count = 0;
     scan->highest = 0;
+    scan->overflow = 0;
     skiff_err err =
         skiff_storage_resolve(scan->roots, SKIFF_SAVES_BACKUP_FOLDER, root, sizeof root);
     if (err == SKIFF_OK) {
@@ -224,8 +230,9 @@ skiff_err saves_backup_write(skiff_storage *storage, const skiff_storage_roots *
     }
     err = scan_backups(scan);
     const uint32_t next = scan->highest + 1;
+    const int overflow = scan->overflow;
     free(scan);
-    if (err == SKIFF_OK && next > SKIFF_SAVES_BACKUP_NUMBER_MAX) {
+    if (err == SKIFF_OK && (overflow || next > SKIFF_SAVES_BACKUP_NUMBER_MAX)) {
         err = SKIFF_ERR_BUFFER_TOO_SMALL;
     }
     char folder[SKIFF_STORAGE_PATH_MAX];
@@ -307,7 +314,7 @@ void saves_backups_prune(skiff_storage *storage, const skiff_storage_roots *root
     if (scan_create(storage, roots, NULL, &scan) != SKIFF_OK) {
         return;
     }
-    if (scan_backups(scan) == SKIFF_OK) {
+    if (scan_backups(scan) == SKIFF_OK && !scan->overflow) {
         prune(scan, keep);
     }
     free(scan);

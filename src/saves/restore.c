@@ -29,6 +29,9 @@
     ((size_t)SKIFF_SAVES_FILES_MAX * 6 + (size_t)SKIFF_SAVES_FOLDERS_MAX * 8 + 32)
 /* Entries one listing keeps: a save folder's files, or the stage's folders. */
 #define LISTING_MAX SKIFF_SAVES_FILES_MAX
+/* The largest cluster FAT32 gives a Memory Stick (32 GB and larger cards): every file and folder
+ * takes whole clusters, so many small save files take far more than their bytes. */
+#define SAVES_CLUSTER_BYTES ((uint64_t)32 * 1024)
 /* A step that fails with SKIFF_ERR_STORAGE_IO is tried once more: on the PSP that is what a handle
  * lost to a suspend returns, and reopening the file is enough. */
 #define ATTEMPTS 2
@@ -275,7 +278,9 @@ static int read_replace(journal *j, const cJSON *item) {
     if (!cJSON_IsObject(item) ||
         !saves_json_string(item, KEY_STAGE, 0, folder->stage, sizeof folder->stage) ||
         !saves_json_string(item, KEY_LIVE, 0, folder->live, sizeof folder->live) ||
-        !game_folder(j, folder->stage) || !game_folder(j, folder->live)) {
+        !game_folder(j, folder->stage) || !game_folder(j, folder->live) ||
+        !saves_same_name(folder->stage, strlen(folder->stage), folder->live,
+                         strlen(folder->live))) {
         return 0;
     }
     for (size_t i = 0; i < j->replace_count; i++) {
@@ -734,9 +739,24 @@ static skiff_err plan(restorer *r, const char *save_target, skiff_saves_restore_
     return err;
 }
 
+/* What a file of size bytes takes on FAT: whole clusters, and at least one even when empty (its
+ * directory entry). */
+static uint64_t on_disk(uint64_t size) {
+    return (size / SAVES_CLUSTER_BYTES + 1) * SAVES_CLUSTER_BYTES;
+}
+
+/* The unit's files, written once, with a cluster per folder for its directory. */
+static uint64_t unit_on_disk(const skiff_saves_unit *unit) {
+    uint64_t bytes = (uint64_t)unit->folder_count * SAVES_CLUSTER_BYTES;
+    for (size_t i = 0; i < unit->file_count; i++) {
+        bytes += on_disk(unit->files[i].size);
+    }
+    return bytes;
+}
+
 /* A unit of the live files: their bytes, and per file a local and a central header with the name,
- * and the end record. */
-static uint64_t backup_bytes(const skiff_saves_unit *live) {
+ * and the end record, in one file; and the game's backup folder. */
+static uint64_t backup_on_disk(const skiff_saves_unit *live) {
     if (live->file_count == 0) {
         return 0;
     }
@@ -745,17 +765,19 @@ static uint64_t backup_bytes(const skiff_saves_unit *live) {
         bytes += live->files[i].size + ZIP_LOCAL_BYTES + ZIP_CENTRAL_BYTES +
                  2 * (uint64_t)strlen(live->files[i].name);
     }
-    return bytes;
+    return on_disk(bytes) + SAVES_CLUSTER_BYTES;
 }
 
 /* The stage and the new live folders (each the unit's files; the old ones are only freed folder by
- * folder) and the backup, with the free margin: a full Memory Stick must never stop step 5, or
- * every recovery would fail the same way. */
+ * folder), the backup and the journal, counted in the largest clusters a Memory Stick uses, with
+ * the free margin: a full Memory Stick must never stop step 5, or every recovery would fail the
+ * same way. */
 static skiff_err check_room(restorer *r) {
     char app[SKIFF_STORAGE_PATH_MAX];
     skiff_err err = resolve(r, SKIFF_STORAGE_ROOT_APP, app);
     if (err == SKIFF_OK) {
-        const uint64_t needed = 2 * r->incoming->total_bytes + backup_bytes(r->live);
+        const uint64_t needed = 2 * unit_on_disk(r->incoming) + backup_on_disk(r->live) +
+                                on_disk(SKIFF_SAVES_JOURNAL_BYTES_MAX) + SAVES_CLUSTER_BYTES;
         err = skiff_storage_check_room(r->storage, app, needed);
     }
     return err == SKIFF_ERR_NOT_IMPLEMENTED ? SKIFF_OK : err;

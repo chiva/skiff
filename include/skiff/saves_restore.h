@@ -7,8 +7,8 @@
  *
  *   1. the unit (downloaded by the caller, or a backup) is checked whole (skiff_saves_read_unit()),
  *      the game's live folders are collected, and the Memory Stick must hold the stage, the new
- *      folders and the backup with SKIFF_STORAGE_FREE_MARGIN_BYTES to spare: nothing is written
- *      before these pass;
+ *      folders, the backup and the journal, counted in whole 32 KiB clusters, with
+ *      SKIFF_STORAGE_FREE_MARGIN_BYTES to spare: nothing is written before these pass;
  *   2. the unit is extracted into SKIFF_SAVES_STAGE_FOLDER, each file synced;
  *   3. the live folders are backed up as a unit (SKIFF_SAVES_BACKUP_FOLDER), synced;
  *   4. SKIFF_SAVES_JOURNAL_PATH is written crash-safely (skiff_storage_replace_whole()), naming the
@@ -99,7 +99,9 @@ skiff_err skiff_saves_work_unit_path(const char *save_target, char *out, size_t 
  * unit of save_target (skiff_saves_read_unit()), SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE when the live
  * folders cannot be backed up as a unit (skiff_saves_collect()), skiff_storage_check_room()'s
  * SKIFF_ERR_STORAGE_NO_SPACE or SKIFF_ERR_STORAGE_FILE_TOO_LARGE (a device that cannot tell its
- * free space is not refused). A storage error before step 5 leaves the live saves as they were and
+ * free space is not refused). SKIFF_ERR_BUFFER_TOO_SMALL, after the stage was removed again, when
+ * there are too many backups to number a new one safely (over 2048, or 1024 game folders). A
+ * storage error before step 5 leaves the live saves as they were and
  * no stage or journal; one during step 5 leaves the journal, so skiff_saves_recover() (now, or at
  * the next launch) finishes the restore. report (may be NULL) is filled on SKIFF_OK.
  * SKIFF_ERR_INVALID_ARG for a NULL argument (but report) or an invalid save_target,

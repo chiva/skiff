@@ -256,11 +256,14 @@ static void test_actions_and_reasons_have_log_names(void) {
     TEST_ASSERT_EQUAL_STRING("in-sync", skiff_saves_action_name(SKIFF_SAVES_IN_SYNC));
     TEST_ASSERT_EQUAL_STRING("ask-deleted-server",
                              skiff_saves_action_name(SKIFF_SAVES_ASK_DELETED_SERVER));
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     TEST_ASSERT_EQUAL_STRING("unknown", skiff_saves_action_name((skiff_saves_action)99));
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     TEST_ASSERT_EQUAL_STRING("unknown", skiff_saves_action_name((skiff_saves_action)-1));
     TEST_ASSERT_EQUAL_STRING("same-content",
                              skiff_saves_reason_name(SKIFF_SAVES_REASON_SAME_CONTENT));
     TEST_ASSERT_EQUAL_STRING("unchanged", skiff_saves_reason_name(SKIFF_SAVES_REASON_UNCHANGED));
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     TEST_ASSERT_EQUAL_STRING("unknown", skiff_saves_reason_name((skiff_saves_reason)99));
 }
 

@@ -49,6 +49,8 @@
 #define CHUNK_BYTES ((size_t)64 * 1024)
 /* Other games' folders in the save root: more than one listing of the restore keeps. */
 #define OTHER_FOLDERS 300
+/* Game folders one scan of the backups keeps (src/saves/backups.c). */
+#define BACKUP_GAMES_SCANNED 1024
 
 static char dir[TEMP_DIR_PATH_MAX];
 static skiff_storage *posix;
@@ -145,7 +147,9 @@ static void put_sfo(const char *logical, const char *const *keys, size_t count) 
     const size_t key_table = SKIFF_SFO_HEADER_BYTES + count * SKIFF_SFO_INDEX_ENTRY_BYTES;
     const size_t data_table = (key_table + key_bytes + 3) / 4 * 4;
     const size_t size = data_table + count * SFO_VALUE_BYTES;
-    memcpy(out, SKIFF_SFO_MAGIC, SKIFF_SFO_MAGIC_BYTES);
+    for (size_t i = 0; i < SKIFF_SFO_MAGIC_BYTES; i++) {
+        out[i] = (unsigned char)SKIFF_SFO_MAGIC[i];
+    }
     out[4] = 0x01;
     out[5] = 0x01;
     out[8] = (unsigned char)key_table;
@@ -783,6 +787,8 @@ static void test_journals_skiff_did_not_write_are_given_up(void) {
         "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[],\"remove\":[],"
         "\"files\":[{\"name\":\"nofolder\",\"size\":1}]}",
         "{\"version\":1,\"save_target\":\"" GAME "\"} trailing",
+        "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
+        "\",\"live\":\"" INSTALL "\"}],\"remove\":[],\"files\":[]}",
     };
     for (size_t i = 0; i < sizeof JOURNALS / sizeof JOURNALS[0]; i++) {
         tearDown();
@@ -979,6 +985,20 @@ static void test_a_failed_backup_stops_the_restore(void) {
     assert_work_clean();
 }
 
+/* More game folders under the backups than a scan keeps: the highest number may be unknown, so no
+ * backup is numbered, and nothing is restored. */
+static void test_too_many_backup_folders_stop_the_restore(void) {
+    for (int i = 0; i <= BACKUP_GAMES_SCANNED; i++) {
+        char folder[SKIFF_STORAGE_PATH_MAX];
+        snprintf(folder, sizeof folder, "%s/ULUS%05d", SKIFF_SAVES_BACKUP_FOLDER, i);
+        put_folder(folder);
+    }
+    prepare();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL, restore_on(&storage.base, NULL));
+    assert_old_save();
+    assert_work_clean();
+}
+
 /* The journal's crash-safe write failing: nothing applied, the stage removed. */
 static void test_a_failed_journal_write_stops_the_restore(void) {
     prepare();
@@ -1058,6 +1078,7 @@ int main(void) {
     RUN_TEST(test_the_backup_just_made_is_never_dropped);
     RUN_TEST(test_restoring_a_backup_brings_the_old_save_back);
     RUN_TEST(test_a_failed_backup_stops_the_restore);
+    RUN_TEST(test_too_many_backup_folders_stop_the_restore);
     RUN_TEST(test_a_failed_journal_write_stops_the_restore);
     RUN_TEST(test_backup_helpers_check_their_arguments);
     return UNITY_END();

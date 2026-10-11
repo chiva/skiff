@@ -56,6 +56,10 @@
     X(SKIFF_ERR_ROMM_COVER_FORMAT,                                                                 \
       "RomM ha enviado una portada en un formato que Skiff no muestra")                            \
     X(SKIFF_ERR_ROMM_COVER_DAMAGED, "RomM ha enviado una portada que Skiff no ha podido leer")     \
+    X(SKIFF_ERR_ROMM_SAVE_CONFLICT,                                                                \
+      "RomM tiene una partida más reciente desde la última sincronización de esta PSP")            \
+    X(SKIFF_ERR_ROMM_SAVE_TOO_LARGE,                                                               \
+      "La partida es demasiado grande para que el servidor de RomM la acepte")                     \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, "No se encuentra ningún Memory Stick")                           \
     X(SKIFF_ERR_STORAGE_NO_SPACE, "No hay suficiente espacio libre en el Memory Stick")            \
     X(SKIFF_ERR_STORAGE_IO, "No se puede leer o escribir en el Memory Stick")                      \

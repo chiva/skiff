@@ -133,8 +133,8 @@ Docker Hub limits anonymous pulls, which GitHub's shared runners reach.
 ### Integration tests
 
 `romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c`,
-`tests/integration/test_download_romm.c`, `tests/integration/test_client_romm.c` and
-`tests/integration/test_pairing_romm.c` on the host and runs them on the compose network. The first checks the error codes a player would see, over the TLS stack the PSP uses:
+`tests/integration/test_download_romm.c`, `tests/integration/test_client_romm.c`,
+`tests/integration/test_pairing_romm.c` and `tests/integration/test_saves_romm.c` on the host and runs them on the compose network. The first checks the error codes a player would see, over the TLS stack the PSP uses:
 
 - HTTPS through the test CA works, and without the CA the server is untrusted (105);
 - with the clock set to 2000 (a PSP whose battery ran flat) the failure is the clock (108); with
@@ -168,6 +168,16 @@ pairing the admin refuses ends with 207. A pairing that runs out of time is left
 RomM gives every pairing 10 minutes. `romm-record` also records the flow's answers for the fake
 transport (`tests/integration/record-pairing-fixtures.sh`), with every code, token and id replaced
 by a synthetic value of the same length.
+
+The fifth syncs a save between two PSPs paired with every scope (`include/skiff/romm_saves.h`), in
+a slot of its own each run so it can run again on the same server: A's negotiate says upload and
+its upload comes back with RomM's hash equal to Skiff's, B's negotiate offers it as a download that
+arrives byte for byte, `downloaded` and `complete` succeed and B's next negotiate is a no-op, B's
+own upload passes RomM's guard while A's, without overwrite, is refused (212). `romm-record` records the same exchanges for the fake
+transport (`tests/integration/record-saves-fixtures.sh`), plus a token that only browses refused
+negotiate (403), with synthetic save units (stored zips of
+made-up `SKIF00001…` folders, kept as `tests/fixtures/romm/save-unit-*.zip`) and synthetic device
+ids.
 
 Everything generated lives in `build/integration/` (git-ignored):
 

@@ -24,6 +24,10 @@ typedef struct fake_storage {
      * fails with write_error; SKIFF_OK for never. */
     uint64_t write_budget;
     skiff_err write_error;
+    /* Once this many bytes have been read from matching files, a read gets only what is left of the
+     * budget, and the next fails with read_error; SKIFF_OK for never. */
+    uint64_t read_budget;
+    skiff_err read_error;
     /* Every sync of a matching file fails with this; SKIFF_OK for none. */
     skiff_err sync_error;
     /* Every rename of a matching file (by its old name) fails with this; SKIFF_OK for none. */
@@ -66,9 +70,11 @@ typedef struct fake_storage {
     int rmdirs;
     int free_space_queries;
     uint64_t bytes_written;
+    uint64_t bytes_read;
     int writes;
     int syncs;
     int opens;
+    int closes;
     int handles_lost;
     /* Bumped when open handles go stale; a file remembers the value it was opened under. */
     int generation;

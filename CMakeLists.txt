@@ -89,6 +89,7 @@ add_library(
   src/net/transport.c
   src/romm/pairing.c
   src/romm/romm.c
+  src/romm/saves.c
   src/storage/paths.c
   src/storage/storage.c
   src/storage/whole_file.c

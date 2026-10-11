@@ -64,3 +64,5 @@ record rom-content "/api/roms/$ROM_ID/content/$FILE_NAME" "${auth[@]}"
 record roms-unauthorized /api/roms
 # The pairing flow's answers, each secret replaced with a synthetic one.
 "$(dirname "$0")/record-pairing-fixtures.sh" "$DIR" "$OUT"
+# The save sync calls between two paired PSPs, with synthetic save units and device ids.
+"$(dirname "$0")/record-saves-fixtures.sh" "$DIR" "$OUT"

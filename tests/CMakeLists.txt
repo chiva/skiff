@@ -62,6 +62,12 @@ skiff_add_unit_test(test_romm)
 skiff_add_unit_test(test_romm_pairing)
 # Reaches the shared request helpers the pairing code uses (src/romm/romm_internal.h).
 target_include_directories(test_romm_pairing PRIVATE "${PROJECT_SOURCE_DIR}/src/romm")
+# Uploads the recorder's synthetic save units straight from tests/fixtures/romm/ through the POSIX
+# storage.
+skiff_add_unit_test(test_romm_saves)
+target_link_libraries(test_romm_saves PRIVATE skiff_host_storage)
+target_compile_definitions(test_romm_saves
+                           PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 # Builds the PNGs it decodes in memory with libpng's writer: no picture files in the repository.
 skiff_add_unit_test(test_cover)
 skiff_add_unit_test(test_download_state)
@@ -109,3 +115,9 @@ skiff_set_warnings(test_client_romm)
 add_executable(test_pairing_romm integration/test_pairing_romm.c)
 target_link_libraries(test_pairing_romm PRIVATE skiff_net skiff_host_tls unity)
 skiff_set_warnings(test_pairing_romm)
+add_executable(test_saves_romm integration/test_saves_romm.c)
+target_link_libraries(test_saves_romm PRIVATE skiff_net skiff_host_tls skiff_host_storage
+                                              skiff_test_support unity)
+target_compile_definitions(test_saves_romm
+                           PRIVATE SKIFF_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+skiff_set_warnings(test_saves_romm)

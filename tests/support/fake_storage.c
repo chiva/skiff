@@ -48,7 +48,22 @@ static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mod
 
 static skiff_err fake_read(skiff_file *base, void *buffer, size_t size, size_t *got) {
     const fake_file *file = (const fake_file *)base;
-    return stale(file) ? SKIFF_ERR_STORAGE_IO : skiff_file_read(file->inner, buffer, size, got);
+    fake_storage *fake = owner(file);
+    if (stale(file)) {
+        return SKIFF_ERR_STORAGE_IO;
+    }
+    if (file->matches && fake->read_error != SKIFF_OK) {
+        if (fake->bytes_read >= fake->read_budget) {
+            return fake->read_error;
+        }
+        const uint64_t left = fake->read_budget - fake->bytes_read;
+        size = left < size ? (size_t)left : size;
+    }
+    const skiff_err err = skiff_file_read(file->inner, buffer, size, got);
+    if (err == SKIFF_OK && file->matches) {
+        fake->bytes_read += *got;
+    }
+    return err;
 }
 
 static skiff_err fake_write(skiff_file *base, const void *data, size_t size) {
@@ -91,6 +106,7 @@ static skiff_err fake_sync(skiff_file *base) {
 
 static skiff_err fake_close(skiff_file *base) {
     fake_file *file = (fake_file *)base;
+    owner(file)->closes++;
     const int was_stale = stale(file);
     const skiff_err err = skiff_file_close(file->inner);
     free(file);

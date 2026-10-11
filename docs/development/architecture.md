@@ -363,7 +363,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Favourites | The same list with `favorite=true` (and `with_files=true` when each ROM's file is needed) |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
-| Saves | `POST /api/saves`, `GET /api/saves/{id}/content`, `POST /api/sync/negotiate`, tagged with this PSP's `device_id` |
+| Saves | `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
 
 Custom headers: `config.ini` may define extra HTTP headers sent on every request. This covers
 proxy access schemes the PSP cannot otherwise satisfy — notably Cloudflare Access service tokens
@@ -429,6 +429,21 @@ refuses its ROM. RomM makes the small cover by resizing the stored one to 40% (2
 tall) and saving it under the stored file's extension: a PNG for every metadata provider, the
 upload's format for artwork uploaded in the web UI. Its WebP option writes a copy beside each cover
 without changing these paths.
+
+The save sync calls (`include/skiff/romm_saves.h`, RomM 5.4 or newer, a token with the
+`assets.*` and `devices.*` scopes) carry this PSP's `device_id` on every call, since RomM does not
+take it from the token on `/api/saves`. Negotiate lists the ROMs Skiff knows and the saves it holds,
+and never sends RomM's `emulators` filter: without it the saves of every emulator in a slot meet, so
+a PPSSPP save in `autosave` pairs with this PSP's, but the operations cover every slot of the ROMs
+listed and the caller keeps its own. RomM's `action` is advice: the saves layer decides from its own
+baseline and the hashes. An upload streams the file from the Memory Stick between a multipart head
+and tail Skiff writes itself (16 KB reads, exact `Content-Length`, boundary `skiff-<content
+hash>`), so a save never sits whole in memory; `overwrite=false` gets RomM's guard, its 409 meaning
+the slot holds a version this PSP has not synced (212), and RomM's 413, or a proxy's, is 213. A
+download writes `<path>.part` and renames it once whole, never past the caller's byte cap, with
+`optimistic=false`, so RomM records what this PSP holds only when `downloaded` confirms it.
+Upload answers, negotiate plans and their strings are bounded and checked like every response; a
+device name is only shown, so it is kept in display form.
 
 ### Pairing
 

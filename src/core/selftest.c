@@ -17,6 +17,7 @@
 #include "skiff/jobs.h"
 #include "skiff/log.h"
 #include "skiff/romm.h"
+#include "skiff/romm_saves.h"
 #include "skiff/storage_paths.h"
 #include "skiff/ui.h"
 #include "skiff/version.h"
@@ -84,6 +85,23 @@ typedef struct selftest_check {
     "\x00\x02\x08\x06\x00\x00\x00\x72\xB6\x0D\x24\x00\x00\x00\x13\x49\x44\x41\x54\x78\xDA\x63"     \
     "\xF8\xCF\xC0\xF0\x1F\x0C\x81\x34\x08\x30\x00\x00\x48\xC9\x08\xF8\xC5\x34\xFD\x05\x00\x00"     \
     "\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82"
+/* A negotiate plan and a save as RomM writes them: ids and a size past 32 bits, and the uploading
+ * device's name with an accent and a C1 control character (U+0085), which must come out as '?'. */
+#define SKIFF_SELFTEST_SYNC_PLAN                                                                   \
+    "{\"session_id\":4294967297,\"operations\":[{\"action\":\"download\",\"rom_id\":"              \
+    "1099511627776,\"save_id\":4294967298,\"file_name\":\"SKIF00001 [2026-10-11_18-15-01].zip\","  \
+    "\"slot\":\"autosave\",\"emulator\":\"psp_console\",\"reason\":\"r\",\"server_updated_at\":"   \
+    "\"2026-10-11T18:15:01+00:00\",\"server_content_hash\":"                                       \
+    "\"969f6b134c73db736eb427afde88aee4\"}]}"
+#define SKIFF_SELFTEST_SAVE                                                                        \
+    "{\"id\":4294967298,\"rom_id\":1099511627776,\"file_name\":\"SKIF00001.zip\",\"slot\":"        \
+    "\"autosave\",\"emulator\":\"psp_console\",\"content_hash\":"                                  \
+    "\"969f6b134c73db736eb427afde88aee4\",\"updated_at\":\"2026-10-11T18:15:01+00:00\","           \
+    "\"file_size_bytes\":4294967295,\"origin_device_id\":\"b\",\"device_syncs\":[{\"device_"       \
+    "id\":\"b\",\"device_name\":\"Caf\xC3\xA9\xC2\x85PSP\"}]}"
+#define SKIFF_SELFTEST_SESSION_ID 4294967297ULL
+#define SKIFF_SELFTEST_SAVE_ID 4294967298ULL
+#define SKIFF_SELFTEST_SAVE_DEVICE "Caf\xC3\xA9?PSP"
 /* A RomM name with accents and characters FAT refuses, and how it must come out. */
 #define SKIFF_SELFTEST_ROMM_NAME "Pok\xC3\xA9mon: Edici\xC3\xB3n/Plata?.iso"
 #define SKIFF_SELFTEST_SAFE_NAME "Pok\xC3\xA9mon_ Edici\xC3\xB3n_Plata_.iso"
@@ -293,6 +311,30 @@ static const char *check_romm_cover(void) {
                    strcmp(url, SKIFF_SELFTEST_COVER_URL) == 0
                ? NULL
                : "a cover URL came out wrong";
+}
+
+/* Save sync's answers are parsed as ROM pages are, on newlib with 64-bit integers in software and
+ * a signed char: ids past 32 bits must come out exact, and a C1 control character in a device name
+ * must be caught. */
+static const char *check_romm_saves(void) {
+    static const char plan_text[] = SKIFF_SELFTEST_SYNC_PLAN;
+    static const char save_text[] = SKIFF_SELFTEST_SAVE;
+    static skiff_romm_sync_plan plan;
+    static skiff_romm_save save;
+    if (skiff_romm_parse_sync_plan(plan_text, sizeof plan_text - 1, &plan) != SKIFF_OK ||
+        skiff_romm_parse_save(save_text, sizeof save_text - 1, &save) != SKIFF_OK ||
+        plan.count != 1) {
+        return "a save sync answer did not parse";
+    }
+    const skiff_romm_sync_operation *op = &plan.operations[0];
+    return plan.session_id == SKIFF_SELFTEST_SESSION_ID && op->action == SKIFF_ROMM_SYNC_DOWNLOAD &&
+                   op->rom_id == SKIFF_SELFTEST_ROMM_ID && op->save_id == SKIFF_SELFTEST_SAVE_ID &&
+                   save.id == SKIFF_SELFTEST_SAVE_ID && save.rom_id == SKIFF_SELFTEST_ROMM_ID &&
+                   save.file_size_bytes == SKIFF_SELFTEST_ROMM_SIZE &&
+                   strcmp(op->server_content_hash, save.content_hash) == 0 &&
+                   strcmp(save.origin_device_name, SKIFF_SELFTEST_SAVE_DEVICE) == 0
+               ? NULL
+               : "a save sync answer came back with other values";
 }
 
 /* libpng and zlib as the EBOOT links them, and RGB565 written as the GE reads it: red in the low
@@ -606,6 +648,7 @@ static const selftest_check CHECKS[] = {
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
     {"romm-cover", check_romm_cover},
+    {"romm-saves", check_romm_saves},
     {"cover-decode", check_cover_decode},
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},

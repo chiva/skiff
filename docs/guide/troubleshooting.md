@@ -54,6 +54,8 @@ with your PSP model and firmware.
 | 209 | Pairing was approved without the permissions Skiff needs | On RomM's pairing page, someone unticked reading platforms or ROMs, so the token could neither browse nor download; Skiff did not keep it. Delete the half-approved device in RomM, pair again and leave those two permissions ticked (the others, for save sync and collections, may be unticked) |
 | 210 | A cover in a format Skiff cannot show | Only in `skiff.log`: the game shows without its cover. Skiff shows PNG covers, which RomM makes for every cover it downloads; artwork uploaded in RomM's web UI as JPEG, WebP, GIF or AVIF keeps its format. Upload a PNG instead |
 | 211 | A cover Skiff could not read | Only in `skiff.log`: the game shows without its cover. The picture is damaged, or larger than 1024 pixels on a side (RomM's small covers are a few hundred). Choose another cover for the game in RomM |
+| 212 | RomM has a newer save | Another device (a second PSP, or PPSSPP through a client such as Argosy) saved this game in RomM after this PSP last synced it, so RomM kept that save rather than replace it with this PSP's. Nothing was overwritten: sync again to compare the two |
+| 213 | The save is too large for RomM | RomM, or a proxy in front of it, refused the upload as too large. RomM accepts saves of up to 512 MB unless `MAX_ASSET_UPLOAD_SIZE_BYTES` sets another limit; a reverse proxy may allow far less (nginx: `client_max_body_size`, 1 MB by default). Raise the proxy's limit for `/api/saves` |
 
 ## Memory Stick errors (300–305)
 

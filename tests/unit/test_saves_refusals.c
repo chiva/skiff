@@ -503,6 +503,17 @@ static void test_encryption_zip64_disks_and_methods_are_refused(void) {
     assert_refused(SKIFF_SAVES_PROBLEM_ZIP64, "a ZIP64 extra field");
     entries[2].central_extra = NULL;
     entries[2].central_extra_size = 0;
+    entries[2].local_extra = ZIP64_EXTRA;
+    entries[2].local_extra_size = sizeof ZIP64_EXTRA;
+    build(count);
+    assert_refused(SKIFF_SAVES_PROBLEM_ZIP64, "a ZIP64 extra field in a local header only");
+    static const unsigned char LONG_FIELD[] = {0x55, 0x54, 0x09, 0x00, 1, 0};
+    entries[2].local_extra = LONG_FIELD;
+    entries[2].local_extra_size = sizeof LONG_FIELD;
+    build(count);
+    assert_refused(SKIFF_SAVES_PROBLEM_STRUCTURE, "a local extra field running past its end");
+    entries[2].local_extra = NULL;
+    entries[2].local_extra_size = 0;
     build(count);
     put32(zip.bytes + zip.local[2] + LOCAL_COMPRESSED, ZIP64_U32);
     assert_refused(SKIFF_SAVES_PROBLEM_ZIP64, "a local header pointing at ZIP64 sizes");

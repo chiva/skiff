@@ -440,8 +440,13 @@ static skiff_err check_local(reader *r, zip_entry *entry, uint64_t *next) {
     err = read_exact(r, file, r->header, ZIP_LOCAL_BYTES);
     char name[SKIFF_SAVES_ENTRY_SIZE] = {0};
     const size_t name_length = err == SKIFF_OK ? saves_read_le16(h + ZIP_LOCAL_NAME_LENGTH) : 0;
+    const size_t extra_length = err == SKIFF_OK ? saves_read_le16(h + ZIP_LOCAL_EXTRA_LENGTH) : 0;
     if (err == SKIFF_OK && name_length == entry->name_length) {
         err = read_exact(r, file, name, name_length);
+        /* Held to the directory's rules too: no ZIP64 field, no field running past its end. */
+        if (err == SKIFF_OK) {
+            err = skip_extra(r, file, extra_length, entry);
+        }
     }
     err = close_after(file, err);
     if (err != SKIFF_OK) {
@@ -462,8 +467,8 @@ static skiff_err check_local(reader *r, zip_entry *entry, uint64_t *next) {
         memcmp(name, entry->name, name_length) != 0) {
         return refuse(r, SKIFF_SAVES_PROBLEM_STRUCTURE, entry);
     }
-    const uint64_t data = (uint64_t)entry->local_offset + ZIP_LOCAL_BYTES + name_length +
-                          saves_read_le16(h + ZIP_LOCAL_EXTRA_LENGTH);
+    const uint64_t data =
+        (uint64_t)entry->local_offset + ZIP_LOCAL_BYTES + name_length + extra_length;
     uint64_t end = data + entry->compressed;
     if (end > r->directory_offset) {
         return refuse(r, SKIFF_SAVES_PROBLEM_STRUCTURE, entry);

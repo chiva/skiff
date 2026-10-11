@@ -41,7 +41,10 @@
 /* The files of every folder in a save root starting with a game's save_target (installs included:
  * telling them apart would mean reading their PARAM.SFO), as a count and the MD5 of their
  * "<FOLDER>/<FILE>:<size>:<mtime>" lines sorted by name. Equal summaries from the same Memory Stick
- * mean no file was added, removed, resized or rewritten, so the unit need not be hashed again. */
+ * mean no file was added, removed, resized or rewritten, so the unit need not be hashed again.
+ * Dates are whole seconds (FAT keeps two), so a file rewritten at the same size within that time,
+ * or copied in over USB with its old date, is not seen: a launch check may rely on the summary,
+ * but a sync the player asks for should hash anyway. */
 typedef struct skiff_saves_tree_summary {
     uint32_t file_count;
     char digest[SKIFF_SAVES_HASH_SIZE];

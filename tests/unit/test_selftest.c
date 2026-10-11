@@ -308,6 +308,20 @@ static void test_saves_unit_reports_the_failing_step(void) {
     }
 }
 
+/* A run cut short after its backup leaves one: the next run still passes and cleans it up. */
+static void test_saves_restore_survives_a_leftover_backup(void) {
+    char path[SKIFF_STORAGE_PATH_MAX];
+    scratch_path(SKIFF_SELFTEST_RESTORE_FOLDER "/app/saves-backup/SKIF00001", path, sizeof path);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, path));
+    scratch_path(SKIFF_SELFTEST_RESTORE_FOLDER "/app/saves-backup/SKIF00001/1.zip", path,
+                 sizeof path);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(storage, path, "x", 1));
+    const skiff_selftest_result result = skiff_selftest_run(&env, capture_line, &captured);
+    TEST_ASSERT_EQUAL_INT(0, result.failed);
+    TEST_ASSERT_EQUAL_STRING("PASS saves-restore", line_of("saves-restore"));
+    assert_restore_folder_gone();
+}
+
 /* Each saves-restore step failing in turn: the check names it and removes what it made, unless
  * the failing step is the removal itself. */
 static void test_saves_restore_reports_the_failing_step(void) {
@@ -450,6 +464,7 @@ int main(void) {
     RUN_TEST(test_storage_list_fails_when_the_scratch_folder_does_not_fit);
     RUN_TEST(test_saves_unit_reports_the_failing_step);
     RUN_TEST(test_saves_restore_reports_the_failing_step);
+    RUN_TEST(test_saves_restore_survives_a_leftover_backup);
     RUN_TEST(test_emits_banner_then_one_line_per_check_then_marker);
     RUN_TEST(test_final_line_carries_ok_marker_for_ci_grep);
     RUN_TEST(test_null_logger_is_allowed);

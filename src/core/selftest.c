@@ -172,6 +172,8 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_RESTORE_OLD "old slot"
 #define SKIFF_SELFTEST_RESTORE_NEW "new slot, restored"
 #define SKIFF_SELFTEST_RESTORE_SOURCE SKIFF_STORAGE_ROOT_APP "/source"
+/* Listings of leftover scratch backups the cleanup removes, three at a time. */
+#define SKIFF_SELFTEST_RESTORE_CLEANUP_ROUNDS 8
 #define SKIFF_SELFTEST_RESTORE_LIVE                                                                \
     SKIFF_STORAGE_ROOT_SAVES "/" SKIFF_SELFTEST_SAVES_DATA00 "/DATA.BIN"
 /* A name with a byte above 0x7F, which a signed char (the PSP's) must not let through. */
@@ -922,7 +924,29 @@ static skiff_err make_restore_tree(selftest_restore *s) {
     return err;
 }
 
+/* Every scratch backup, whatever its number: a run cut short after its backup leaves one, and the
+ * next run's backup is numbered after it. */
+static void remove_restore_backups(selftest_restore *s) {
+    skiff_saves_backup_list backups;
+    for (int round = 0; round < SKIFF_SELFTEST_RESTORE_CLEANUP_ROUNDS; round++) {
+        if (skiff_saves_backups_list(run_env->storage, &s->roots, SKIFF_SELFTEST_SAVES_TARGET,
+                                     &backups) != SKIFF_OK ||
+            backups.count == 0) {
+            return;
+        }
+        for (size_t i = 0; i < backups.count; i++) {
+            char logical[SKIFF_STORAGE_PATH_MAX];
+            if (skiff_saves_backup_path(SKIFF_SELFTEST_SAVES_TARGET, backups.backups[i].number,
+                                        logical, sizeof logical) == SKIFF_OK &&
+                skiff_storage_resolve(&s->roots, logical, s->path, sizeof s->path) == SKIFF_OK) {
+                (void)skiff_storage_remove(run_env->storage, s->path);
+            }
+        }
+    }
+}
+
 static skiff_err remove_restore_tree(selftest_restore *s) {
+    remove_restore_backups(s);
     for (size_t i = 0; i < sizeof SELFTEST_RESTORE_OUTPUTS / sizeof SELFTEST_RESTORE_OUTPUTS[0];
          i++) {
         if (restore_path(s, SELFTEST_RESTORE_OUTPUTS[i]) == SKIFF_OK) {
@@ -963,7 +987,7 @@ static const char *check_restore_steps(selftest_restore *s) {
     }
     skiff_saves_restore_report report;
     err = skiff_saves_restore(storage, &s->roots, unit_path, SKIFF_SELFTEST_SAVES_TARGET, &report);
-    if (err != SKIFF_OK || report.backup != 1 || report.folders_replaced != 1) {
+    if (err != SKIFF_OK || report.backup == 0 || report.folders_replaced != 1) {
         return storage_failure("the unit was not restored over the live save", err);
     }
     size_t length = 0;
@@ -977,7 +1001,7 @@ static const char *check_restore_steps(selftest_restore *s) {
     }
     skiff_saves_backup_list backups;
     err = skiff_saves_backups_list(storage, &s->roots, SKIFF_SELFTEST_SAVES_TARGET, &backups);
-    if (err != SKIFF_OK || backups.count != 1 || backups.backups[0].number != 1) {
+    if (err != SKIFF_OK || backups.count != 1 || backups.backups[0].number != report.backup) {
         return storage_failure("the live save was not backed up", err);
     }
     skiff_saves_recovery recovery;
@@ -1023,6 +1047,8 @@ static const char *check_saves_restore(void) {
     } else if (scratch_roots(s) != SKIFF_OK) {
         failure = "the restore folders do not fit under app:";
     } else {
+        /* Whatever a run cut short left (on hardware, the power or HOME) goes first. */
+        (void)remove_restore_tree(s);
         failure = check_restore_steps(s);
         const skiff_err removed = remove_restore_tree(s);
         if (removed != SKIFF_OK && failure == NULL) {

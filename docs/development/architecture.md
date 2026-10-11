@@ -373,7 +373,7 @@ proxy. Header values are secrets: redacted in logs, same caveats as the token.
 
 Version policy (`skiff_romm_check_version()`): below 5.3, the release that brought device-code
 pairing and per-file hashes, Skiff refuses to run (`SKIFF_ERR_ROMM_UNSUPPORTED_VERSION`, 205). A
-newer release line than the one tested (5.3) is allowed with a one-time notice, because refusing
+newer release line than the one tested (5.4) is allowed with a one-time notice, because refusing
 every untested release would break Skiff with each RomM update; a patch release gets no notice. A
 version that does not start with a number (a development build) is allowed with the notice too.
 

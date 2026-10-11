@@ -2,6 +2,7 @@ HTTP/1.1 400 Bad Request
 Content-Length: 22
 Content-Type: application/json
 Server: nginx/1.30.5
+Vary: Origin
 Via: 1.1 Caddy
 
 {"detail":"slow_down"}

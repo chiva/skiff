@@ -81,7 +81,7 @@ command. CI runs it in the `psp-release` build on every PR, and the release job 
 `tests/integration/` runs a disposable RomM behind a TLS proxy, for the integration tests and for
 the PSP's network checks:
 
-- RomM 5.3.1 and MariaDB, with nothing published but the proxy. Every image is pinned by tag and
+- RomM 5.4.0 and MariaDB, with nothing published but the proxy. Every image is pinned by tag and
   digest in `compose.yaml`.
 - Caddy in front, on four ports: `8080` plain HTTP (for comparison only), `8443` TLS, `8444` TLS
   that requires a client certificate signed by the test CA, and `8445` TLS 1.2 with AES-128-GCM
@@ -97,7 +97,7 @@ the PSP's network checks:
   ROM 1 and the small one ROM 2, as the recorded fixtures expect) and creates an API token. It
   uploads a synthetic 600×800 PNG cover for the first, as the web UI uploads custom artwork, which
   RomM resizes into a 240×320 small cover; the server has no metadata providers, so it is the only
-  cover. The second gets none: every ROM update in RomM 5.3.1 also cleans the file's name on disk,
+  cover. The second gets none: every ROM update in RomM (5.3 and 5.4) also cleans the file's name on disk,
   which would drop its `+`. The first is also the admin's favourite, kept as RomM's web UI keeps
   favourites: a private collection named "Favorites" marked as favourites.
 

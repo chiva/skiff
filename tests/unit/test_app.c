@@ -897,17 +897,17 @@ static void test_an_old_romm_is_refused(void) {
 
 static void test_a_newer_romm_is_noticed_once(void) {
     write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
-    serve_heartbeat("5.4.0");
+    serve_heartbeat("5.5.0");
     serve_platforms();
     serve_page(0, 1, 1);
     create_app();
     run_until(SKIFF_APP_SCREEN_MESSAGE);
-    TEST_ASSERT_TRUE(shows("RomM 5.4.0 is newer"));
+    TEST_ASSERT_TRUE(shows("RomM 5.5.0 is newer"));
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
-    TEST_ASSERT_NOT_NULL(strstr(config, "romm_notice = 5.4"));
+    TEST_ASSERT_NOT_NULL(strstr(config, "romm_notice = 5.5"));
     TEST_PRINTF("the next launch says nothing");
     skiff_app_destroy(app);
     create_app();

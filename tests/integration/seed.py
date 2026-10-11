@@ -8,7 +8,7 @@ for it. Prints one JSON object on stdout for the tests; the token in it is a sec
 The payload ROM gets a synthetic PNG cover, uploaded the way RomM's web UI uploads custom artwork;
 the seed has no metadata providers, so it is the only cover. RomM keeps the upload as the large
 cover and resizes it into the small one Skiff shows. The extra ROM gets none: every ROM update in
-RomM 5.3.1 also cleans the file's name on disk, which would drop the '+' its name is there for.
+RomM (5.3 and 5.4) also cleans the file's name on disk, which would drop the '+' its name is there for.
 
 With SKIFF_LIBRARY_ROMS set, the platform also gets a library for the app's hardware sessions (A1,
 A2): that many small numbered ROMs (several pages), every third with a PNG cover of its own and

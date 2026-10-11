@@ -1,9 +1,11 @@
 #include "storage_posix.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -175,11 +177,84 @@ static skiff_err posix_free_space(skiff_storage *storage, const char *path, uint
     return SKIFF_OK;
 }
 
+/* What the PSP reports for a folder call on a file: SKIFF_ERR_STORAGE_IO, where POSIX says ENOTDIR
+ * (which from_errno() keeps for a file in the middle of a path: not found). */
+static skiff_err folder_error(const char *path, int error) {
+    struct stat status;
+    if (error == ENOTDIR && stat(path, &status) == 0 && !S_ISDIR(status.st_mode)) {
+        return SKIFF_ERR_STORAGE_IO;
+    }
+    return from_errno(error);
+}
+
+static void info_from_stat(const struct stat *status, skiff_storage_info *out) {
+    out->is_dir = S_ISDIR(status->st_mode) ? 1 : 0;
+    out->size = out->is_dir ? 0 : (uint64_t)status->st_size;
+    out->mtime = (int64_t)status->st_mtime;
+}
+
+static skiff_err posix_stat(skiff_storage *storage, const char *path, skiff_storage_info *out) {
+    (void)storage;
+    struct stat status;
+    if (stat(path, &status) != 0) {
+        return from_errno(errno);
+    }
+    info_from_stat(&status, out);
+    return SKIFF_OK;
+}
+
+static skiff_err posix_list(skiff_storage *storage, const char *path, skiff_storage_visit_fn visit,
+                            void *ctx) {
+    (void)storage;
+    DIR *folder = opendir(path);
+    if (folder == NULL) {
+        return folder_error(path, errno);
+    }
+    skiff_err err = SKIFF_OK;
+    skiff_storage_info info;
+    struct stat status;
+    for (;;) {
+        errno = 0;
+        const struct dirent *entry = readdir(folder);
+        if (entry == NULL) {
+            err = errno != 0 ? from_errno(errno) : SKIFF_OK;
+            break;
+        }
+        if (fstatat(dirfd(folder), entry->d_name, &status, 0) != 0) {
+            if (errno == ENOENT) {
+                continue; /* removed since readdir() saw it */
+            }
+            err = from_errno(errno);
+            break;
+        }
+        info_from_stat(&status, &info);
+        if (visit(ctx, entry->d_name, strlen(entry->d_name), &info) !=
+            SKIFF_STORAGE_LIST_CONTINUE) {
+            break;
+        }
+    }
+    const int closed = closedir(folder);
+    if (err == SKIFF_OK && closed != 0) {
+        err = from_errno(errno);
+    }
+    return err;
+}
+
+static skiff_err posix_rmdir(skiff_storage *storage, const char *path) {
+    (void)storage;
+    if (rmdir(path) == 0) {
+        return SKIFF_OK;
+    }
+    const int error = errno;
+    return error == ENOTEMPTY || error == EEXIST ? SKIFF_ERR_STORAGE_IO : folder_error(path, error);
+}
+
 static void posix_destroy(skiff_storage *storage) { free(storage); }
 
 static const skiff_storage_ops POSIX_STORAGE_OPS = {
-    posix_open,   posix_read,   posix_write, posix_sync,       posix_close,   posix_size,
-    posix_rename, posix_remove, posix_mkdir, posix_free_space, posix_destroy,
+    posix_open, posix_read,   posix_write,  posix_sync,    posix_close,
+    posix_size, posix_rename, posix_remove, posix_mkdir,   posix_free_space,
+    posix_stat, posix_list,   posix_rmdir,  posix_destroy,
 };
 
 skiff_err skiff_posix_storage_create(skiff_storage **out) {

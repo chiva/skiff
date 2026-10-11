@@ -51,7 +51,9 @@ skiff_add_unit_test(test_ui)
 # Reads its codes back with zbarimg (host image), through popen().
 skiff_add_unit_test(test_ui_qr)
 set_source_files_properties(unit/test_ui_qr.c PROPERTIES COMPILE_DEFINITIONS _XOPEN_SOURCE=700)
+# The storage-list check runs on the POSIX storage over a temporary directory.
 skiff_add_unit_test(test_selftest)
+target_link_libraries(test_selftest PRIVATE skiff_host_storage)
 skiff_add_unit_test(test_entropy)
 skiff_add_unit_test(test_http)
 skiff_add_unit_test(test_transport)

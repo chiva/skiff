@@ -145,11 +145,63 @@ static skiff_err fake_free_space(skiff_storage *base, const char *path, uint64_t
     return skiff_storage_free_space(fake->inner, path, out);
 }
 
+static skiff_err fake_stat(skiff_storage *base, const char *path, skiff_storage_info *out) {
+    const fake_storage *fake = (const fake_storage *)base;
+    return fake->stat_error != SKIFF_OK && matches(fake, path)
+               ? fake->stat_error
+               : skiff_storage_stat(fake->inner, path, out);
+}
+
+typedef struct fake_listing {
+    skiff_storage_visit_fn visit;
+    void *ctx;
+    /* Entries left to pass on before the listing fails; negative for no failure. */
+    int left;
+    int failed;
+} fake_listing;
+
+static skiff_storage_list_step relay_entry(void *ctx, const char *name, size_t length,
+                                           const skiff_storage_info *info) {
+    fake_listing *listing = ctx;
+    const int dot =
+        (length == 1 && name[0] == '.') || (length == 2 && name[0] == '.' && name[1] == '.');
+    if (!dot && listing->left == 0) {
+        listing->failed = 1;
+        return SKIFF_STORAGE_LIST_STOP;
+    }
+    if (!dot && listing->left > 0) {
+        listing->left--;
+    }
+    return listing->visit(listing->ctx, name, length, info);
+}
+
+/* The inner storage's own list op, so the entries reach skiff_storage_list()'s filter as the
+ * device reports them. */
+static skiff_err fake_list(skiff_storage *base, const char *path, skiff_storage_visit_fn visit,
+                           void *ctx) {
+    const fake_storage *fake = (const fake_storage *)base;
+    const int fails = fake->list_error != SKIFF_OK && matches(fake, path);
+    if (fails && fake->list_error_after == 0) {
+        return fake->list_error;
+    }
+    fake_listing listing = {visit, ctx, fails ? fake->list_error_after : -1, 0};
+    const skiff_err err = fake->inner->ops->list(fake->inner, path, relay_entry, &listing);
+    return listing.failed ? fake->list_error : err;
+}
+
+static skiff_err fake_rmdir(skiff_storage *base, const char *path) {
+    fake_storage *fake = (fake_storage *)base;
+    fake->rmdirs++;
+    return fake->rmdir_error != SKIFF_OK && matches(fake, path)
+               ? fake->rmdir_error
+               : skiff_storage_rmdir(fake->inner, path);
+}
+
 static void fake_destroy(skiff_storage *base) { (void)base; }
 
 static const skiff_storage_ops FAKE_STORAGE_OPS = {
-    fake_open,   fake_read,   fake_write, fake_sync,       fake_close,   fake_size,
-    fake_rename, fake_remove, fake_mkdir, fake_free_space, fake_destroy,
+    fake_open,   fake_read,  fake_write,      fake_sync, fake_close, fake_size,  fake_rename,
+    fake_remove, fake_mkdir, fake_free_space, fake_stat, fake_list,  fake_rmdir, fake_destroy,
 };
 
 void fake_storage_init(fake_storage *fake, skiff_storage *inner) {

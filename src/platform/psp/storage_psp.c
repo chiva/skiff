@@ -260,11 +260,66 @@ static skiff_err psp_free_space(skiff_storage *base, const char *path, uint64_t 
     return SKIFF_OK;
 }
 
+/* FAT keeps the console's local time; it becomes mtime as read, with no time zone applied. A date
+ * the firmware cannot give (a zeroed entry) is SKIFF_STORAGE_MTIME_UNKNOWN. */
+static void info_from_stat(const SceIoStat *status, skiff_storage_info *out) {
+    const ScePspDateTime *written = &status->sce_st_mtime;
+    const skiff_storage_date date = {written->year, written->month,  written->day,
+                                     written->hour, written->minute, written->second};
+    out->is_dir = FIO_S_ISDIR(status->st_mode) ? 1 : 0;
+    out->size = out->is_dir ? 0 : (uint64_t)status->st_size;
+    (void)skiff_storage_mtime_from_date(&date, &out->mtime);
+}
+
+static skiff_err psp_stat(skiff_storage *base, const char *path, skiff_storage_info *out) {
+    SceIoStat status;
+    memset(&status, 0, sizeof status);
+    const skiff_err err = step((psp_storage *)base, "sceIoGetstat", sceIoGetstat(path, &status));
+    if (err == SKIFF_OK) {
+        info_from_stat(&status, out);
+    }
+    return err;
+}
+
+/* sceIoDread answers 1 per entry, 0 at the end, or an error: a suspend invalidates the folder's
+ * handle as it does a file's, and the listing then fails rather than ending short. */
+static skiff_err psp_list(skiff_storage *base, const char *path, skiff_storage_visit_fn visit,
+                          void *ctx) {
+    psp_storage *storage = (psp_storage *)base;
+    const SceUID folder = sceIoDopen(path);
+    if (folder < 0) {
+        return step(storage, "sceIoDopen", folder);
+    }
+    SceIoDirent entry;
+    skiff_storage_info info;
+    skiff_err err = SKIFF_OK;
+    for (;;) {
+        /* d_private must be NULL: the firmware writes the 8.3 name through it otherwise. */
+        memset(&entry, 0, sizeof entry);
+        const int result = sceIoDread(folder, &entry);
+        if (result <= 0) {
+            err = step(storage, "sceIoDread", result);
+            break;
+        }
+        info_from_stat(&entry.d_stat, &info);
+        if (visit(ctx, entry.d_name, strnlen(entry.d_name, sizeof entry.d_name), &info) !=
+            SKIFF_STORAGE_LIST_CONTINUE) {
+            break;
+        }
+    }
+    const skiff_err closed = step(storage, "sceIoDclose", sceIoDclose(folder));
+    return err != SKIFF_OK ? err : closed;
+}
+
+static skiff_err psp_rmdir(skiff_storage *base, const char *path) {
+    return step((psp_storage *)base, "sceIoRmdir", sceIoRmdir(path));
+}
+
 static void psp_destroy(skiff_storage *base) { free(base); }
 
 static const skiff_storage_ops PSP_STORAGE_OPS = {
-    psp_open,   psp_read,   psp_write, psp_sync,       psp_close,   psp_size,
-    psp_rename, psp_remove, psp_mkdir, psp_free_space, psp_destroy,
+    psp_open,   psp_read,  psp_write,      psp_sync, psp_close, psp_size,  psp_rename,
+    psp_remove, psp_mkdir, psp_free_space, psp_stat, psp_list,  psp_rmdir, psp_destroy,
 };
 
 skiff_err skiff_psp_storage_create(skiff_storage **out) {

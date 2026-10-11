@@ -508,11 +508,29 @@ static skiff_err timed_free_space(skiff_storage *base, const char *path, uint64_
     return skiff_storage_free_space(timed.inner, path, out);
 }
 
+/* Not timed either: downloads never list, stat or remove folders. */
+static skiff_err timed_stat(skiff_storage *base, const char *path, skiff_storage_info *out) {
+    (void)base;
+    return skiff_storage_stat(timed.inner, path, out);
+}
+
+static skiff_err timed_list(skiff_storage *base, const char *path, skiff_storage_visit_fn visit,
+                            void *ctx) {
+    (void)base;
+    return timed.inner->ops->list(timed.inner, path, visit, ctx);
+}
+
+static skiff_err timed_rmdir(skiff_storage *base, const char *path) {
+    (void)base;
+    return skiff_storage_rmdir(timed.inner, path);
+}
+
 static void timed_destroy(skiff_storage *base) { (void)base; }
 
 static const skiff_storage_ops TIMED_STORAGE_OPS = {
-    timed_open,   timed_read,   timed_write, timed_sync,       timed_close,   timed_size,
-    timed_rename, timed_remove, timed_mkdir, timed_free_space, timed_destroy,
+    timed_open, timed_read,   timed_write,  timed_sync,    timed_close,
+    timed_size, timed_rename, timed_remove, timed_mkdir,   timed_free_space,
+    timed_stat, timed_list,   timed_rmdir,  timed_destroy,
 };
 
 static void reset_storage_timing(void) { memset(timed.ops, 0, sizeof timed.ops); }

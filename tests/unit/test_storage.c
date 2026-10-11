@@ -1,12 +1,15 @@
 /*
  * The storage seam (skiff/storage.h): the argument checks every implementation gets for free, and
  * the POSIX implementation host tests run on, including the rules it keeps from the PSP (no rename
- * over an existing file, writes from an offset that leave the rest of the file alone). Also the
- * fake that injects Memory Stick failures (tests/support/fake_storage.h).
+ * over an existing file, writes from an offset that leave the rest of the file alone), folder
+ * listings, stat and folder removal. Also the fake that injects Memory Stick failures
+ * (tests/support/fake_storage.h).
  */
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "skiff/storage.h"
 
@@ -453,6 +456,382 @@ static void test_whole_files_refuse_bad_arguments(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(storage, path, NULL, 0));
 }
 
+/* ---- Folders: listing, stat, removal ---- */
+
+enum { LISTED_MAX = 8 };
+
+typedef struct listing {
+    skiff_storage_entry entries[LISTED_MAX];
+    int count;
+    /* The callback stops the listing once it has seen this many entries; 0 for never. */
+    int stop_after;
+} listing;
+
+static skiff_storage_list_step collect(void *ctx, const skiff_storage_entry *entry) {
+    listing *seen = ctx;
+    TEST_PRINTF("  listed \"%s\": %s, %llu bytes, mtime %lld", entry->name,
+                entry->info.is_dir ? "folder" : "file", (unsigned long long)entry->info.size,
+                (long long)entry->info.mtime);
+    if (seen->count < LISTED_MAX) {
+        seen->entries[seen->count] = *entry;
+    }
+    seen->count++;
+    return seen->stop_after > 0 && seen->count >= seen->stop_after ? SKIFF_STORAGE_LIST_STOP
+                                                                   : SKIFF_STORAGE_LIST_CONTINUE;
+}
+
+static const skiff_storage_entry *listed(const listing *seen, const char *name) {
+    for (int i = 0; i < seen->count && i < LISTED_MAX; i++) {
+        if (strcmp(seen->entries[i].name, name) == 0) {
+            return &seen->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static skiff_err list_dir(skiff_storage *target, const char *folder, listing *seen,
+                          size_t *skipped) {
+    TEST_PRINTF("list %s", folder);
+    return skiff_storage_list(target, folder, collect, seen, skipped);
+}
+
+static void make_folder(const char *name, char *out, size_t out_size) {
+    TEST_ASSERT_TRUE(temp_dir_path(dir, name, out, out_size));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdir(storage, out));
+}
+
+static void test_an_empty_folder_lists_nothing(void) {
+    char folder[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 99;
+    make_folder("empty", folder, sizeof folder);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(storage, folder, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, seen.count, "\".\" and \"..\" are never listed");
+    TEST_ASSERT_EQUAL_size_t(0, skipped);
+}
+
+static void test_a_folder_lists_its_files_and_folders_with_their_details(void) {
+    char sub[TEMP_DIR_PATH_MAX];
+    char nested[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 99;
+    write_file(path, CONTENT);
+    write_file(other, "");
+    make_folder("ULUS10064DATA00", sub, sizeof sub);
+    TEST_ASSERT_TRUE(temp_dir_path(sub, "DATA.BIN", nested, sizeof nested));
+    write_file(nested, "not listed: one level only");
+
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(storage, dir, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(3, seen.count);
+    TEST_ASSERT_EQUAL_size_t(0, skipped);
+    const skiff_storage_entry *file = listed(&seen, "file.bin");
+    const skiff_storage_entry *empty = listed(&seen, "other.bin");
+    const skiff_storage_entry *folder = listed(&seen, "ULUS10064DATA00");
+    TEST_ASSERT_NOT_NULL(file);
+    TEST_ASSERT_NOT_NULL(empty);
+    TEST_ASSERT_NOT_NULL(folder);
+    TEST_ASSERT_FALSE(file->info.is_dir);
+    TEST_ASSERT_EQUAL_UINT64(CONTENT_BYTES, file->info.size);
+    TEST_ASSERT_NOT_EQUAL(SKIFF_STORAGE_MTIME_UNKNOWN, file->info.mtime);
+    TEST_ASSERT_FALSE(empty->info.is_dir);
+    TEST_ASSERT_EQUAL_UINT64(0, empty->info.size);
+    TEST_ASSERT_TRUE(folder->info.is_dir);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(0, folder->info.size, "a folder reports no size");
+    TEST_ASSERT_NULL_MESSAGE(listed(&seen, "DATA.BIN"), "the listing is not recursive");
+}
+
+static void test_the_callback_can_stop_a_listing_early(void) {
+    static const char *const NAMES[] = {"a.bin", "b.bin", "c.bin"};
+    char file[TEMP_DIR_PATH_MAX];
+    for (size_t i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
+        TEST_ASSERT_TRUE(temp_dir_path(dir, NAMES[i], file, sizeof file));
+        write_file(file, CONTENT);
+    }
+    listing seen = {0};
+    size_t skipped = 0;
+    seen.stop_after = 1;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, list_dir(storage, dir, &seen, &skipped),
+                                  "stopping is not an error");
+    TEST_ASSERT_EQUAL_INT(1, seen.count);
+}
+
+static void test_listing_a_missing_folder_or_a_file_fails(void) {
+    char missing[TEMP_DIR_PATH_MAX];
+    char below_file[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 99;
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "missing", missing, sizeof missing));
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "file.bin/below", below_file, sizeof below_file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, list_dir(storage, missing, &seen, &skipped));
+    TEST_ASSERT_EQUAL_size_t(0, skipped);
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, list_dir(storage, path, &seen, &skipped),
+                                  "a file is not a folder");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_NOT_FOUND,
+                                  list_dir(storage, below_file, &seen, &skipped),
+                                  "a file in the middle of the path: nothing there");
+    TEST_ASSERT_EQUAL_INT(0, seen.count);
+}
+
+static void test_names_too_long_for_an_entry_are_skipped_and_counted(void) {
+    char longest[SKIFF_STORAGE_NAME_MAX];
+    char too_long[SKIFF_STORAGE_NAME_MAX + 1];
+    char much_too_long[SKIFF_STORAGE_NAME_MAX + 64];
+    char file[TEMP_DIR_PATH_MAX + SKIFF_STORAGE_NAME_MAX + 64];
+    memset(longest, 'l', sizeof longest - 1);
+    longest[sizeof longest - 1] = '\0';
+    memset(too_long, 't', sizeof too_long - 1);
+    too_long[sizeof too_long - 1] = '\0';
+    memset(much_too_long, 'm', sizeof much_too_long - 1);
+    much_too_long[sizeof much_too_long - 1] = '\0';
+    const char *const names[] = {longest, too_long, much_too_long};
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        snprintf(file, sizeof file, "%s/%s", dir, names[i]);
+        write_file(file, CONTENT);
+    }
+    TEST_PRINTF("names of %u, %u and %u bytes; an entry holds %u", (unsigned)strlen(longest),
+                (unsigned)strlen(too_long), (unsigned)strlen(much_too_long),
+                (unsigned)(SKIFF_STORAGE_NAME_MAX - 1));
+    listing seen = {0};
+    size_t skipped = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(storage, dir, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(1, seen.count);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(longest, seen.entries[0].name, "the longest name fits whole");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(2, skipped, "longer names are skipped, never cut");
+}
+
+static void test_list_checks_its_arguments(void) {
+    listing seen = {0};
+    size_t skipped = 99;
+    skiff_storage no_ops = {NULL};
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(storage, dir, collect, &seen, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(storage, dir, NULL, &seen, &skipped));
+    TEST_ASSERT_EQUAL_size_t(0, skipped);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(storage, "", collect, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(storage, NULL, collect, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(NULL, dir, collect, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_storage_list(&no_ops, dir, collect, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(0, seen.count);
+}
+
+static void test_rmdir_removes_only_an_empty_folder(void) {
+    char folder[TEMP_DIR_PATH_MAX];
+    char inside[TEMP_DIR_PATH_MAX];
+    make_folder("ULUS10064DATA00", folder, sizeof folder);
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "PARAM.SFO", inside, sizeof inside));
+    write_file(inside, CONTENT);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, skiff_storage_rmdir(storage, folder),
+                                  "a folder with a file in it stays");
+    TEST_ASSERT_TRUE(is_folder(folder));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(storage, inside));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(storage, folder));
+    TEST_ASSERT_FALSE(is_folder(folder));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, skiff_storage_rmdir(storage, folder));
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, skiff_storage_rmdir(storage, path),
+                                  "a file is not a folder");
+    TEST_ASSERT_TRUE(exists(path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_rmdir(storage, ""));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_rmdir(storage, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_rmdir(NULL, folder));
+}
+
+static void test_stat_describes_a_file_a_folder_or_nothing(void) {
+    skiff_storage_info info;
+    write_file(path, CONTENT);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_stat(storage, path, &info));
+    TEST_PRINTF("file: %llu bytes, mtime %lld", (unsigned long long)info.size,
+                (long long)info.mtime);
+    TEST_ASSERT_FALSE(info.is_dir);
+    TEST_ASSERT_EQUAL_UINT64(CONTENT_BYTES, info.size);
+    TEST_ASSERT_NOT_EQUAL(SKIFF_STORAGE_MTIME_UNKNOWN, info.mtime);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_stat(storage, dir, &info));
+    TEST_ASSERT_TRUE(info.is_dir);
+    TEST_ASSERT_EQUAL_UINT64(0, info.size);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND, skiff_storage_stat(storage, other, &info));
+    TEST_ASSERT_FALSE(info.is_dir);
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(SKIFF_STORAGE_MTIME_UNKNOWN, info.mtime, "zeroed on error");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_stat(storage, path, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_stat(storage, "", &info));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_stat(storage, NULL, &info));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_stat(NULL, path, &info));
+}
+
+/* 2001-09-09 01:46:40 UTC. */
+#define OLD_MTIME 1000000000LL
+
+static void test_mtime_follows_the_file_system_and_changes_on_a_rewrite(void) {
+    skiff_storage_info info;
+    write_file(path, CONTENT);
+    const struct timespec times[2] = {{(time_t)OLD_MTIME, 0}, {(time_t)OLD_MTIME, 0}};
+    TEST_ASSERT_EQUAL_INT(0, utimensat(AT_FDCWD, path, times, 0));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_stat(storage, path, &info));
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(OLD_MTIME, info.mtime, "the host's mtime is UTC seconds");
+    listing seen = {0};
+    size_t skipped = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(storage, dir, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(1, seen.count);
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(OLD_MTIME, seen.entries[0].info.mtime,
+                                    "the listing and stat agree");
+
+    write_file(path, "rewritten");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_stat(storage, path, &info));
+    TEST_PRINTF("after the rewrite: mtime %lld", (long long)info.mtime);
+    TEST_ASSERT_TRUE_MESSAGE(info.mtime > OLD_MTIME, "a rewrite stamps the time now");
+}
+
+enum { DATE_TEXT_MAX = 64 };
+
+/* Unity's TEST_PRINTF has no field widths, so dates are formatted here. */
+static const char *date_text(const skiff_storage_date *date, char *out, size_t out_size) {
+    snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d", date->year, date->month, date->day,
+             date->hour, date->minute, date->second);
+    return out;
+}
+
+static void assert_mtime(int year, int month, int day, int hour, int minute, int second,
+                         int64_t expected) {
+    const skiff_storage_date date = {year, month, day, hour, minute, second};
+    char text[DATE_TEXT_MAX];
+    int64_t mtime = 1;
+    const skiff_err err = skiff_storage_mtime_from_date(&date, &mtime);
+    TEST_PRINTF("%s -> %lld (%s)", date_text(&date, text, sizeof text), (long long)mtime,
+                skiff_err_name(err));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_ASSERT_EQUAL_INT64(expected, mtime);
+}
+
+static void test_a_date_becomes_seconds_since_1970(void) {
+    assert_mtime(1970, 1, 1, 0, 0, 0, 0);
+    assert_mtime(1969, 12, 31, 23, 59, 59, -1);
+    assert_mtime(2000, 1, 1, 0, 0, 0, 946684800LL);
+    assert_mtime(2000, 2, 29, 12, 34, 56, 951827696LL);
+    assert_mtime(2026, 10, 11, 18, 15, 0, 1791742500LL);
+    assert_mtime(2100, 3, 1, 0, 0, 0, 4107542400LL);
+    assert_mtime(1, 1, 1, 0, 0, 0, -62135596800LL);
+    assert_mtime(9999, 12, 31, 23, 59, 59, 253402300799LL);
+}
+
+static void test_a_date_out_of_range_is_refused(void) {
+    static const skiff_storage_date REFUSED[] = {
+        {0, 0, 0, 0, 0, 0}, /* a zeroed FAT entry */
+        {0, 1, 1, 0, 0, 0},     {10000, 1, 1, 0, 0, 0}, {2026, 0, 1, 0, 0, 0},
+        {2026, 13, 1, 0, 0, 0}, {2026, 1, 0, 0, 0, 0},  {2026, 4, 31, 0, 0, 0},
+        {1900, 2, 29, 0, 0, 0}, {2026, 1, 1, 24, 0, 0}, {2026, 1, 1, 0, 60, 0},
+        {2026, 1, 1, 0, 0, 60}, {2026, 1, 1, -1, 0, 0}, {2026, 1, 1, 0, -1, 0},
+        {2026, 1, 1, 0, 0, -1},
+    };
+    for (size_t i = 0; i < sizeof REFUSED / sizeof REFUSED[0]; i++) {
+        const skiff_storage_date *date = &REFUSED[i];
+        char text[DATE_TEXT_MAX];
+        int64_t mtime = 1;
+        TEST_PRINTF("%s refused", date_text(date, text, sizeof text));
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mtime_from_date(date, &mtime));
+        TEST_ASSERT_EQUAL_INT64(SKIFF_STORAGE_MTIME_UNKNOWN, mtime);
+    }
+    int64_t mtime = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mtime_from_date(NULL, &mtime));
+    TEST_ASSERT_EQUAL_INT64(SKIFF_STORAGE_MTIME_UNKNOWN, mtime);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_storage_mtime_from_date(&REFUSED[0], NULL));
+}
+
+/* A SAVEDATA folder holding a.bin and b.bin, and a fake over the storage that fails only it. */
+static void fake_over_savedata(fake_storage *fake, char *folder, size_t folder_size) {
+    char file[TEMP_DIR_PATH_MAX];
+    make_folder("SAVEDATA", folder, folder_size);
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "a.bin", file, sizeof file));
+    write_file(file, CONTENT);
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "b.bin", file, sizeof file));
+    write_file(file, CONTENT);
+    fake_storage_init(fake, storage);
+    fake->fail_suffix = "SAVEDATA";
+}
+
+static void test_fake_fails_a_listing_before_any_entry(void) {
+    fake_storage fake;
+    char folder[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 0;
+    fake_over_savedata(&fake, folder, sizeof folder);
+    fake.list_error = SKIFF_ERR_STORAGE_NO_MEDIA;
+    TEST_PRINTF("the folder cannot be opened");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_MEDIA,
+                          list_dir(&fake.base, folder, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(0, seen.count);
+    TEST_PRINTF("other folders list normally");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(&fake.base, dir, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(1, seen.count);
+    skiff_storage_destroy(&fake.base);
+}
+
+static void test_fake_fails_a_listing_part_way_through(void) {
+    fake_storage fake;
+    char folder[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 0;
+    fake_over_savedata(&fake, folder, sizeof folder);
+    fake.list_error = SKIFF_ERR_STORAGE_IO;
+    fake.list_error_after = 1;
+    TEST_PRINTF("the handle is lost after the first entry, as after a suspend");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, list_dir(&fake.base, folder, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, seen.count, "the caller saw one entry, then the error");
+    skiff_storage_destroy(&fake.base);
+}
+
+static void test_fake_lets_a_listing_shorter_than_the_failure_complete(void) {
+    fake_storage fake;
+    char folder[TEMP_DIR_PATH_MAX];
+    listing seen = {0};
+    size_t skipped = 0;
+    fake_over_savedata(&fake, folder, sizeof folder);
+    fake.list_error = SKIFF_ERR_STORAGE_IO;
+    fake.list_error_after = LISTED_MAX;
+    TEST_PRINTF("more entries allowed than the folder holds: the listing completes");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_dir(&fake.base, folder, &seen, &skipped));
+    TEST_ASSERT_EQUAL_INT(2, seen.count);
+    skiff_storage_destroy(&fake.base);
+}
+
+static void test_fake_fails_stats_of_matching_paths(void) {
+    fake_storage fake;
+    char folder[TEMP_DIR_PATH_MAX];
+    char file[TEMP_DIR_PATH_MAX];
+    skiff_storage_info info;
+    fake_over_savedata(&fake, folder, sizeof folder);
+    fake.stat_error = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "a.bin", file, sizeof file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, skiff_storage_stat(&fake.base, folder, &info));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_stat(&fake.base, file, &info));
+    TEST_ASSERT_FALSE(info.is_dir);
+    skiff_storage_destroy(&fake.base);
+}
+
+static void test_fake_fails_folder_removals_and_leaves_the_folder(void) {
+    fake_storage fake;
+    char folder[TEMP_DIR_PATH_MAX];
+    char file[TEMP_DIR_PATH_MAX];
+    fake_over_savedata(&fake, folder, sizeof folder);
+    fake.rmdir_error = SKIFF_ERR_STORAGE_NO_MEDIA;
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "a.bin", file, sizeof file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(&fake.base, file));
+    TEST_ASSERT_TRUE(temp_dir_path(folder, "b.bin", file, sizeof file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(&fake.base, file));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_MEDIA, skiff_storage_rmdir(&fake.base, folder));
+    TEST_ASSERT_TRUE_MESSAGE(is_folder(folder), "a failed removal leaves the folder");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, skiff_storage_rmdir(&fake.base, dir));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, fake.rmdirs,
+                                  "a full folder is refused before the device is asked");
+    skiff_storage_destroy(&fake.base);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(storage, folder));
+    TEST_ASSERT_FALSE(is_folder(folder));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_replace_write_read_and_size);
@@ -474,5 +853,21 @@ int main(void) {
     RUN_TEST(test_whole_files_are_binary_and_fill_an_exact_buffer);
     RUN_TEST(test_a_complete_pending_file_is_put_in_place);
     RUN_TEST(test_whole_files_refuse_bad_arguments);
+    RUN_TEST(test_an_empty_folder_lists_nothing);
+    RUN_TEST(test_a_folder_lists_its_files_and_folders_with_their_details);
+    RUN_TEST(test_the_callback_can_stop_a_listing_early);
+    RUN_TEST(test_listing_a_missing_folder_or_a_file_fails);
+    RUN_TEST(test_names_too_long_for_an_entry_are_skipped_and_counted);
+    RUN_TEST(test_list_checks_its_arguments);
+    RUN_TEST(test_rmdir_removes_only_an_empty_folder);
+    RUN_TEST(test_stat_describes_a_file_a_folder_or_nothing);
+    RUN_TEST(test_mtime_follows_the_file_system_and_changes_on_a_rewrite);
+    RUN_TEST(test_a_date_becomes_seconds_since_1970);
+    RUN_TEST(test_a_date_out_of_range_is_refused);
+    RUN_TEST(test_fake_fails_a_listing_before_any_entry);
+    RUN_TEST(test_fake_fails_a_listing_part_way_through);
+    RUN_TEST(test_fake_lets_a_listing_shorter_than_the_failure_complete);
+    RUN_TEST(test_fake_fails_stats_of_matching_paths);
+    RUN_TEST(test_fake_fails_folder_removals_and_leaves_the_folder);
     return UNITY_END();
 }

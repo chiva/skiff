@@ -517,7 +517,13 @@ network is back.
 - **Storage seam**: the download writes through `include/skiff/storage.h`, not the C library. On the
   PSP newlib's `off_t` is 32 bits, so stdio cannot place a file position past 2 GiB; the PSP
   implementation uses `sceIo` with 64-bit offsets. A rename never replaces a file (FAT cannot do it
-  in one step): the target is removed first.
+  in one step): the target is removed first. For save sync the seam also lists a folder
+  (`skiff_storage_list()`, one level, names over 127 bytes skipped and counted, never cut), reports
+  a file's size and date (`skiff_storage_stat()`) and removes an empty folder
+  (`skiff_storage_rmdir()`, which lists the folder first: PPSSPP's `sceIoRmdir` removes a full
+  one). On the PSP a date is the console's local time as FAT records it, with no time zone: it is
+  compared only with dates from the same Memory Stick. Names are compared without case (PPSSPP
+  lists `folder` as `FOLDER`).
 - **Limits**: every download attempt checks free space before its request
   (`skiff_storage_check_room()`): what is still to come plus 8 MiB
   (`SKIFF_STORAGE_FREE_MARGIN_BYTES`) for the `.resume` file, the log, `config.ini` and the file
@@ -690,8 +696,9 @@ A game and Skiff never run at the same time, so a save is never synced while it 
 - `storage/` exposes a `storage` interface (`include/skiff/storage.h`). Host tests use a POSIX
   implementation over a temporary directory (`src/platform/host/storage_posix.h`), wrapped by a
   fake that injects what a Memory Stick does to a long download: it fills up mid-write, a sync or
-  rename fails, open file handles stop working as after a suspend, a folder cannot be created, or
-  the device has a given amount of free space (`tests/support/fake_storage.h`). `storage/` roots
+  rename fails, open file handles stop working as after a suspend, a folder cannot be created,
+  listed (also part-way through), described or removed, or the device has a given amount of free
+  space (`tests/support/fake_storage.h`). `storage/` roots
   point at a temporary directory on the host.
 - The self-test checks what differs between host, emulator and hardware (C library, heap, clock,
   byte order) and grows with each layer. See [Testing](testing.md).

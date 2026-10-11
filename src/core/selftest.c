@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "skiff/app.h"
@@ -117,6 +118,13 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_MANIFEST_TEXT_MAX 512
 /* Busy-wait bound while waiting for clock() to tick; about a second on a PSP. */
 #define SKIFF_SELFTEST_CLOCK_SPIN_LIMIT 50000000L
+/* What the storage-list check puts in its scratch folder: a file and a folder. */
+#define SKIFF_SELFTEST_SCRATCH_FILE_NAME "file.bin"
+#define SKIFF_SELFTEST_SCRATCH_SUBFOLDER_NAME "folder"
+#define SKIFF_SELFTEST_SCRATCH_TEXT "skiff selftest"
+
+/* The storage the current run was given, for the checks that touch the device. */
+static const skiff_selftest_env *run_env;
 
 /* Each check returns NULL on success or a short reason on failure. */
 
@@ -473,6 +481,117 @@ static const char *check_install_manifest(void) {
     return failure;
 }
 
+typedef struct scratch_listing {
+    int files;
+    int folders;
+    int others;
+    skiff_storage_info file;
+} scratch_listing;
+
+/* FAT ignores case, and PPSSPP reports a name that fits 8.3 in capitals ("FILE.BIN"). */
+static skiff_storage_list_step note_scratch_entry(void *ctx, const skiff_storage_entry *entry) {
+    scratch_listing *seen = ctx;
+    if (!entry->info.is_dir && strcasecmp(entry->name, SKIFF_SELFTEST_SCRATCH_FILE_NAME) == 0) {
+        seen->files++;
+        seen->file = entry->info;
+    } else if (entry->info.is_dir &&
+               strcasecmp(entry->name, SKIFF_SELFTEST_SCRATCH_SUBFOLDER_NAME) == 0) {
+        seen->folders++;
+    } else {
+        seen->others++;
+    }
+    return SKIFF_STORAGE_LIST_CONTINUE;
+}
+
+/* A failed storage step and the error it returned, for a hardware run's result.txt. */
+static const char *storage_failure(const char *step, skiff_err err) {
+    static char reason[SKIFF_SELFTEST_LINE_MAX];
+    snprintf(reason, sizeof reason, "%s (%s)", step, skiff_err_name(err));
+    return reason;
+}
+
+static const char *list_scratch(skiff_storage *storage, const char *folder, const char *file,
+                                const char *subfolder) {
+    static const char text[] = SKIFF_SELFTEST_SCRATCH_TEXT;
+    skiff_err err = skiff_storage_mkdir(storage, folder);
+    if (err != SKIFF_OK) {
+        return storage_failure("could not create a scratch folder under app:", err);
+    }
+    err = skiff_storage_mkdir(storage, subfolder);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_replace_whole(storage, file, text, sizeof text - 1);
+    }
+    if (err != SKIFF_OK) {
+        return storage_failure("could not fill the scratch folder", err);
+    }
+    scratch_listing seen;
+    memset(&seen, 0, sizeof seen);
+    size_t skipped = 0;
+    err = skiff_storage_list(storage, folder, note_scratch_entry, &seen, &skipped);
+    if (err != SKIFF_OK || seen.files != 1 || seen.folders != 1 || seen.others != 0 ||
+        skipped != 0) {
+        return storage_failure("the scratch folder listed other entries than its file and folder",
+                               err);
+    }
+    skiff_storage_info info;
+    err = skiff_storage_stat(storage, file, &info);
+    if (err != SKIFF_OK || seen.file.size != sizeof text - 1 ||
+        seen.file.mtime == SKIFF_STORAGE_MTIME_UNKNOWN || info.is_dir ||
+        info.size != seen.file.size || info.mtime != seen.file.mtime) {
+        return storage_failure("a file's size or date disagreed between the listing and stat", err);
+    }
+    err = skiff_storage_stat(storage, subfolder, &info);
+    if (err != SKIFF_OK || !info.is_dir) {
+        return storage_failure("stat did not see a folder", err);
+    }
+    err = skiff_storage_rmdir(storage, folder);
+    if (err != SKIFF_ERR_STORAGE_IO) {
+        return storage_failure("a folder with files in it was not refused", err);
+    }
+    err = skiff_storage_rmdir(storage, subfolder);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_stat(storage, subfolder, &info) == SKIFF_ERR_STORAGE_NOT_FOUND
+                  ? SKIFF_OK
+                  : SKIFF_ERR_STORAGE_IO;
+    }
+    if (err != SKIFF_OK) {
+        return storage_failure("an empty folder was not removed", err);
+    }
+    return NULL;
+}
+
+/* Save sync lists PSP/SAVEDATA with sceIoDopen/sceIoDread, compares file dates as the firmware
+ * stamps them, and removes emptied folders: on a scratch folder under app:, since the self-test
+ * never touches saves. */
+static const char *check_storage_list(void) {
+    if (run_env == NULL || run_env->storage == NULL || run_env->roots == NULL) {
+        return "no storage to check";
+    }
+    skiff_storage *storage = run_env->storage;
+    char folder[SKIFF_STORAGE_PATH_MAX];
+    char file[SKIFF_STORAGE_PATH_MAX];
+    char subfolder[SKIFF_STORAGE_PATH_MAX];
+    if (skiff_storage_resolve(run_env->roots, SKIFF_SELFTEST_SCRATCH_FOLDER, folder,
+                              sizeof folder) != SKIFF_OK ||
+        skiff_storage_resolve(run_env->roots,
+                              SKIFF_SELFTEST_SCRATCH_FOLDER "/" SKIFF_SELFTEST_SCRATCH_FILE_NAME,
+                              file, sizeof file) != SKIFF_OK ||
+        skiff_storage_resolve(
+            run_env->roots, SKIFF_SELFTEST_SCRATCH_FOLDER "/" SKIFF_SELFTEST_SCRATCH_SUBFOLDER_NAME,
+            subfolder, sizeof subfolder) != SKIFF_OK) {
+        return "the scratch folder does not fit under app:";
+    }
+    const char *failure = list_scratch(storage, folder, file, subfolder);
+    /* Whatever a failed step left goes too, so the next run starts clean. */
+    (void)skiff_storage_remove(storage, file);
+    (void)skiff_storage_rmdir(storage, subfolder);
+    const skiff_err removed = skiff_storage_rmdir(storage, folder);
+    if (removed != SKIFF_OK && failure == NULL) {
+        failure = storage_failure("the emptied scratch folder was not removed", removed);
+    }
+    return failure;
+}
+
 /* One check per line: the order here is the order of the output lines. */
 // clang-format off
 static const selftest_check CHECKS[] = {
@@ -495,6 +614,7 @@ static const selftest_check CHECKS[] = {
     {"app-wrap", check_app_wrap},
     {"jobs-queue", check_jobs_queue},
     {"install-manifest", check_install_manifest},
+    {"storage-list", check_storage_list},
 };
 // clang-format on
 
@@ -504,9 +624,11 @@ static void emit(skiff_selftest_log_fn log, void *ctx, const char *line) {
     }
 }
 
-skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx) {
+skiff_selftest_result skiff_selftest_run(const skiff_selftest_env *env, skiff_selftest_log_fn log,
+                                         void *ctx) {
     skiff_selftest_result result = {0, 0};
     char line[SKIFF_SELFTEST_LINE_MAX];
+    run_env = env;
 
     snprintf(line, sizeof line, "skiff %s selftest", skiff_version_string());
     emit(log, ctx, line);
@@ -522,6 +644,7 @@ skiff_selftest_result skiff_selftest_run(skiff_selftest_log_fn log, void *ctx) {
         }
         emit(log, ctx, line);
     }
+    run_env = NULL;
 
     snprintf(line, sizeof line, "%s %d/%d",
              result.failed == 0 ? SKIFF_SELFTEST_OK_MARKER : SKIFF_SELFTEST_FAIL_MARKER,

@@ -647,6 +647,10 @@ static skiff_err recover(restorer *r, skiff_saves_recovery *out) {
         out->outcome = SKIFF_SAVES_RECOVERY_FINISHED;
         err = finish(r);
     }
+    /* The cut restore never reached its pruning; its own backup is kept. */
+    if (err == SKIFF_OK && out->backup != 0) {
+        saves_backups_prune(r->storage, r->roots, out->backup);
+    }
     return err == SKIFF_OK ? SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED : err;
 }
 

@@ -636,6 +636,26 @@ static void test_a_failure_in_step_5_is_finished_by_the_recovery(void) {
     assert_work_clean();
 }
 
+/* A finished recovery applies the backup caps the cut restore never reached. */
+static void test_a_finished_recovery_prunes_the_backups(void) {
+    put_folder(SKIFF_SAVES_BACKUP_FOLDER "/" GAME);
+    put_text(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/1.zip", "old");
+    put_text(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/2.zip", "older");
+    put_text(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/3.zip", "oldest");
+    prepare();
+    storage.fail_suffix = "/EXTRA.BIN";
+    storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    storage.write_budget = sizeof NEW_EXTRA02 - 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, restore_on(&storage.base, NULL));
+    TEST_ASSERT_TRUE(exists(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/1.zip"));
+    skiff_saves_recovery recovery;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED, recover_on(posix, &recovery));
+    TEST_ASSERT_EQUAL_UINT32(4, recovery.backup);
+    TEST_ASSERT_FALSE(exists(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/1.zip"));
+    TEST_ASSERT_TRUE(exists(SKIFF_SAVES_BACKUP_FOLDER "/" GAME "/4.zip"));
+    assert_new_save();
+}
+
 /* A restore finds an earlier one cut short (another game's): it finishes that one first. */
 static void test_a_restore_finishes_a_pending_one_first(void) {
     prepare();
@@ -1095,6 +1115,7 @@ int main(void) {
     RUN_TEST(test_a_suspend_during_the_copy_reopens_the_files);
     RUN_TEST(test_a_suspend_during_the_extraction_extracts_again);
     RUN_TEST(test_a_failure_in_step_5_is_finished_by_the_recovery);
+    RUN_TEST(test_a_finished_recovery_prunes_the_backups);
     RUN_TEST(test_a_restore_finishes_a_pending_one_first);
     RUN_TEST(test_a_restore_fails_while_a_pending_one_cannot_finish);
     RUN_TEST(test_recover_with_nothing_pending_does_nothing);

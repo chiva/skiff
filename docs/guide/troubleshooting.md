@@ -38,7 +38,7 @@ with your PSP model and firmware.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–211)
+## RomM errors (200–213)
 
 | Code | Meaning | What to try |
 |---|---|---|

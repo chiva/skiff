@@ -436,10 +436,11 @@ device grant):
 
 1. `POST /api/auth/device/init` (open, rate-limited) with this PSP's `client_device_identifier`,
    `name` "Skiff on PSP", `client` "skiff", `platform` "psp", `client_version` and the scopes Skiff
-   asks for: `platforms.read` and `roms.read`, all that browsing and downloading need (checked
-   against RomM 5.3.1), favourites included, so the token on the Memory Stick can only read. Save
-   sync (Phase 4) needs `devices.*` and, in RomM 5.3.1, `assets.*`: it will ask the player to pair
-   again, and collections (`collections.read`) wait for that pairing rather than ask for a second. RomM answers
+   asks for. `platforms.read` and `roms.read` are all that browsing and downloading need (checked
+   against RomM 5.3.1), favourites included, and are required. The rest are optional: save sync
+   (Phase 4) needs `assets.read` and `assets.write` (the player's own saves) and `devices.read`
+   and `devices.write` (RomM's record of what this PSP synced), and collections need
+   `collections.read`. None of them changes the library. RomM answers
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
    (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path with
@@ -456,11 +457,15 @@ device grant):
    (207); `expired_token` when the code ran out or was already used (208). Once approved it
    answers 200 with `access_token`, the `device_id` RomM gave this PSP and the `scopes` granted. A
    token without `platforms.read` and `roms.read` could neither browse nor download, so it is not
-   kept (209). A token granted a scope Skiff
-   did not ask for is not kept either (204): it would sit on a removable Memory Stick able to do
-   more than Skiff needs.
-4. Skiff writes `token`, `device_id` and `device_identifier` into `config.ini`'s `[auth]` section
-   with the same line-preserving edit as Settings, then saves it crash-safely.
+   kept (209). A token without an optional scope is kept: RomM's page lets the player untick
+   save sync and collections and keep a token that only reads, and those features then ask to
+   pair again. A token granted a scope Skiff did not ask for is not kept (204): it would sit on a
+   removable Memory Stick able to do more than Skiff needs.
+4. Skiff writes `token`, `device_id`, `scopes` (what RomM granted, comma-separated in the order
+   Skiff asks) and `device_identifier` into `config.ini`'s `[auth]` section with the same
+   line-preserving edit as Settings, then saves it crash-safely. A token without `scopes` (pasted
+   by hand, or paired by an older Skiff) counts as one that only browses and downloads. A server
+   change clears `token`, `device_id` and `scopes`.
 
 The `device_identifier` is 16 random bytes in hexadecimal, made once (on the PSP from KIRK, the TLS
 randomness source) and kept, so RomM sees the same device each time this PSP pairs. The

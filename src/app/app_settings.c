@@ -39,14 +39,16 @@ void app_settings_update(skiff_app *app, unsigned actions) {
     }
 }
 
-/* config.ini with a new address: the token and RomM's device id were the old server's, so they go
- * (this PSP's own identifier stays). The text is parsed back, so a bad address is refused here. */
+/* config.ini with a new address: the token, its scopes and RomM's device id were the old server's,
+ * so they go (this PSP's own identifier stays). The text is parsed back, so a bad address is
+ * refused here. */
 static skiff_err server_text(skiff_app *app, const char *url, char *text, size_t *text_length,
                              skiff_config_issue *issue) {
     const char *const keys[][3] = {
         {SKIFF_CONFIG_SECTION_SERVER, SKIFF_CONFIG_KEY_URL, url},
         {SKIFF_CONFIG_SECTION_AUTH, SKIFF_CONFIG_KEY_TOKEN, ""},
         {SKIFF_CONFIG_SECTION_AUTH, SKIFF_CONFIG_KEY_DEVICE_ID, ""},
+        {SKIFF_CONFIG_SECTION_AUTH, SKIFF_CONFIG_KEY_SCOPES, ""},
     };
     memcpy(text, app->config_text, app->config_length + 1);
     *text_length = app->config_length;

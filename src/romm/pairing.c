@@ -26,17 +26,23 @@ enum {
 };
 
 /*
- * What Skiff asks RomM for: browsing the platforms and ROMs and downloading them (roms.read covers
- * a file's content), nothing more, so the token on a removable Memory Stick can only read. Save
- * sync (Phase 4) needs devices.* and, in RomM 5.3.1, assets.* too: it will ask the player to pair
- * again for them. RomM's approval page lists the scopes and the player may grant fewer; Skiff
- * cannot work without any of these, so a token missing one is refused rather than saved.
+ * What Skiff asks RomM for. The first REQUIRED_SCOPE_COUNT browse the platforms and ROMs and
+ * download them (roms.read covers a file's content): Skiff cannot work without them, so a token
+ * missing one is refused rather than saved. The others are for features the player may decline,
+ * since RomM's approval page lists every scope and lets the player untick any: save sync
+ * (assets.read and assets.write for the player's own saves, devices.read and devices.write for
+ * RomM's record of what this PSP synced) and collections (collections.read). A token without them
+ * is kept, and those features ask the player to pair again. None of them changes the library.
  */
 static const char *const REQUESTED_SCOPES[] = {
-    "platforms.read",
-    "roms.read",
+    "platforms.read", "roms.read",     "assets.read",      "assets.write",
+    "devices.read",   "devices.write", "collections.read",
 };
-enum { REQUESTED_SCOPE_COUNT = sizeof REQUESTED_SCOPES / sizeof REQUESTED_SCOPES[0] };
+enum {
+    REQUESTED_SCOPE_COUNT = sizeof REQUESTED_SCOPES / sizeof REQUESTED_SCOPES[0],
+    REQUIRED_SCOPE_COUNT = 2,
+};
+#define SCOPE_SEPARATOR ','
 
 /* Printable ASCII without blanks: codes, tokens and ids. */
 static int is_visible_ascii(const char *text) {
@@ -235,20 +241,44 @@ static skiff_err read_refusal(const cJSON *root, skiff_romm_pairing *pairing,
     return SKIFF_ERR_ROMM_BAD_RESPONSE;
 }
 
-/* 1 if the scopes RomM granted (a JSON array of strings) hold every one Skiff requires. */
-static int has_required_scopes(const cJSON *granted) {
-    for (size_t i = 0; i < REQUESTED_SCOPE_COUNT; i++) {
-        int found = 0;
-        const cJSON *scope = NULL;
-        cJSON_ArrayForEach(scope, granted) {
-            found = found || (cJSON_IsString(scope) && scope->valuestring != NULL &&
-                              strcmp(scope->valuestring, REQUESTED_SCOPES[i]) == 0);
+/* 1 if the scopes RomM granted (a JSON array of strings) hold name. */
+static int granted_scope(const cJSON *granted, const char *name) {
+    const cJSON *scope = NULL;
+    cJSON_ArrayForEach(scope, granted) {
+        if (cJSON_IsString(scope) && scope->valuestring != NULL &&
+            strcmp(scope->valuestring, name) == 0) {
+            return 1;
         }
-        if (!found) {
+    }
+    return 0;
+}
+
+/* 1 if the scopes RomM granted hold every one Skiff requires. */
+static int has_required_scopes(const cJSON *granted) {
+    for (size_t i = 0; i < REQUIRED_SCOPE_COUNT; i++) {
+        if (!granted_scope(granted, REQUESTED_SCOPES[i])) {
             return 0;
         }
     }
     return 1;
+}
+
+/* The granted scopes as config.ini keeps them: comma-separated, in REQUESTED_SCOPES' order, each
+ * once. Every requested scope fits SKIFF_CONFIG_SCOPES_MAX (checked by the unit tests). */
+static void list_scopes(const cJSON *granted, char *out, size_t out_size) {
+    size_t used = 0;
+    out[0] = '\0';
+    for (size_t i = 0; i < REQUESTED_SCOPE_COUNT; i++) {
+        const size_t length = strlen(REQUESTED_SCOPES[i]);
+        if (!granted_scope(granted, REQUESTED_SCOPES[i]) || used + length + 1 >= out_size) {
+            continue;
+        }
+        if (used > 0) {
+            out[used++] = SCOPE_SEPARATOR;
+        }
+        memcpy(out + used, REQUESTED_SCOPES[i], length + 1);
+        used += length;
+    }
 }
 
 /* 1 if every scope RomM granted is one Skiff asked for: a token that can do more than Skiff
@@ -279,6 +309,7 @@ static skiff_err fill_token(const cJSON *root, skiff_romm_pairing_result *result
     if (!has_required_scopes(scopes)) {
         return SKIFF_ERR_ROMM_PAIRING_SCOPES;
     }
+    list_scopes(scopes, result->scopes, sizeof result->scopes);
     result->state = SKIFF_ROMM_PAIRING_APPROVED;
     return SKIFF_OK;
 }
@@ -350,28 +381,32 @@ skiff_err skiff_romm_pairing_config_text(const char *text, size_t length,
         result->state != SKIFF_ROMM_PAIRING_APPROVED) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    const char *const keys[][2] = {
+        {SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER, device_identifier},
+        {SKIFF_CONFIG_KEY_DEVICE_ID, result->device_id},
+        {SKIFF_CONFIG_KEY_SCOPES, result->scopes},
+        {SKIFF_CONFIG_KEY_TOKEN, result->token},
+    };
+    enum { AUTH_KEY_COUNT = sizeof keys / sizeof keys[0] };
+    /* Each key is set from the previous buffer into the other one, so an even count ends in out. */
+    _Static_assert(AUTH_KEY_COUNT % 2 == 0, "the last edit must land in out");
     /* skiff_config_set() needs its output apart from its input: edit through a scratch copy. */
     char *scratch = malloc(out_size);
     if (scratch == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
-    size_t scratch_length = 0;
-    skiff_err err = skiff_config_set(text, length, SKIFF_CONFIG_SECTION_AUTH,
-                                     SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER, device_identifier, scratch,
-                                     out_size, &scratch_length, issue);
-    if (err == SKIFF_OK) {
-        err = skiff_config_set(scratch, scratch_length, SKIFF_CONFIG_SECTION_AUTH,
-                               SKIFF_CONFIG_KEY_DEVICE_ID, result->device_id, out, out_size,
-                               out_length, issue);
+    char *const buffers[] = {scratch, out};
+    const char *source = text;
+    size_t source_length = length;
+    skiff_err err = SKIFF_OK;
+    for (size_t i = 0; i < AUTH_KEY_COUNT && err == SKIFF_OK; i++) {
+        char *target = buffers[i % 2];
+        err = skiff_config_set(source, source_length, SKIFF_CONFIG_SECTION_AUTH, keys[i][0],
+                               keys[i][1], target, out_size, out_length, issue);
+        source = target;
+        source_length = *out_length;
     }
-    if (err == SKIFF_OK) {
-        err = skiff_config_set(out, *out_length, SKIFF_CONFIG_SECTION_AUTH, SKIFF_CONFIG_KEY_TOKEN,
-                               result->token, scratch, out_size, &scratch_length, issue);
-    }
-    if (err == SKIFF_OK) {
-        memcpy(out, scratch, scratch_length + 1);
-        *out_length = scratch_length;
-    } else {
+    if (err != SKIFF_OK) {
         out[0] = '\0';
         *out_length = 0;
     }

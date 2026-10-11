@@ -14,6 +14,9 @@
  *   [auth]     token       RomM client API token (pairing writes it, or the player pastes one)
  *              device_identifier   this PSP's name for itself in pairing: random hex, made once
  *              device_id   the id RomM gave this PSP when pairing was approved
+ *              scopes      what RomM granted the token, comma-separated (pairing writes it); a
+ *                          token without it (pasted by hand, or paired by an older Skiff) counts
+ *                          as one that can only browse and download
  *   [mtls]     cert_file   client certificate and key, file names in the Skiff folder
  *              key_file
  *   [headers]  <name>      sent on every request (e.g. CF-Access-Client-Id)
@@ -46,6 +49,7 @@
 #define SKIFF_CONFIG_KEY_TOKEN "token"
 #define SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER "device_identifier"
 #define SKIFF_CONFIG_KEY_DEVICE_ID "device_id"
+#define SKIFF_CONFIG_KEY_SCOPES "scopes"
 /* The keys the app writes besides pairing's. */
 #define SKIFF_CONFIG_SECTION_SKIFF "skiff"
 #define SKIFF_CONFIG_SECTION_SERVER "server"
@@ -63,6 +67,8 @@
 #define SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX 64
 /* RomM's device ids are UUIDs (36 characters). */
 #define SKIFF_CONFIG_DEVICE_ID_MAX 64
+/* Every scope Skiff asks for, comma-separated (93 characters), with room to spare. */
+#define SKIFF_CONFIG_SCOPES_MAX 160
 #define SKIFF_CONFIG_FILE_NAME_MAX 64
 #define SKIFF_CONFIG_NAME_MAX 64
 #define SKIFF_CONFIG_HEADER_VALUE_MAX 256
@@ -89,6 +95,7 @@ typedef struct skiff_config {
     char token[SKIFF_CONFIG_TOKEN_MAX];
     char device_identifier[SKIFF_CONFIG_DEVICE_IDENTIFIER_MAX];
     char device_id[SKIFF_CONFIG_DEVICE_ID_MAX];
+    char scopes[SKIFF_CONFIG_SCOPES_MAX];
     char cert_file[SKIFF_CONFIG_FILE_NAME_MAX];
     char key_file[SKIFF_CONFIG_FILE_NAME_MAX];
     skiff_config_header headers[SKIFF_CONFIG_HEADERS_MAX];
@@ -113,9 +120,9 @@ typedef struct skiff_config {
  *     missing one);
  *   - SKIFF_ERR_CONFIG_INVALID_VALUE: a setting given twice, a value too long, a version other than
  *     SKIFF_CONFIG_VERSION, a log level other than skiff_log_level_name()'s, a URL without http://
- *     or https:// or with blanks, a token, device_identifier or device_id with blanks or control
- *     characters, a file name with a path in it, a header Skiff sets itself (Authorization, Host,
- *     Range, If-Range), a header name that is not an HTTP token, an empty header value, or more
+ *     or https:// or with blanks, a token, device_identifier, device_id or scopes with blanks or
+ *     control characters, a file name with a path in it, a header Skiff sets itself (Authorization,
+ * Host, Range, If-Range), a header name that is not an HTTP token, an empty header value, or more
  *     than SKIFF_CONFIG_HEADERS_MAX headers, a network profile that is not a number from 1 to
  *     SKIFF_CONFIG_PROFILE_MAX, or a romm_notice with blanks or control characters;
  *   - SKIFF_ERR_INVALID_ARG: NULL text with a non-zero length, or a NULL out.

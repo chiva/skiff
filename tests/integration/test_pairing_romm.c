@@ -22,7 +22,13 @@
 
 #include "unity.h"
 
-enum { PATH_MAX_LENGTH = 256, BODY_MAX = 512, DECIMAL_BASE = 10, HTTP_FORBIDDEN = 403 };
+enum {
+    PATH_MAX_LENGTH = 256,
+    BODY_MAX = 512,
+    DECIMAL_BASE = 10,
+    HTTP_OK = 200,
+    HTTP_FORBIDDEN = 403,
+};
 
 #define TLS_SITE "https://proxy:8443"
 #define PLATFORM_SLUG "psp"
@@ -30,8 +36,12 @@ enum { PATH_MAX_LENGTH = 256, BODY_MAX = 512, DECIMAL_BASE = 10, HTTP_FORBIDDEN 
 #define TEST_STALL_TIMEOUT_S 10L
 /* Fixed, so every run pairs the same device: RomM keeps one record per identifier. */
 #define TEST_IDENTIFIER "000000000000000000000000005c1ff0"
-/* What Skiff asks for (src/romm/pairing.c); the admin grants all of it. */
-#define APPROVED_SCOPES "[\"platforms.read\",\"roms.read\"]"
+/* What an approver who unticks every optional scope grants: browsing only. */
+#define BROWSE_SCOPES "[\"platforms.read\",\"roms.read\"]"
+/* Everything Skiff asks for (src/romm/pairing.c), as RomM's page offers it ticked. */
+#define ALL_SCOPES                                                                                 \
+    "[\"platforms.read\",\"roms.read\",\"assets.read\",\"assets.write\",\"devices.read\","         \
+    "\"devices.write\",\"collections.read\"]"
 /* More polls than a pending pairing needs, so a stuck flow fails instead of hanging. */
 #define POLLS_MAX 6
 
@@ -140,21 +150,27 @@ static long paired_get_status(const skiff_romm_client *paired, const char *path)
     return response.status;
 }
 
-static void test_an_approved_pairing_gives_a_token_that_browses_and_downloads(void) {
+/* Starts a pairing, has the admin approve it with scopes (a JSON array) and polls for the token. */
+static void pair_with(const char *scopes) {
     start();
     TEST_PRINTF("before the admin approves, RomM says pending (or slow_down if polled too soon)");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_pairing_poll(&client, &pairing, &result));
     TEST_ASSERT_NOT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
-
     char approve[BODY_MAX];
-    snprintf(approve, sizeof approve,
-             "{\"user_code\":\"%s\",\"approved_scopes\":" APPROVED_SCOPES "}", pairing.user_code);
-    TEST_ASSERT_EQUAL_INT64(200, admin_post("/api/auth/device/approve", approve));
+    snprintf(approve, sizeof approve, "{\"user_code\":\"%s\",\"approved_scopes\":%s}",
+             pairing.user_code, scopes);
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, admin_post("/api/auth/device/approve", approve));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, poll_until_answered());
+}
+
+static void test_a_browse_only_pairing_gives_a_token_that_browses_and_downloads(void) {
+    TEST_PRINTF("the approver unticks save sync and collections: Skiff keeps the token");
+    pair_with(BROWSE_SCOPES);
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
     TEST_ASSERT_GREATER_THAN_size_t(0, strlen(result.token));
     TEST_PRINTF("RomM's device id for this PSP: %s", result.device_id);
     TEST_ASSERT_GREATER_THAN_size_t(0, strlen(result.device_id));
+    TEST_ASSERT_EQUAL_STRING("platforms.read,roms.read", result.scopes);
 
     TEST_PRINTF("the code is spent: asking again is an expired pairing");
     skiff_romm_pairing_result again;
@@ -180,8 +196,11 @@ static void test_an_approved_pairing_gives_a_token_that_browses_and_downloads(vo
     TEST_ASSERT_EQUAL_size_t(1, page.count);
     TEST_ASSERT_EQUAL_UINT64(payload_rom_id, page.items[0].id);
     TEST_ASSERT_TRUE(page.items[0].has_file);
-    TEST_PRINTF("RomM's collections need collections.read, which Skiff does not ask for");
+    TEST_PRINTF("collections and saves need the scopes this approver unticked");
     TEST_ASSERT_EQUAL_INT64(HTTP_FORBIDDEN, paired_get_status(&paired, "/api/collections"));
+    char saves[PATH_MAX_LENGTH];
+    snprintf(saves, sizeof saves, "/api/saves?rom_id=%llu", (unsigned long long)payload_rom_id);
+    TEST_ASSERT_EQUAL_INT64(HTTP_FORBIDDEN, paired_get_status(&paired, saves));
 
     char url[PATH_MAX_LENGTH];
     snprintf(url, sizeof url, TLS_SITE "/api/roms/%llu/content/%s",
@@ -200,8 +219,28 @@ static void test_an_approved_pairing_gives_a_token_that_browses_and_downloads(vo
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(transport, &request, &response));
     TEST_PRINTF("download with the paired token -> HTTP %ld, %llu bytes", response.status,
                 (unsigned long long)received);
-    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, response.status);
     TEST_ASSERT_EQUAL_UINT64(payload_size, received);
+    skiff_romm_client_clear(&paired);
+}
+
+static void test_a_full_pairing_records_every_scope_and_reaches_saves_and_collections(void) {
+    pair_with(ALL_SCOPES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
+    TEST_PRINTF("granted: %s", result.scopes);
+    TEST_ASSERT_EQUAL_STRING("platforms.read,roms.read,assets.read,assets.write,devices.read,"
+                             "devices.write,collections.read",
+                             result.scopes);
+    skiff_romm_client paired;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_client_init(&paired, transport, TLS_SITE, result.token));
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, paired_get_status(&paired, "/api/collections"));
+    char path[PATH_MAX_LENGTH];
+    snprintf(path, sizeof path, "/api/saves?rom_id=%llu", (unsigned long long)payload_rom_id);
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, paired_get_status(&paired, path));
+    TEST_PRINTF("devices.read: RomM's record of this PSP");
+    snprintf(path, sizeof path, "/api/devices/%s", result.device_id);
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, paired_get_status(&paired, path));
     skiff_romm_client_clear(&paired);
 }
 
@@ -209,7 +248,7 @@ static void test_a_refused_pairing_ends_with_207(void) {
     start();
     char deny[BODY_MAX];
     snprintf(deny, sizeof deny, "{\"user_code\":\"%s\"}", pairing.user_code);
-    TEST_ASSERT_EQUAL_INT64(200, admin_post("/api/auth/device/deny", deny));
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK, admin_post("/api/auth/device/deny", deny));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_PAIRING_DENIED, poll_until_answered());
     TEST_ASSERT_EQUAL_STRING("", result.token);
 }
@@ -226,7 +265,8 @@ int main(void) {
     }
 
     UNITY_BEGIN();
-    RUN_TEST(test_an_approved_pairing_gives_a_token_that_browses_and_downloads);
+    RUN_TEST(test_a_browse_only_pairing_gives_a_token_that_browses_and_downloads);
+    RUN_TEST(test_a_full_pairing_records_every_scope_and_reaches_saves_and_collections);
     RUN_TEST(test_a_refused_pairing_ends_with_207);
     const int failures = UNITY_END();
     skiff_net_global_cleanup();

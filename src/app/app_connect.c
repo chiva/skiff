@@ -388,8 +388,8 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     skiff_romm_pairing_clear(&app->pairing.pairing, result);
     app->pairing.active = 0;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
-                    "paired as device %s, saved: %s (%d)", app->settings.device_id,
-                    skiff_err_name(err), (int)err);
+                    "paired as device %s with %s, saved: %s (%d)", app->settings.device_id,
+                    app->settings.scopes, skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
         app_show_error(app, err, &issue, MESSAGE_NEW_PAIRING, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
                        SKIFF_APP_SCREEN_PAIR);

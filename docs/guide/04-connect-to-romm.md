@@ -8,8 +8,8 @@
 - RomM **5.3 or newer** (shown under your profile → About in the RomM web UI).
 - The PSP must be able to reach the server's address. If RomM is only on your home network, the PSP
   must be on a network that can reach it (see [Wi-Fi](02-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
-- A RomM user that can see your PSP games. A dedicated user with read access only (plus save
-  uploads, once save sync arrives) is the safest choice.
+- A RomM user that can see your PSP games. A dedicated user that can read the library and keep
+  its own saves (RomM's default Viewer group) is the safest choice.
 - Your games under RomM's **PSP** platform, each one a single `.iso`, `.cso` or `.zso` file. Skiff
   lists the others but cannot download them: a game stored as a folder of several files, or in
   another format, says why on its details screen.
@@ -39,18 +39,22 @@ address of RomM's pairing page with this PSP's code in it, for example
    computer: RomM's page has no box to enter the code, it reads it from the address. (An address
    too long for a QR code is shown as text only.)
 2. Sign in to RomM and check that the page shows the same code as the PSP. RomM lists what Skiff
-   asks for: reading your platforms and ROMs, to browse and download, and nothing else. Approve it
-   with both ticked: Skiff cannot work without them (error 209). Your favourites need nothing
-   more. When save sync arrives, Skiff will ask you to pair again for the extra permissions it
-   needs, and RomM's collections will come with that pairing.
+   asks for, all ticked:
+   - reading your platforms and ROMs, to browse and download. Skiff cannot work without them
+     (error 209). Your favourites need nothing more;
+   - reading and writing your saves, and RomM's record of this PSP, for save sync, and reading
+     your collections. Both arrive in a later Skiff. You may untick them: Skiff still browses
+     and downloads, and those features ask you to pair again when you want them.
+
+   None of them lets Skiff change your library.
 3. Skiff checks every few seconds, picks up the approval and shows your library.
 
 The code works only once, and only for the time the PSP counts down (10 minutes with RomM's
 defaults). If it runs out, Skiff says "The code has expired"; if the request is denied in RomM, it
 says so. Either way, choose **New code** and open the new address.
 
-Skiff stores the resulting token, and the device id RomM gave this PSP, in
-`PSP/GAME/Skiff/config.ini`. To revoke this PSP's access later, delete its token in RomM; nothing
+Skiff stores the resulting token, the device id RomM gave this PSP and the permissions you
+granted in `PSP/GAME/Skiff/config.ini`. To revoke this PSP's access later, delete its token in RomM; nothing
 else is affected. To pair again (for example after error 200), open **Settings** and choose
 **Pair again**.
 

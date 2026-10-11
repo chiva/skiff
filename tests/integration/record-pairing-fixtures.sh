@@ -17,8 +17,8 @@ readonly BASE="https://proxy:8443"
 readonly CONNECT_TIMEOUT_SECONDS=5
 readonly REQUEST_TIMEOUT_SECONDS=30
 # What skiff_romm_pairing_start() sends (src/romm/pairing.c), with a synthetic identifier.
-readonly INIT_BODY='{"client_device_identifier":"00112233445566778899aabbccddeeff","name":"Skiff on PSP","client":"skiff","platform":"psp","client_version":"0.0.0","requested_scopes":["platforms.read","roms.read"]}'
-readonly SCOPES='["platforms.read","roms.read"]'
+readonly INIT_BODY='{"client_device_identifier":"00112233445566778899aabbccddeeff","name":"Skiff on PSP","client":"skiff","platform":"psp","client_version":"0.0.0","requested_scopes":["platforms.read","roms.read","assets.read","assets.write","devices.read","devices.write","collections.read"]}'
+readonly SCOPES='["platforms.read","roms.read","assets.read","assets.write","devices.read","devices.write","collections.read"]'
 readonly SYNTHETIC_DEVICE_ID="00000000-0000-4000-8000-000000000001"
 
 ADMIN_USER="$(grep '^SKIFF_ADMIN_USER=' "$DIR/romm.env" | cut -d= -f2-)"

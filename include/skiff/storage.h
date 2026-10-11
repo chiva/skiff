@@ -21,6 +21,12 @@
 #define SKIFF_STORAGE_MAX_FILE_BYTES 0xFFFFFFFFULL
 /* The longest path the storage helpers build or walk, terminator included. */
 #define SKIFF_STORAGE_PATH_MAX 256
+/* A name's buffer, terminator included: a safe name from RomM (skiff/storage_paths.h) or one a
+ * folder listing reports. FAT allows 255 UTF-16 units per name; Skiff stays well under it so a name
+ * plus its folder and a ".resume" suffix fits SKIFF_STORAGE_PATH_MAX. */
+#define SKIFF_STORAGE_NAME_MAX 128
+/* skiff_storage_info.mtime when the device holds no valid date for the entry. */
+#define SKIFF_STORAGE_MTIME_UNKNOWN 0
 /* Left free on top of what a download needs: its .resume file, skiff.log, config.ini, and the
  * file system's own room for directory entries, so a full Memory Stick never stops Skiff saving its
  * settings or the player saving a game. */
@@ -39,6 +45,60 @@ typedef enum skiff_file_mode {
 typedef struct skiff_storage skiff_storage;
 typedef struct skiff_file skiff_file;
 
+/*
+ * What a folder listing or skiff_storage_stat() reports for a file or folder. mtime is when it was
+ * last written, in seconds since 1970-01-01 00:00 of the clock that stamped it: on the PSP that is
+ * the console's local time as FAT records it (no time zone), counted as if it were UTC; on the host
+ * it is UTC. Compare it only with values read from the same device (equal: the file is unchanged),
+ * and show it as a date without a time zone. SKIFF_STORAGE_MTIME_UNKNOWN when the device holds no
+ * valid date.
+ */
+typedef struct skiff_storage_info {
+    int is_dir;
+    uint64_t size; /* 0 for a folder */
+    int64_t mtime;
+} skiff_storage_info;
+
+typedef struct skiff_storage_entry {
+    char name[SKIFF_STORAGE_NAME_MAX];
+    skiff_storage_info info;
+} skiff_storage_entry;
+
+/* What a listing callback returns: keep going, or end the listing now (skiff_storage_list() then
+ * returns SKIFF_OK). */
+typedef enum skiff_storage_list_step {
+    SKIFF_STORAGE_LIST_CONTINUE,
+    SKIFF_STORAGE_LIST_STOP,
+} skiff_storage_list_step;
+
+/* Called once per entry of a listing; entry is only valid during the call. */
+typedef skiff_storage_list_step (*skiff_storage_entry_fn)(void *ctx,
+                                                          const skiff_storage_entry *entry);
+
+/* What an implementation's list op calls for every entry the device reports, "." and ".." included:
+ * name is length bytes long and NUL-terminated when length is below the implementation's own
+ * buffer. skiff_storage_list() filters and bounds these into skiff_storage_entry. */
+typedef skiff_storage_list_step (*skiff_storage_visit_fn)(void *ctx, const char *name,
+                                                          size_t length,
+                                                          const skiff_storage_info *info);
+
+/* A date and time of day as a device's clock shows it (the PSP's ScePspDateTime). */
+typedef struct skiff_storage_date {
+    int year;
+    int month; /* 1 to 12 */
+    int day;   /* 1 to 31 */
+    int hour;
+    int minute;
+    int second;
+} skiff_storage_date;
+
+/*
+ * Turns date into skiff_storage_info.mtime. SKIFF_ERR_INVALID_ARG for a NULL argument or a field
+ * out of range (years 1 to 9999, a day the month has, 23:59:59 at most), with *out (when not NULL)
+ * SKIFF_STORAGE_MTIME_UNKNOWN.
+ */
+skiff_err skiff_storage_mtime_from_date(const skiff_storage_date *date, int64_t *out);
+
 typedef struct skiff_storage_ops {
     skiff_err (*open)(skiff_storage *storage, const char *path, skiff_file_mode mode,
                       uint64_t offset, skiff_file **out);
@@ -51,6 +111,10 @@ typedef struct skiff_storage_ops {
     skiff_err (*remove)(skiff_storage *storage, const char *path);
     skiff_err (*mkdir)(skiff_storage *storage, const char *path);
     skiff_err (*free_space)(skiff_storage *storage, const char *path, uint64_t *out);
+    skiff_err (*stat)(skiff_storage *storage, const char *path, skiff_storage_info *out);
+    skiff_err (*list)(skiff_storage *storage, const char *path, skiff_storage_visit_fn visit,
+                      void *ctx);
+    skiff_err (*rmdir)(skiff_storage *storage, const char *path);
     void (*destroy)(skiff_storage *storage);
 } skiff_storage_ops;
 
@@ -110,6 +174,33 @@ skiff_err skiff_storage_free_space(skiff_storage *storage, const char *path, uin
  * SKIFF_OK. For a download being resumed, needed is what is still to come.
  */
 skiff_err skiff_storage_check_room(skiff_storage *storage, const char *path, uint64_t needed);
+
+/* ---- Folders: listing, entry details, removal (save sync walks PSP/SAVEDATA) ---- */
+
+/* What path is: SKIFF_ERR_STORAGE_NOT_FOUND when it does not exist. *out is zeroed on any error. */
+skiff_err skiff_storage_stat(skiff_storage *storage, const char *path, skiff_storage_info *out);
+
+/*
+ * Calls on_entry for each file and folder directly in the folder path (not recursive), in the
+ * device's order, without "." and "..". Names come as the device reports them: FAT ignores case and
+ * PPSSPP reports a name that fits 8.3 in capitals ("folder" lists as "FOLDER"), so compare them
+ * without regard to case. A name of SKIFF_STORAGE_NAME_MAX bytes or more (or an empty
+ * one) is skipped and counted in *skipped rather than cut, since a cut name would point at another
+ * file: one stray name must not hide the rest of the folder, and a caller that has to see every
+ * entry (before removing the folder) checks *skipped. The listing ends early when on_entry returns
+ * SKIFF_STORAGE_LIST_STOP. SKIFF_ERR_STORAGE_NOT_FOUND for a missing folder, SKIFF_ERR_STORAGE_IO
+ * when path is a file. An error part-way through (on the PSP a suspend invalidates the open folder)
+ * comes after on_entry has seen some entries: discard them and list again. Every return closes the
+ * folder.
+ */
+skiff_err skiff_storage_list(skiff_storage *storage, const char *path,
+                             skiff_storage_entry_fn on_entry, void *ctx, size_t *skipped);
+
+/* Removes the empty folder path. SKIFF_ERR_STORAGE_IO when it holds anything or is a file,
+ * SKIFF_ERR_STORAGE_NOT_FOUND when it does not exist. The folder is listed first and refused if it
+ * holds anything, since some devices (PPSSPP) remove a full folder; a file written into it between
+ * the two steps by another thread is not guarded against. */
+skiff_err skiff_storage_rmdir(skiff_storage *storage, const char *path);
 
 /* ---- Small files replaced whole (config.ini, the download queue, installed.json) ---- */
 

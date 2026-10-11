@@ -26,9 +26,7 @@
 #define SKIFF_STORAGE_GAMES_FOLDER "/ISO"
 #define SKIFF_STORAGE_SAVES_FOLDER "/PSP/SAVEDATA"
 
-/* A safe name's buffer, terminator included. FAT allows 255 UTF-16 units per name; Skiff stays well
- * under it so a name plus its folder and a ".resume" suffix fits SKIFF_STORAGE_PATH_MAX. */
-#define SKIFF_STORAGE_NAME_MAX 128
+/* A safe name's buffer is SKIFF_STORAGE_NAME_MAX (skiff/storage.h), shared with folder listings. */
 /* A name from RomM longer than this (in bytes) is refused rather than sanitised: no file system
  * RomM runs on allows one. */
 #define SKIFF_STORAGE_NAME_INPUT_MAX 512

@@ -5,8 +5,9 @@
  * A skiff_storage for host tests of the layers above storage/ (jobs/): it passes every call to a
  * real storage (the POSIX one over a temporary directory) and injects what a Memory Stick does to a
  * long download: it fills up mid-write, a sync or rename fails, or every open file handle stops
- * working, as one may after the PSP suspends. Failures can be limited to paths with a given
- * suffix (".part"), so the rest keeps working.
+ * working, as one may after the PSP suspends; a folder listing, stat or removal fails, also
+ * part-way through a listing. Failures can be limited to paths with a given suffix (".part"), so
+ * the rest keeps working.
  */
 
 #include <stddef.h>
@@ -45,12 +46,24 @@ typedef struct fake_storage {
     /* When not SKIFF_OK, free_space fails with this (SKIFF_ERR_NOT_IMPLEMENTED: a device that
      * cannot tell). */
     skiff_err free_space_error;
+    /* Every listing of a matching folder passes on list_error_after of its entries ("." and ".."
+     * not counted) and fails with this at the next one, as a folder handle lost to a suspend
+     * part-way through; a folder with no more entries lists whole. 0 fails it before any entry.
+     * SKIFF_OK for none. */
+    skiff_err list_error;
+    int list_error_after;
+    /* Every stat of a matching path fails with this; SKIFF_OK for none. */
+    skiff_err stat_error;
+    /* Every folder removal of a matching path fails with this, leaving the folder; SKIFF_OK for
+     * none. */
+    skiff_err rmdir_error;
     /* Called at every open and remove, before the inner storage acts ("open" or "remove", and the
      * path): a test runs code "during" Memory Stick I/O here. NULL for none. */
     void (*on_call)(void *ctx, const char *call, const char *path);
     void *on_call_ctx;
     /* What the fake saw. */
     int mkdirs;
+    int rmdirs;
     int free_space_queries;
     uint64_t bytes_written;
     int writes;

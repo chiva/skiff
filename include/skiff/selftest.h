@@ -27,12 +27,15 @@ typedef struct skiff_selftest_result {
 } skiff_selftest_result;
 
 /* Where the storage checks work: the device's storage and its roots. They create, list and remove
- * scratch folders under app: (SKIFF_SELFTEST_SCRATCH_FOLDER, SKIFF_SELFTEST_SAVES_FOLDER), so the
- * EBOOT's own folder must be writable. */
+ * scratch folders under app: (SKIFF_SELFTEST_SCRATCH_FOLDER, SKIFF_SELFTEST_SAVES_FOLDER,
+ * SKIFF_SELFTEST_RESTORE_FOLDER), so the EBOOT's own folder must be writable. */
 #define SKIFF_SELFTEST_SCRATCH_FOLDER SKIFF_STORAGE_ROOT_APP "/selftest-scratch"
 /* The saves-unit check's own scratch folder under app:: synthetic save folders, a unit written
  * from them, and the staging folder it is extracted into, all removed afterwards. */
 #define SKIFF_SELFTEST_SAVES_FOLDER SKIFF_STORAGE_ROOT_APP "/selftest-saves"
+/* The saves-restore check's: a scratch app: and a scratch saves: (never the real PSP/SAVEDATA), a
+ * tiny save restored over a tiny live one, its backup, all removed afterwards. */
+#define SKIFF_SELFTEST_RESTORE_FOLDER SKIFF_STORAGE_ROOT_APP "/selftest-restore"
 
 typedef struct skiff_selftest_env {
     skiff_storage *storage;

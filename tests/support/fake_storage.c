@@ -21,6 +21,17 @@ static int matches(const fake_storage *fake, const char *path) {
 
 static fake_storage *owner(const fake_file *file) { return (fake_storage *)file->base.storage; }
 
+/* The power went: no call reaches the device any more. */
+static int is_cut(const fake_storage *fake) {
+    return fake->cut_after_changes > 0 && fake->changes >= fake->cut_after_changes;
+}
+
+/* What a change returned: it counts when it changed the device. */
+static skiff_err counted(fake_storage *fake, skiff_err err) {
+    fake->changes += err == SKIFF_OK ? 1 : 0;
+    return err;
+}
+
 static int stale(const fake_file *file) { return file->generation != owner(file)->generation; }
 
 static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mode mode,
@@ -30,11 +41,17 @@ static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mod
     if (fake->on_call != NULL) {
         fake->on_call(fake->on_call_ctx, "open", path);
     }
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     fake_file *file = calloc(1, sizeof *file);
     if (file == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
-    const skiff_err err = skiff_storage_open(fake->inner, path, mode, offset, &file->inner);
+    skiff_err err = skiff_storage_open(fake->inner, path, mode, offset, &file->inner);
+    if (mode != SKIFF_FILE_READ) {
+        err = counted(fake, err);
+    }
     if (err != SKIFF_OK) {
         free(file);
         return err;
@@ -49,6 +66,9 @@ static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mod
 static skiff_err fake_read(skiff_file *base, void *buffer, size_t size, size_t *got) {
     const fake_file *file = (const fake_file *)base;
     fake_storage *fake = owner(file);
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     if (stale(file)) {
         return SKIFF_ERR_STORAGE_IO;
     }
@@ -69,11 +89,14 @@ static skiff_err fake_read(skiff_file *base, void *buffer, size_t size, size_t *
 static skiff_err fake_write(skiff_file *base, const void *data, size_t size) {
     const fake_file *file = (const fake_file *)base;
     fake_storage *fake = owner(file);
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     if (stale(file)) {
         return SKIFF_ERR_STORAGE_IO;
     }
     if (!file->matches) {
-        return skiff_file_write(file->inner, data, size);
+        return counted(fake, skiff_file_write(file->inner, data, size));
     }
     fake->writes++;
     if (fake->write_error != SKIFF_OK && fake->bytes_written + size > fake->write_budget) {
@@ -82,7 +105,7 @@ static skiff_err fake_write(skiff_file *base, const void *data, size_t size) {
         const skiff_err err = skiff_file_write(file->inner, data, fits);
         return err != SKIFF_OK ? err : fake->write_error;
     }
-    const skiff_err err = skiff_file_write(file->inner, data, size);
+    const skiff_err err = counted(fake, skiff_file_write(file->inner, data, size));
     fake->bytes_written += size;
     if (fake->stale_after_writes > 0 && fake->writes == fake->stale_after_writes) {
         fake->generation++;
@@ -94,6 +117,9 @@ static skiff_err fake_write(skiff_file *base, const void *data, size_t size) {
 static skiff_err fake_sync(skiff_file *base) {
     const fake_file *file = (const fake_file *)base;
     fake_storage *fake = owner(file);
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     if (stale(file)) {
         return SKIFF_ERR_STORAGE_IO;
     }
@@ -101,20 +127,27 @@ static skiff_err fake_sync(skiff_file *base) {
     if (file->matches && fake->sync_error != SKIFF_OK) {
         return fake->sync_error;
     }
-    return skiff_file_sync(file->inner);
+    return counted(fake, skiff_file_sync(file->inner));
 }
 
 static skiff_err fake_close(skiff_file *base) {
     fake_file *file = (fake_file *)base;
     owner(file)->closes++;
+    const int was_cut = is_cut(owner(file));
     const int was_stale = stale(file);
     const skiff_err err = skiff_file_close(file->inner);
     free(file);
+    if (was_cut) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     return was_stale ? SKIFF_ERR_STORAGE_IO : err;
 }
 
 static skiff_err fake_size(skiff_storage *base, const char *path, uint64_t *out) {
     fake_storage *fake = (fake_storage *)base;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     if (fake->size_failures > 0 && matches(fake, path)) {
         fake->size_failures--;
         return SKIFF_ERR_STORAGE_IO;
@@ -123,18 +156,24 @@ static skiff_err fake_size(skiff_storage *base, const char *path, uint64_t *out)
 }
 
 static skiff_err fake_rename(skiff_storage *base, const char *from, const char *to) {
-    const fake_storage *fake = (const fake_storage *)base;
+    fake_storage *fake = (fake_storage *)base;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     return fake->rename_error != SKIFF_OK && matches(fake, from)
                ? fake->rename_error
-               : skiff_storage_rename(fake->inner, from, to);
+               : counted(fake, skiff_storage_rename(fake->inner, from, to));
 }
 
 static skiff_err fake_remove(skiff_storage *base, const char *path) {
-    const fake_storage *fake = (const fake_storage *)base;
+    fake_storage *fake = (fake_storage *)base;
     if (fake->on_call != NULL) {
         fake->on_call(fake->on_call_ctx, "remove", path);
     }
-    const skiff_err err = skiff_storage_remove(fake->inner, path);
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
+    const skiff_err err = counted(fake, skiff_storage_remove(fake->inner, path));
     return err == SKIFF_OK && fake->remove_error != SKIFF_OK && matches(fake, path)
                ? fake->remove_error
                : err;
@@ -143,14 +182,20 @@ static skiff_err fake_remove(skiff_storage *base, const char *path) {
 static skiff_err fake_mkdir(skiff_storage *base, const char *path) {
     fake_storage *fake = (fake_storage *)base;
     fake->mkdirs++;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     return fake->mkdir_error != SKIFF_OK && matches(fake, path)
                ? fake->mkdir_error
-               : skiff_storage_mkdir(fake->inner, path);
+               : counted(fake, skiff_storage_mkdir(fake->inner, path));
 }
 
 static skiff_err fake_free_space(skiff_storage *base, const char *path, uint64_t *out) {
     fake_storage *fake = (fake_storage *)base;
     fake->free_space_queries++;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     if (fake->free_space_error != SKIFF_OK) {
         return fake->free_space_error;
     }
@@ -163,6 +208,9 @@ static skiff_err fake_free_space(skiff_storage *base, const char *path, uint64_t
 
 static skiff_err fake_stat(skiff_storage *base, const char *path, skiff_storage_info *out) {
     const fake_storage *fake = (const fake_storage *)base;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     return fake->stat_error != SKIFF_OK && matches(fake, path)
                ? fake->stat_error
                : skiff_storage_stat(fake->inner, path, out);
@@ -196,6 +244,9 @@ static skiff_storage_list_step relay_entry(void *ctx, const char *name, size_t l
 static skiff_err fake_list(skiff_storage *base, const char *path, skiff_storage_visit_fn visit,
                            void *ctx) {
     const fake_storage *fake = (const fake_storage *)base;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     const int fails = fake->list_error != SKIFF_OK && matches(fake, path);
     if (fails && fake->list_error_after == 0) {
         return fake->list_error;
@@ -207,10 +258,13 @@ static skiff_err fake_list(skiff_storage *base, const char *path, skiff_storage_
 
 static skiff_err fake_rmdir(skiff_storage *base, const char *path) {
     fake_storage *fake = (fake_storage *)base;
+    if (is_cut(fake)) {
+        return SKIFF_ERR_STORAGE_NO_MEDIA;
+    }
     fake->rmdirs++;
     return fake->rmdir_error != SKIFF_OK && matches(fake, path)
                ? fake->rmdir_error
-               : skiff_storage_rmdir(fake->inner, path);
+               : counted(fake, skiff_storage_rmdir(fake->inner, path));
 }
 
 static void fake_destroy(skiff_storage *base) { (void)base; }

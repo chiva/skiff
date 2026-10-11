@@ -92,8 +92,13 @@ add_library(
   src/romm/pairing.c
   src/romm/romm.c
   src/romm/saves.c
+  src/saves/backups.c
+  src/saves/baseline.c
+  src/saves/decide.c
+  src/saves/json.c
   src/saves/md5.c
   src/saves/param_sfo.c
+  src/saves/restore.c
   src/saves/unit.c
   src/saves/unit_read.c
   src/saves/unit_write.c

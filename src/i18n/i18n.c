@@ -74,6 +74,11 @@
       "Una partida guardada está dañada o no es segura, así que Skiff no la ha usado")             \
     X(SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE,                                                           \
       "Una carpeta de partidas del Memory Stick tiene algo que Skiff no puede sincronizar")        \
+    X(SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED,                                                     \
+      "Se interrumpió la restauración de una partida; Skiff ya la ha terminado")                   \
+    X(SKIFF_ERR_STORAGE_SAVE_RESTORE_UNFINISHED,                                                   \
+      "Se interrumpió la restauración de una partida y no se pudo terminar; Skiff guardó una "     \
+      "copia")                                                                                     \
     X(SKIFF_ERR_CONFIG_PARSE, "El archivo de ajustes está dañado")                                 \
     X(SKIFF_ERR_CONFIG_MISSING_KEY, "Falta un ajuste obligatorio")                                 \
     X(SKIFF_ERR_CONFIG_INVALID_VALUE, "Un ajuste tiene un valor no válido")

@@ -58,6 +58,10 @@
     X(SKIFF_ERR_STORAGE_SAVE_DAMAGED, 306, "A save is damaged or unsafe, so Skiff did not use it") \
     X(SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE, 307,                                                      \
       "A save folder on the Memory Stick holds something Skiff cannot sync")                       \
+    X(SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED, 308,                                                \
+      "A save restore was cut short; Skiff has now finished it")                                   \
+    X(SKIFF_ERR_STORAGE_SAVE_RESTORE_UNFINISHED, 309,                                              \
+      "A save restore was cut short and could not be finished; Skiff kept a backup")               \
     X(SKIFF_ERR_CONFIG_PARSE, 400, "The settings file is damaged")                                 \
     X(SKIFF_ERR_CONFIG_MISSING_KEY, 401, "A required setting is missing")                          \
     X(SKIFF_ERR_CONFIG_INVALID_VALUE, 402, "A setting has an invalid value")

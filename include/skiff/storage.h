@@ -33,7 +33,7 @@
 #define SKIFF_STORAGE_FREE_MARGIN_BYTES ((uint64_t)8 * 1024 * 1024)
 
 typedef enum skiff_file_mode {
-    /* An existing file, read from its start. */
+    /* An existing file, read from offset (at most its size). */
     SKIFF_FILE_READ,
     /* An existing file, written from offset (at most its size); nothing is truncated, so bytes past
      * what is written stay as they were. */
@@ -128,8 +128,9 @@ struct skiff_file {
 };
 
 /*
- * Opens path in mode. WRITE_AT needs an existing file at least offset bytes long; READ and REPLACE
- * take offset 0. *out is NULL on error. Close the file with skiff_file_close().
+ * Opens path in mode. READ and WRITE_AT need an existing file at least offset bytes long (reading
+ * from the end reads nothing); REPLACE takes offset 0. *out is NULL on error. Close the file with
+ * skiff_file_close().
  */
 skiff_err skiff_storage_open(skiff_storage *storage, const char *path, skiff_file_mode mode,
                              uint64_t offset, skiff_file **out);

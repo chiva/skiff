@@ -18,7 +18,7 @@ skiff_err skiff_storage_open(skiff_storage *storage, const char *path, skiff_fil
     const int known_mode =
         mode == SKIFF_FILE_READ || mode == SKIFF_FILE_WRITE_AT || mode == SKIFF_FILE_REPLACE;
     if (!usable(storage) || path == NULL || path[0] == '\0' || !known_mode ||
-        (mode != SKIFF_FILE_WRITE_AT && offset != 0)) {
+        (mode == SKIFF_FILE_REPLACE && offset != 0)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     return storage->ops->open(storage, path, mode, offset, out);

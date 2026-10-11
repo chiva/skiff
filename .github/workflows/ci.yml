@@ -48,6 +48,11 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/docker-hub-mirror
       - run: scripts/dev.sh ${{ matrix.check.command }}
+      # argosy-sigil, fetched at a pinned commit, collects and restores the same synthetic saves as
+      # Skiff: the same unit byte for byte, each restoring the other's (tests/sigil/check.sh).
+      - name: Cross-check save units with argosy-sigil
+        if: matrix.check.command == 'test'
+        run: scripts/dev.sh sigil-check
       - if: matrix.check.command == 'coverage'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

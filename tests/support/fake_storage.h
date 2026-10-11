@@ -4,8 +4,8 @@
 /*
  * A skiff_storage for host tests of the layers above storage/ (jobs/): it passes every call to a
  * real storage (the POSIX one over a temporary directory) and injects what a Memory Stick does to a
- * long download: it fills up mid-write, a sync or rename fails, or every open file handle stops
- * working, as one may after the PSP suspends; a folder listing, stat or removal fails, also
+ * long download: it fills up mid-write, a read, sync or rename fails, or every open file handle
+ * stops working, as one may after the PSP suspends; a folder listing, stat or removal fails, also
  * part-way through a listing. Failures can be limited to paths with a given suffix (".part"), so
  * the rest keeps working.
  */

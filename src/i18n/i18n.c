@@ -68,6 +68,10 @@
       "El archivo ocupa más de 4 GB y la PSP no puede guardarlo")                                  \
     X(SKIFF_ERR_STORAGE_NAME_TAKEN,                                                                \
       "Ya hay un archivo con el nombre de este juego que Skiff no ha instalado")                   \
+    X(SKIFF_ERR_STORAGE_SAVE_DAMAGED,                                                              \
+      "Una partida guardada está dañada o no es segura, así que Skiff no la ha usado")             \
+    X(SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE,                                                           \
+      "Una carpeta de partidas del Memory Stick tiene algo que Skiff no puede sincronizar")        \
     X(SKIFF_ERR_CONFIG_PARSE, "El archivo de ajustes está dañado")                                 \
     X(SKIFF_ERR_CONFIG_MISSING_KEY, "Falta un ajuste obligatorio")                                 \
     X(SKIFF_ERR_CONFIG_INVALID_VALUE, "Un ajuste tiene un valor no válido")

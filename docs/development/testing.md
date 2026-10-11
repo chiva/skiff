@@ -6,7 +6,7 @@ the logic.
 
 | Tier | Where | In CI | Command |
 |---|---|---|---|
-| Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85% | `scripts/dev.sh test asan coverage` |
+| Unit | Host (Linux/macOS) | ✅ gcc + clang, plain + ASan/UBSan, coverage ≥85%, sigil cross-check | `scripts/dev.sh test asan coverage sigil-check` |
 | Emulator | PPSSPPHeadless | ✅ self-test, TLS probe, KIRK and network probes and benchmark (no ARK), UI prototype (headless) | `scripts/dev.sh psp selftest tls-probe kirk-probe net-probe ui-proto bench` |
 | Integration | Docker Compose | ✅ server checks, host transport against the server | `scripts/dev.sh romm-up romm-check romm-test romm-down` |
 | Hardware | Real PSP over PSPLINK | ❌ manual | see below |
@@ -34,7 +34,7 @@ the logic.
   transport's tests without a network.
 - **Fake storage** (`fake_storage.h`): wraps the POSIX storage (`src/platform/host/storage_posix.h`)
   over a temporary directory (`temp_dir.h`) and injects Memory Stick failures: full after N bytes, a
-  failing sync or rename, every open file handle lost after N writes (as a suspend may do), limited
+  failing read, sync or rename, every open file handle lost after N writes (as a suspend may do), limited
   to paths with a given suffix such as `.part`. `tests/unit/test_download.c` drives resumable
   downloads through it and the fake transport: cuts at every stage, a changed ETag, a server
   without ranges, error pages during a resume, a wrong CRC-32, and each Memory Stick failure, each
@@ -45,6 +45,23 @@ RomM with a 4 KiB synthetic file, saves each response byte for byte (CRLF header
 `Date` and `Set-Cookie` dropped) and stops the server. Review the files before committing: they
 must hold synthetic data only, never a token. The hygiene hooks leave `tests/fixtures/` untouched so
 the bytes stay exact.
+
+The save units in `tests/fixtures/saves/` are made by `make_units.py` in the same folder
+(`python3 -I tests/fixtures/saves/make_units.py tests/fixtures/saves`, in the host image) from
+synthetic save folders: argosy-sigil's stored unit byte for byte, which Skiff's writer must match,
+and the deflated and streamed shapes Argosy and Go's zip writer produce. All three carry the
+content_hash RomM 5.4.0 computed for the same files in a live probe. The crafted units the reader
+must refuse are built in the test itself (`tests/unit/test_saves_refusals.c`).
+
+### Sigil cross-check
+
+`scripts/dev.sh sigil-check` (CI runs it in the host tests job) fetches argosy-sigil v1.0.0 and its
+two submodules at pinned commits, checked by SHA256 (`tests/sigil/fetch-sigil.sh`), builds it with a
+small driver in the host image, and runs `tests/sigil/check.sh` on one synthetic memory stick
+(`tests/sigil/make_tree.py`): Skiff and sigil (layout `psp_console`) must collect the same unit, byte
+for byte, with the content_hash RomM's own algorithm gives; sigil must restore Skiff's unit, and
+Skiff sigil's, with every file of the game's folders and nothing of the install or the other game.
+It ends with `SIGIL CHECK OK`. sigil stays a test tool: nothing of it is linked into Skiff.
 
 ## Emulator tests
 

@@ -97,9 +97,9 @@ static int open_flags(skiff_file_mode mode) {
     }
 }
 
-/* WRITE_AT starts at offset, which must lie within the file. */
+/* READ and WRITE_AT start at offset, which must lie within the file. */
 static skiff_err position(psp_storage *storage, SceUID fd, skiff_file_mode mode, uint64_t offset) {
-    if (mode != SKIFF_FILE_WRITE_AT) {
+    if (mode == SKIFF_FILE_REPLACE || (mode == SKIFF_FILE_READ && offset == 0)) {
         return SKIFF_OK;
     }
     const SceOff size = sceIoLseek(fd, 0, PSP_SEEK_END);

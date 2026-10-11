@@ -12,7 +12,11 @@
 #include "temp_dir.h"
 #include "unity.h"
 
-enum { CAPTURE_MAX_LINES = 32 };
+enum {
+    CAPTURE_MAX_LINES = 32,
+    /* storage-list and saves-unit: what fails without a usable storage. */
+    STORAGE_CHECKS = 2,
+};
 
 typedef struct capture {
     char lines[CAPTURE_MAX_LINES][SKIFF_SELFTEST_LINE_MAX];
@@ -72,24 +76,39 @@ static void assert_scratch_folder_gone(void) {
                                   "the scratch folder is removed after the check");
 }
 
+static void assert_saves_folder_gone(void) {
+    char folder[SKIFF_STORAGE_PATH_MAX];
+    skiff_storage_info info;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&roots, SKIFF_SELFTEST_SAVES_FOLDER,
+                                                          folder, sizeof folder));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_NOT_FOUND,
+                                  skiff_storage_stat(storage, folder, &info),
+                                  "the saves-unit folder is removed after the check");
+}
+
 static void test_all_checks_pass_on_host(void) {
     skiff_selftest_result result = skiff_selftest_run(&env, capture_line, &captured);
     TEST_ASSERT_EQUAL_INT(0, result.failed);
     TEST_ASSERT_GREATER_THAN_INT(0, result.passed);
     TEST_ASSERT_EQUAL_STRING("PASS storage-list", line_of("storage-list"));
+    TEST_ASSERT_EQUAL_STRING("PASS saves-unit", line_of("saves-unit"));
     assert_scratch_folder_gone();
+    assert_saves_folder_gone();
 }
 
 static void test_storage_checks_fail_without_a_storage(void) {
     const skiff_selftest_env none = {NULL, NULL};
     const skiff_selftest_env no_roots = {storage, NULL};
     skiff_selftest_result result = skiff_selftest_run(NULL, capture_line, &captured);
-    TEST_ASSERT_EQUAL_INT(1, result.failed);
+    TEST_ASSERT_EQUAL_INT(STORAGE_CHECKS, result.failed);
     TEST_ASSERT_EQUAL_STRING("FAIL storage-list: no storage to check", line_of("storage-list"));
+    TEST_ASSERT_EQUAL_STRING("FAIL saves-unit: no storage to check", line_of("saves-unit"));
     memset(&captured, 0, sizeof captured);
-    TEST_ASSERT_EQUAL_INT(1, skiff_selftest_run(&none, capture_line, &captured).failed);
+    TEST_ASSERT_EQUAL_INT(STORAGE_CHECKS,
+                          skiff_selftest_run(&none, capture_line, &captured).failed);
     memset(&captured, 0, sizeof captured);
-    TEST_ASSERT_EQUAL_INT(1, skiff_selftest_run(&no_roots, capture_line, &captured).failed);
+    TEST_ASSERT_EQUAL_INT(STORAGE_CHECKS,
+                          skiff_selftest_run(&no_roots, capture_line, &captured).failed);
 }
 
 /* The scratch folder's paths, resolved under app:. */
@@ -192,9 +211,75 @@ static void test_storage_list_fails_when_the_scratch_folder_does_not_fit(void) {
     skiff_storage_roots deep_roots;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_init(dir, deep, &deep_roots));
     const skiff_selftest_env deep_env = {storage, &deep_roots};
-    TEST_ASSERT_EQUAL_INT(1, skiff_selftest_run(&deep_env, capture_line, &captured).failed);
+    TEST_ASSERT_EQUAL_INT(STORAGE_CHECKS,
+                          skiff_selftest_run(&deep_env, capture_line, &captured).failed);
     TEST_ASSERT_EQUAL_STRING("FAIL storage-list: the scratch folder does not fit under app:",
                              line_of("storage-list"));
+    TEST_ASSERT_EQUAL_STRING("FAIL saves-unit: the save folders do not fit under app:",
+                             line_of("saves-unit"));
+}
+
+typedef enum saves_fault {
+    SAVES_FAULT_MKDIR,
+    SAVES_FAULT_READ,
+    SAVES_FAULT_WRITE,
+    SAVES_FAULT_RMDIR,
+} saves_fault;
+
+/* Each saves-unit step failing in turn: the check names it, and removes what it made unless the
+ * failing step is the removal itself. */
+static void test_saves_unit_reports_the_failing_step(void) {
+    static const struct {
+        const char *suffix;
+        saves_fault fault;
+        const char *expected;
+    } CASES[] = {
+        {"selftest-saves", SAVES_FAULT_MKDIR,
+         "FAIL saves-unit: could not write the save folders under app: (SKIFF_ERR_STORAGE_IO)"},
+        {"PARAM.SFO", SAVES_FAULT_READ,
+         "FAIL saves-unit: the game's save folders were not collected (SKIFF_ERR_STORAGE_IO)"},
+        {"unit.zip", SAVES_FAULT_WRITE,
+         "FAIL saves-unit: the unit was not written with RomM's content_hash "
+         "(SKIFF_ERR_STORAGE_NO_SPACE)"},
+        {"unit.zip", SAVES_FAULT_READ,
+         "FAIL saves-unit: the unit did not read back the same (SKIFF_ERR_STORAGE_IO)"},
+        {"selftest-saves", SAVES_FAULT_RMDIR,
+         "FAIL saves-unit: the save folders were not removed (SKIFF_ERR_STORAGE_IO)"},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        fake_storage fake;
+        fake_storage_init(&fake, storage);
+        fake.fail_suffix = CASES[i].suffix;
+        switch (CASES[i].fault) {
+        case SAVES_FAULT_MKDIR:
+            fake.mkdir_error = SKIFF_ERR_STORAGE_IO;
+            break;
+        case SAVES_FAULT_READ:
+            fake.read_error = SKIFF_ERR_STORAGE_IO;
+            break;
+        case SAVES_FAULT_WRITE:
+            fake.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+            break;
+        case SAVES_FAULT_RMDIR:
+        default:
+            fake.rmdir_error = SKIFF_ERR_STORAGE_IO;
+            break;
+        }
+        const skiff_selftest_env faked = {&fake.base, &roots};
+        memset(&captured, 0, sizeof captured);
+        const skiff_selftest_result result = skiff_selftest_run(&faked, capture_line, &captured);
+        TEST_PRINTF("fault %d on \"%s\": %s", (int)CASES[i].fault, CASES[i].suffix,
+                    line_of("saves-unit"));
+        TEST_ASSERT_EQUAL_INT(1, result.failed);
+        TEST_ASSERT_EQUAL_STRING(CASES[i].expected, line_of("saves-unit"));
+        skiff_storage_destroy(&fake.base);
+        if (CASES[i].fault == SAVES_FAULT_RMDIR) {
+            char folder[SKIFF_STORAGE_PATH_MAX];
+            scratch_path(SKIFF_SELFTEST_SAVES_FOLDER, folder, sizeof folder);
+            TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(storage, folder));
+        }
+        assert_saves_folder_gone();
+    }
 }
 
 static void test_emits_banner_then_one_line_per_check_then_marker(void) {
@@ -281,6 +366,7 @@ int main(void) {
     RUN_TEST(test_storage_checks_fail_without_a_storage);
     RUN_TEST(test_storage_list_reports_the_failing_step);
     RUN_TEST(test_storage_list_fails_when_the_scratch_folder_does_not_fit);
+    RUN_TEST(test_saves_unit_reports_the_failing_step);
     RUN_TEST(test_emits_banner_then_one_line_per_check_then_marker);
     RUN_TEST(test_final_line_carries_ok_marker_for_ci_grep);
     RUN_TEST(test_null_logger_is_allowed);

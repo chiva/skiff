@@ -104,4 +104,9 @@ skiff_err skiff_storage_sibling_path(const char *program_path, const char *file_
  */
 skiff_err skiff_storage_safe_name(const char *name, char *out, size_t out_size);
 
+/* Whether the first length bytes of name are a name Windows and FAT tools treat as a device
+ * whatever its extension: CON, PRN, AUX, NUL, COM1-9 or LPT1-9, in any case, the part before the
+ * first '.' compared without trailing blanks. 0 for NULL. */
+int skiff_storage_is_dos_device(const char *name, size_t length);
+
 #endif

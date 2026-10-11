@@ -270,7 +270,10 @@ static char ascii_upper(char c) {
 }
 
 /* The name before its first dot, without trailing blanks, is a DOS device. */
-static int is_dos_device(const char *name, size_t length) {
+int skiff_storage_is_dos_device(const char *name, size_t length) {
+    if (name == NULL) {
+        return 0;
+    }
     const char *dot = memchr(name, EXTENSION_SEPARATOR, length);
     size_t base = dot != NULL ? (size_t)(dot - name) : length;
     while (base > 0 && is_blank(name[base - 1])) {
@@ -379,7 +382,7 @@ skiff_err skiff_storage_safe_name(const char *name, char *out, size_t out_size) 
     /* Checked on the final name: shortening can trim a stem down to "CON". The '_' goes in the byte
      * kept free before the name; a name that no longer fits is shortened again, and now starts with
      * '_', so it cannot be a device name any more. */
-    if (is_dos_device(work + start, length)) {
+    if (skiff_storage_is_dos_device(work + start, length)) {
         start--;
         work[start] = REPLACEMENT;
         length++;

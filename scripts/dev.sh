@@ -34,6 +34,9 @@ readonly ROMM_PLATFORM_DIR="/romm/library/roms/psp"
 # synthetic file seeded while recording them, kept small so the fixture stays small.
 readonly FIXTURES_DIR="tests/fixtures/romm"
 readonly FIXTURE_PAYLOAD_BYTES=4096
+# The sigil cross-check (tests/sigil/check.sh): sigil's source, its driver's build and Skiff's tool.
+readonly SIGIL_CHECK_DIR="build/sigil-check"
+
 # The app's build target, and the CA bundle the toolchain image holds in $SKIFF_CA_BUNDLE_DIR
 # (docker/ca-bundle/fetch-ca-bundle.sh). PSP builds copy it next to the app's EBOOT: the app reads
 # it from its own folder (SKIFF_APP_DEFAULT_CA_FILE), and scripts/memstick.sh and package take it
@@ -64,6 +67,9 @@ Commands run in the order given and stop at the first failure.
   asan         Host unit tests under ASan + UBSan, gcc and clang
   coverage     Host unit tests with coverage (fails under 85% line coverage)
   lint         clang-tidy and cppcheck over first-party sources
+  sigil-check  Cross-check save units with argosy-sigil (fetched at a pinned commit, built in the
+               host image): the same unit and hash from one synthetic memory stick, each
+               restoring the other's (tests/sigil/)
   selftest     Run the self-test EBOOT in PPSSPPHeadless (needs `psp` first)
   tls-probe    Run the TLS toolchain probe in PPSSPPHeadless (needs `psp` first)
   kirk-probe   Run the KIRK probe in PPSSPPHeadless, which has no ARK: TLS must refuse to start
@@ -312,6 +318,16 @@ run_command() {
     ;;
   lint)
     run_host "cmake --preset host >/dev/null && scripts/lint.sh build/host"
+    ;;
+  sigil-check)
+    run_host "cmake --preset host -B $SIGIL_CHECK_DIR/skiff >/dev/null \
+      && cmake --build $SIGIL_CHECK_DIR/skiff --target skiff_unit_tool >/dev/null \
+      && tests/sigil/fetch-sigil.sh $SIGIL_CHECK_DIR \
+      && cmake -S tests/sigil -B $SIGIL_CHECK_DIR/driver \
+        -DSIGIL_SOURCE_DIR=/src/$SIGIL_CHECK_DIR/argosy-sigil >/dev/null \
+      && cmake --build $SIGIL_CHECK_DIR/driver --target sigil_driver >/dev/null \
+      && tests/sigil/check.sh $SIGIL_CHECK_DIR $SIGIL_CHECK_DIR/skiff/tests/skiff_unit_tool \
+        $SIGIL_CHECK_DIR/driver/sigil_driver"
     ;;
   selftest)
     run_emulator build/psp/pbp/skiff_selftest/EBOOT.PBP SELFTEST

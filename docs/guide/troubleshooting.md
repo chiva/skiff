@@ -57,7 +57,7 @@ with your PSP model and firmware.
 | 212 | RomM has a newer save | Another device (a second PSP, or PPSSPP through a client such as Argosy) saved this game in RomM after this PSP last synced it, so RomM kept that save rather than replace it with this PSP's. Nothing was overwritten: sync again to compare the two |
 | 213 | The save is too large for RomM | RomM, or a proxy in front of it, refused the upload as too large. RomM accepts saves of up to 512 MB unless `MAX_ASSET_UPLOAD_SIZE_BYTES` sets another limit; a reverse proxy may allow far less (nginx: `client_max_body_size`, 1 MB by default). Raise the proxy's limit for `/api/saves` |
 
-## Memory Stick errors (300–305)
+## Memory Stick errors (300–307)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -67,6 +67,8 @@ with your PSP model and firmware.
 | 303 | File or folder missing | Usually harmless; Skiff recreates its folders |
 | 304 | File larger than 4 GB | The PSP's file system cannot store it; this game cannot be installed as-is |
 | 305 | The game's name is taken | Skiff never replaces a file it did not install. **Before the download:** a file with this game's name, and another with the name plus its RomM number (e.g. `Game [1234].iso`), are already in `ISO/`, copied by hand or by another program: move or rename one of them on a computer, then download again. **At the end of a download:** a file appeared under the game's name while it was downloading (for example copied over USB), or Skiff's own earlier copy is no longer the size it recorded: move or rename that one file, then retry the download. Skiff kept what it downloaded, so the retry finishes without downloading again |
+| 306 | A save is damaged or unsafe | Skiff checks every save from RomM before it touches the Memory Stick, and refused this one: a file in it is damaged or cut short, it is not a save of this game, or it holds folders or names a PSP save never has (another program may have uploaded it in a different layout). Nothing on the Memory Stick changed. Upload the save to RomM again from a device where the game loads it |
+| 307 | A save folder holds something Skiff cannot sync | One of the game's folders in `PSP/SAVEDATA/` holds what a PSP save never does: a folder inside it, a name with letters other than plain English ones, digits and common punctuation, or a name longer than 64 characters; or the game's saves add up to more than 64 folders, 256 files or 64 MB. Skiff leaves those saves alone and does not sync the game. Look at the game's folders on a computer, and remove what the game did not put there |
 
 ## Settings errors (400–402)
 

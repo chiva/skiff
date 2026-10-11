@@ -4,8 +4,9 @@
 /*
  * What src/romm/ files share beyond skiff/romm.h: requests whose JSON body is read whatever the
  * status, for the pairing calls (src/romm/pairing.c), whose answers come as 400s with a JSON
- * "detail"; requests with the token and any body, for the save sync calls (src/romm/saves.c); and
- * the checks every response and field gets.
+ * "detail"; requests with the token and any body, for the save sync calls (src/romm/saves.c);
+ * reads that tell a body too large for the caps from a broken one (src/romm/collections.c); and the
+ * checks every response and field gets.
  */
 
 #include <cjson/cJSON.h>
@@ -43,6 +44,21 @@ skiff_err skiff_romm_request_json(skiff_romm_client *client, skiff_http_method m
 /* A body that passes the checks every response gets (skiff/romm.h) as a tree, NULL otherwise; free
  * it with cJSON_Delete(). */
 cJSON *skiff_romm_parse_json(const char *json, size_t length);
+
+/* The same, with *too_large set when the body was refused for its size (over SKIFF_ROMM_BODY_MAX)
+ * or its number of values (over SKIFF_ROMM_JSON_NODES_MAX) rather than for what it holds, and
+ * cleared otherwise. */
+cJSON *skiff_romm_parse_json_capped(const char *json, size_t length, int *too_large);
+
+/*
+ * GETs the client's base URL + path with the token and parses the body as JSON into *out (free it
+ * with cJSON_Delete()), with skiff/romm.h's errors: the transport's, the RomM error for an HTTP
+ * status, SKIFF_ERR_ROMM_BAD_RESPONSE for a body that is not JSON or is refused by the caps, and
+ * SKIFF_ERR_INVALID_ARG for a NULL argument or a path longer than SKIFF_ROMM_REQUEST_PATH_MAX. On a
+ * refusal by the caps, *too_large is 1 (0 otherwise), so the caller can name it.
+ */
+skiff_err skiff_romm_get_json(skiff_romm_client *client, const char *path, cJSON **out,
+                              int *too_large);
 
 /* Field readers under skiff/romm.h's rules; each returns 0 for a field that breaks them. A whole,
  * non-negative number below 2^53: */

@@ -134,6 +134,11 @@ skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,
  * most capacity. The views live as long as config. */
 size_t skiff_config_headers(const skiff_config *config, skiff_http_header *out, size_t capacity);
 
+/* 1 when config's [auth] scopes names scope, whole, among its comma-separated scopes; 0 otherwise,
+ * also without scopes (a token pasted by hand or paired by an older Skiff, which counts as one that
+ * can only browse and download) and for a NULL or empty argument. */
+int skiff_config_has_scope(const skiff_config *config, const char *scope);
+
 /*
  * Writes text with key in section set to value into out (with its length in *out_length): the
  * key's line is rewritten in place (its first occurrence, keeping the key as written); a missing

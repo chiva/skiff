@@ -432,6 +432,8 @@ skiff_err app_reset_server(skiff_app *app) {
     app->request = REQUEST_NONE;
     app->failed_request = REQUEST_NONE;
     memset(app->pages, 0, sizeof app->pages);
+    /* Another server or token may see other collections, or be allowed to list them. */
+    app_collections_forget(app);
     app->batch.step = BATCH_NONE;
     const skiff_err err = start_queue(app);
     app_queue_refresh(app);

@@ -338,17 +338,101 @@ static void pair_view(skiff_app *app) {
     add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
 }
 
-static void library_view(skiff_app *app) {
+/* SELECT's hint: the list it goes to next. */
+static skiff_text_id next_source_label(const skiff_app *app) {
+    switch (app->source) {
+    case SOURCE_ALL:
+        return SKIFF_TEXT_SHOW_FAVOURITES;
+    case SOURCE_FAVOURITES:
+        return SKIFF_TEXT_SHOW_COLLECTIONS;
+    case SOURCE_COLLECTIONS:
+        break;
+    }
+    return SKIFF_TEXT_SHOW_ALL_GAMES;
+}
+
+static void set_count_status(skiff_app *app, skiff_text_id id, uint64_t count) {
+    char number[24];
+    snprintf(number, sizeof number, "%llu", (unsigned long long)count);
+    const char *args[] = {number};
+    char text[SKIFF_TEXT_MAX];
+    app_format(app, id, args, 1, text);
+    set_status(app, text);
+}
+
+/* The collections themselves (SOURCE_COLLECTIONS, none open): each with RomM's ROM count. */
+static void collections_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
-    set_title(app, app_text(app, app->favourites ? SKIFF_TEXT_TITLE_FAVOURITES
-                                                 : SKIFF_TEXT_TITLE_LIBRARY));
+    set_title(app, app_text(app, SKIFF_TEXT_TITLE_COLLECTIONS));
+    if (app_collections_denied(app)) {
+        add_text(app, SKIFF_TEXT_COLLECTIONS_PAIR_AGAIN);
+        add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_PAIR_AGAIN);
+    } else if (app->collections_error != SKIFF_OK) {
+        add_error(app, app->collections_error);
+        add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_RETRY);
+    } else if (!app->collections_known) {
+        add_text(app, SKIFF_TEXT_LIBRARY_LOADING);
+    } else if (app->collections.count == 0) {
+        add_text(app, SKIFF_TEXT_COLLECTIONS_EMPTY);
+    } else {
+        set_count_status(app, SKIFF_TEXT_COLLECTIONS_COUNT, app->collections.count);
+        view->has_list = 1;
+        view->list = app->collections_list;
+        const skiff_ui_list *list = &app->collections_list;
+        for (size_t i = 0; i < list->rows && list->first + i < list->count; i++) {
+            const size_t index = list->first + i;
+            skiff_app_row *row = &view->rows[view->row_count++];
+            snprintf(row->label, sizeof row->label, "%s", app->collection_labels[index]);
+            char number[24];
+            snprintf(number, sizeof number, "%llu",
+                     (unsigned long long)app->collections.items[index].rom_count);
+            const char *args[] = {number};
+            char text[SKIFF_TEXT_MAX];
+            app_format(app, SKIFF_TEXT_LIBRARY_COUNT, args, 1, text);
+            app_fit(app, text, SKIFF_APP_DETAIL_WIDTH, row->detail, sizeof row->detail);
+        }
+        add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
+    }
+    add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
+    add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+    add_hint(app, SKIFF_UI_ACTION_SELECT, SKIFF_TEXT_SHOW_ALL_GAMES);
+}
+
+static void library_title(skiff_app *app) {
+    if (app->source == SOURCE_COLLECTIONS) {
+        app_fit(app, app_collection_name(app, &app->collection), APP_TITLE_NAME_WIDTH,
+                app->view.title, sizeof app->view.title);
+        return;
+    }
+    set_title(app, app_text(app, app->source == SOURCE_FAVOURITES ? SKIFF_TEXT_TITLE_FAVOURITES
+                                                                  : SKIFF_TEXT_TITLE_LIBRARY));
+}
+
+/* The text an empty list shows. */
+static skiff_text_id empty_text(const skiff_app *app) {
+    if (!app->has_platform) {
+        return SKIFF_TEXT_LIBRARY_EMPTY;
+    }
+    switch (app->source) {
+    case SOURCE_FAVOURITES:
+        return SKIFF_TEXT_FAVOURITES_EMPTY;
+    case SOURCE_COLLECTIONS:
+        return SKIFF_TEXT_COLLECTION_EMPTY;
+    case SOURCE_ALL:
+        break;
+    }
+    return SKIFF_TEXT_LIBRARY_EMPTY;
+}
+
+static void library_view(skiff_app *app) {
+    if (app->has_platform && !app_games_listed(app)) {
+        collections_view(app);
+        return;
+    }
+    skiff_app_view *view = &app->view;
+    library_title(app);
     if (app->total_known) {
-        char count[24];
-        snprintf(count, sizeof count, "%llu", (unsigned long long)app->total);
-        const char *args[] = {count};
-        char text[SKIFF_TEXT_MAX];
-        app_format(app, SKIFF_TEXT_LIBRARY_COUNT, args, 1, text);
-        set_status(app, text);
+        set_count_status(app, SKIFF_TEXT_LIBRARY_COUNT, app->total);
     }
     const app_batch *batch = &app->batch;
     if (batch->step == BATCH_SCANNING || batch->step == BATCH_SPACE) {
@@ -358,15 +442,17 @@ static void library_view(skiff_app *app) {
         snprintf(total, sizeof total, "%llu", (unsigned long long)app->total);
         const char *args[] = {seen, total};
         char text[SKIFF_TEXT_MAX];
-        app_format(app, SKIFF_TEXT_BATCH_CHECKING, args, 2, text);
+        app_format(app,
+                   batch->filter == SKIFF_ROMM_LIST_FAVOURITES
+                       ? SKIFF_TEXT_BATCH_CHECKING
+                       : SKIFF_TEXT_BATCH_CHECKING_COLLECTION,
+                   args, 2, text);
         set_status(app, text);
     } else if (batch->step == BATCH_QUEUEING) {
         set_status(app, app_text(app, SKIFF_TEXT_BATCH_ADDING));
     }
-    if (app->has_platform && app->favourites && app->total_known && app->total == 0) {
-        add_text(app, SKIFF_TEXT_FAVOURITES_EMPTY);
-    } else if (!app->has_platform || (app->total_known && app->total == 0)) {
-        add_text(app, SKIFF_TEXT_LIBRARY_EMPTY);
+    if (!app->has_platform || (app->total_known && app->total == 0)) {
+        add_text(app, empty_text(app));
     } else if (!app->total_known) {
         add_text(app, SKIFF_TEXT_LIBRARY_LOADING);
     } else {
@@ -397,20 +483,25 @@ static void library_view(skiff_app *app) {
         }
     }
     if (batch->step != BATCH_NONE) {
-        /* While the favourites are checked, Back stops it; while it queues, nothing waits. */
+        /* While the list's games are checked, Back stops it; while it queues, nothing waits. */
         if (batch->step != BATCH_QUEUEING) {
             add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_CANCEL);
         }
         return;
     }
-    if (app->favourites && app->total_known && app->total > 0) {
+    if (app_batch_offered(app)) {
         add_hint(app, SKIFF_UI_ACTION_START, SKIFF_TEXT_DOWNLOAD_ALL);
     }
     add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
-    add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+    /* In a collection, Back to the collections takes Settings' place among the five hints
+     * (Triangle still opens Settings). */
+    if (app->source == SOURCE_COLLECTIONS) {
+        add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
+    } else {
+        add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+    }
     if (app->has_platform) {
-        add_hint(app, SKIFF_UI_ACTION_SELECT,
-                 app->favourites ? SKIFF_TEXT_SHOW_ALL_GAMES : SKIFF_TEXT_SHOW_FAVOURITES);
+        add_hint(app, SKIFF_UI_ACTION_SELECT, next_source_label(app));
     }
 }
 

@@ -3,9 +3,9 @@
 
 /*
  * A typed client for the RomM REST API over a skiff_transport: the server's version and whether
- * Skiff supports it, the PSP platform, its ROMs (or the player's favourites) one page at a time, a
- * ROM's files, and the URL a
- * file downloads from (skiff/download.h does the download). Responses are JSON, parsed with cJSON
+ * Skiff supports it, the PSP platform, its ROMs (or the player's favourites, or a collection's) one
+ * page at a time, the player's collections, a ROM's files, and the URL a file downloads from
+ * (skiff/download.h does the download). Responses are JSON, parsed with cJSON
  * one response at a time from a buffer of at most SKIFF_ROMM_BODY_MAX bytes: a larger response is
  * refused, never cut, so a PSP cannot run out of memory on a large library.
  *
@@ -157,11 +157,19 @@ typedef enum skiff_romm_list_filter {
     /* The ones in the RomM user's favourites collections (a user may have several: RomM merges
      * them). Needs no scope beyond roms.read; a user without favourites gets an empty list. */
     SKIFF_ROMM_LIST_FAVOURITES,
+    /* The ones in a regular or a smart collection (collection_id, as skiff_romm_list_collections()
+     * gives it). Paging needs only roms.read; another user's private collection lists nothing
+     * (RomM 5.4 checks the owner). */
+    SKIFF_ROMM_LIST_COLLECTION,
+    SKIFF_ROMM_LIST_SMART_COLLECTION,
 } skiff_romm_list_filter;
 
 typedef struct skiff_romm_list_query {
     uint64_t platform_id;
     skiff_romm_list_filter filter;
+    /* The collection of SKIFF_ROMM_LIST_COLLECTION and SKIFF_ROMM_LIST_SMART_COLLECTION (1 or
+     * more); unused otherwise. */
+    uint64_t collection_id;
     /* Also list each ROM's files (about 0.5 KB more JSON per ROM), so a summary carries its only
      * file (has_file) and a download needs no request for the ROM's details. */
     int with_files;
@@ -174,6 +182,32 @@ typedef struct skiff_romm_rom_page {
     size_t count;
     skiff_romm_rom_summary items[SKIFF_ROMM_PAGE_SIZE];
 } skiff_romm_rom_page;
+
+/* The scope listing collections needs (config.ini's [auth] scopes holds it when RomM granted it).
+ */
+#define SKIFF_ROMM_SCOPE_COLLECTIONS_READ "collections.read"
+
+/* The collections one list keeps: RomM sends them all at once (no paging), and a PSP lists them on
+ * one screen. */
+#define SKIFF_ROMM_COLLECTIONS_MAX 128
+
+/* A collection as the collections list shows it. */
+typedef struct skiff_romm_collection {
+    uint64_t id;
+    /* A smart collection (RomM fills it from saved filters): its ids are apart from regular ones,
+     * and its ROMs list with SKIFF_ROMM_LIST_SMART_COLLECTION. */
+    int smart;
+    /* The ROMs RomM counts in it, every platform's (what RomM's web UI shows). */
+    uint64_t rom_count;
+    /* In display form, as a ROM's name in a list (control characters replaced, a long name cut);
+     * empty when RomM has none. Only shown, never used in a path. */
+    char name[SKIFF_ROMM_NAME_MAX];
+} skiff_romm_collection;
+
+typedef struct skiff_romm_collection_list {
+    size_t count;
+    skiff_romm_collection items[SKIFF_ROMM_COLLECTIONS_MAX];
+} skiff_romm_collection_list;
 
 typedef struct skiff_romm_rom {
     skiff_romm_rom_summary summary;
@@ -228,11 +262,26 @@ skiff_err skiff_romm_find_platform(skiff_romm_client *client, const char *slug,
  * offset, ordered by name, without the per-library extras RomM adds by default (and with each ROM's
  * files if query asks). A page past the end is empty with the total. A page that is not the one
  * asked for (another offset, more ROMs than limit or than the total leaves, a ROM of another
- * platform) is SKIFF_ERR_ROMM_BAD_RESPONSE. SKIFF_ERR_INVALID_ARG for a NULL query or a limit out
- * of range.
+ * platform) is SKIFF_ERR_ROMM_BAD_RESPONSE. SKIFF_ERR_INVALID_ARG for a NULL query, a limit out
+ * of range, a filter outside skiff_romm_list_filter or a collection filter without a collection.
  */
 skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_query *query,
                                uint64_t offset, size_t limit, skiff_romm_rom_page *out);
+
+/*
+ * GET /api/collections, then GET /api/collections/smart (both need collections.read): the
+ * collections the RomM user owns and every other user's public ones, the regular ones first, then
+ * the smart ones, each in RomM's order (by name). Favourites collections are left out (the
+ * favourites list holds their games), and virtual ones (generated per genre, company and so on)
+ * are not asked for.
+ *
+ * RomM pages neither list and lists every ROM id of every collection, with two cover paths per ROM
+ * of a regular one (about 150 bytes a ROM). An answer over SKIFF_ROMM_BODY_MAX or
+ * SKIFF_ROMM_JSON_NODES_MAX, or more than SKIFF_ROMM_COLLECTIONS_MAX collections in all, is
+ * SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE (214): the list is refused whole, never shown in part. A
+ * token without collections.read is SKIFF_ERR_ROMM_FORBIDDEN (201). out is empty on error.
+ */
+skiff_err skiff_romm_list_collections(skiff_romm_client *client, skiff_romm_collection_list *out);
 
 /* GET /api/roms/{rom_id}: the ROM with its files. A response for another ROM, or listing a file of
  * another ROM, is SKIFF_ERR_ROMM_BAD_RESPONSE. */
@@ -278,5 +327,15 @@ skiff_err skiff_romm_parse_rom_page(const char *json, size_t length, skiff_romm_
 
 /* A /api/roms/{id} response body: SKIFF_OK, or SKIFF_ERR_ROMM_BAD_RESPONSE. */
 skiff_err skiff_romm_parse_rom(const char *json, size_t length, skiff_romm_rom *out);
+
+/*
+ * A /api/collections body (smart 0) or a /api/collections/smart one (smart 1), appended to the
+ * collections already in out: SKIFF_OK; SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE for a body over
+ * SKIFF_ROMM_BODY_MAX or SKIFF_ROMM_JSON_NODES_MAX, or more collections than out has room for; or
+ * SKIFF_ERR_ROMM_BAD_RESPONSE; SKIFF_ERR_INVALID_ARG for a NULL out or one fuller than its room.
+ * out->count is left as it was on error.
+ */
+skiff_err skiff_romm_parse_collections(const char *json, size_t length, int smart,
+                                       skiff_romm_collection_list *out);
 
 #endif

@@ -29,7 +29,10 @@ PLATFORM_ID="$(jq -r .platform_id "$SEED")"
 ROM_ID="$(jq -r .rom_id "$SEED")"
 EXTRA_ROM_ID="$(jq -r .extra.rom_id "$SEED")"
 FILE_NAME="$(jq -rn --arg n "$(jq -r .file_name "$SEED")" '$n | @uri')"
-readonly TOKEN PLATFORM_ID ROM_ID EXTRA_ROM_ID FILE_NAME
+COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"
+SHELF_ID="$(jq -r .collections.shelf "$SEED")"
+SMART_SHELF_ID="$(jq -r .collections.smart "$SEED")"
+readonly TOKEN PLATFORM_ID ROM_ID EXTRA_ROM_ID FILE_NAME COLLECTIONS_TOKEN SHELF_ID SMART_SHELF_ID
 WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
@@ -62,6 +65,19 @@ record rom "/api/roms/$ROM_ID" "${auth[@]}"
 record rom-extra "/api/roms/$EXTRA_ROM_ID" "${auth[@]}"
 record rom-content "/api/roms/$ROM_ID/content/$FILE_NAME" "${auth[@]}"
 record roms-unauthorized /api/roms
+# The collections (tests/integration/seed.py): RomM's two lists, read with the token that holds
+# collections.read and refused (403) to the one without it, and the first page of the shelf's and
+# the smart shelf's games.
+collections_auth=(-H "Authorization: Bearer $COLLECTIONS_TOKEN")
+record collections /api/collections "${collections_auth[@]}"
+record collections-smart /api/collections/smart "${collections_auth[@]}"
+record collections-forbidden /api/collections "${auth[@]}"
+record roms-collection-page-0 \
+  "/api/roms?platform_ids=$PLATFORM_ID&limit=1&offset=0&$ROM_LIST_QUERY&collection_id=$SHELF_ID" \
+  "${auth[@]}"
+record roms-smart-collection-page-0 \
+  "/api/roms?platform_ids=$PLATFORM_ID&limit=1&offset=0&$ROM_LIST_QUERY&smart_collection_id=$SMART_SHELF_ID" \
+  "${auth[@]}"
 # The pairing flow's answers, each secret replaced with a synthetic one.
 "$(dirname "$0")/record-pairing-fixtures.sh" "$DIR" "$OUT"
 # The save sync calls between two paired PSPs, with synthetic save units and device ids.

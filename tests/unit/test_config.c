@@ -381,6 +381,27 @@ static void test_the_granted_scopes_parse_and_refuse_blanks(void) {
     assert_refused(text, SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth", "scopes");
 }
 
+static void test_a_scope_is_granted_only_when_named_whole(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[auth]\ntoken = rmm_x\n"));
+    TEST_PRINTF("no scopes: browse only, so no optional scope");
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, "collections.read"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          parse("[auth]\nscopes = platforms.read,roms.read,collections.read\n"));
+    TEST_ASSERT_TRUE(skiff_config_has_scope(&config, "collections.read"));
+    TEST_ASSERT_TRUE(skiff_config_has_scope(&config, "platforms.read"));
+    TEST_ASSERT_TRUE(skiff_config_has_scope(&config, "roms.read"));
+    TEST_PRINTF("a part of a scope is not that scope");
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, "collections"));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, "read"));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, "collections.read,"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[auth]\nscopes = ,collections.readx,,roms.read,\n"));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, "collections.read"));
+    TEST_ASSERT_TRUE(skiff_config_has_scope(&config, "roms.read"));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, ""));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(&config, NULL));
+    TEST_ASSERT_FALSE(skiff_config_has_scope(NULL, "roms.read"));
+}
+
 static void test_file_names_must_stay_in_the_skiff_folder(void) {
     const char *refused[] = {"certs/ca.pem", "..\\ca.pem", "ms0:/ca.pem", "..", "."};
     for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
@@ -866,6 +887,7 @@ int main(void) {
     RUN_TEST(test_tokens_with_blanks_or_controls_are_refused);
     RUN_TEST(test_the_pairing_keys_parse_and_refuse_blanks);
     RUN_TEST(test_the_granted_scopes_parse_and_refuse_blanks);
+    RUN_TEST(test_a_scope_is_granted_only_when_named_whole);
     RUN_TEST(test_file_names_must_stay_in_the_skiff_folder);
     RUN_TEST(test_a_client_certificate_needs_its_key);
     RUN_TEST(test_newer_schema_versions_are_refused);

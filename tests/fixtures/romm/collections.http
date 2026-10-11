@@ -1,0 +1,9 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Accept-Encoding
+Vary: Origin
+Via: 1.1 Caddy
+Transfer-Encoding: chunked
+
+[{"name":"Favorites","description":"","rom_ids":[1],"path_cover_small":null,"path_cover_large":null,"path_covers_small":["/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11 21:40:56"],"path_covers_large":["/assets/romm/resources/roms/1/1/cover/big.png?ts=2026-10-11 21:40:56"],"is_public":false,"is_favorite":true,"is_virtual":false,"is_smart":false,"created_at":"2026-10-11T21:40:56+00:00","updated_at":"2026-10-11T21:40:56+00:00","id":1,"url_cover":"","user_id":1,"owner_username":"skiff","rom_count":1},{"name":"Skiff Empty Shelf","description":"","rom_ids":[],"path_cover_small":null,"path_cover_large":null,"path_covers_small":[],"path_covers_large":[],"is_public":false,"is_favorite":false,"is_virtual":false,"is_smart":false,"created_at":"2026-10-11T21:40:57+00:00","updated_at":"2026-10-11T21:40:57+00:00","id":3,"url_cover":"","user_id":1,"owner_username":"skiff","rom_count":0},{"name":"Skiff Shelf","description":"","rom_ids":[1,2],"path_cover_small":null,"path_cover_large":null,"path_covers_small":["/assets/romm/resources/roms/1/1/cover/small.png?ts=2026-10-11 21:40:57"],"path_covers_large":["/assets/romm/resources/roms/1/1/cover/big.png?ts=2026-10-11 21:40:57"],"is_public":false,"is_favorite":false,"is_virtual":false,"is_smart":false,"created_at":"2026-10-11T21:40:57+00:00","updated_at":"2026-10-11T21:40:57+00:00","id":2,"url_cover":"","user_id":1,"owner_username":"skiff","rom_count":2},{"name":"Skiff Viewer Shelf","description":"","rom_ids":[2],"path_cover_small":null,"path_cover_large":null,"path_covers_small":[],"path_covers_large":[],"is_public":true,"is_favorite":false,"is_virtual":false,"is_smart":false,"created_at":"2026-10-11T21:40:59+00:00","updated_at":"2026-10-11T21:40:59+00:00","id":4,"url_cover":"","user_id":2,"owner_username":"skiffviewer","rom_count":1}]

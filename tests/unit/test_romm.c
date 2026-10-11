@@ -1,10 +1,11 @@
 /*
  * The RomM client (skiff/romm.h) against the fake transport replaying responses recorded from RomM
  * 5.4.0 (tests/fixtures/romm/): the version policy, the PSP platform, two pages of one ROM and the
- * empty page after them, a ROM's files and cover, download URLs that survive any file name, and
- * cover URLs that only ever lead to RomM's own pictures. Every way a
- * response can be wrong (a proxy's login page, a cut or oversized body, a field that does not fit)
- * is SKIFF_ERR_ROMM_BAD_RESPONSE, never a half-filled result.
+ * empty page after them, the player's collections and a collection's games, a ROM's files and
+ * cover, download URLs that survive any file name, and cover URLs that only ever lead to RomM's own
+ * pictures. Every way a response can be wrong (a proxy's login page, a cut or oversized body, a
+ * field that does not fit) is SKIFF_ERR_ROMM_BAD_RESPONSE, never a half-filled result; collections
+ * too large for the caps have their own error.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -894,6 +895,378 @@ static void test_a_body_past_the_cap_is_refused_not_cut(void) {
     TEST_ASSERT_EQUAL_size_t(0, page.count);
 }
 
+/* ---- Collections ---- */
+
+#define PATH_COLLECTIONS "/api/collections"
+#define PATH_SMART_COLLECTIONS "/api/collections/smart"
+/* A collection item as RomM 5.4 sends one, the fields Skiff reads first, then the ROM ids and
+ * covers it skips. */
+#define COLLECTION(id, name, count, smart, favourite)                                              \
+    "{\"id\":" #id ",\"name\":" name ",\"rom_count\":" #count ",\"is_smart\":" smart               \
+    ",\"is_favorite\":" favourite ",\"is_virtual\":false,\"is_public\":true,\"rom_ids\":[1,2],"    \
+    "\"path_covers_small\":[\"/assets/romm/resources/roms/1/1/cover/small.png?ts=x\"]}"
+#define REGULAR(id, name, count) COLLECTION(id, "\"" name "\"", count, "false", "false")
+#define SMART(id, name, count) COLLECTION(id, "\"" name "\"", count, "true", "false")
+
+static skiff_romm_collection_list collections;
+
+/* RomM's two lists: regular holds the regular list's items, smart the smart list's. */
+static void serve_collections(const char *regular, const char *smart) {
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw, JSON_OK "[%s]", regular);
+    serve_raw(PATH_COLLECTIONS, raw);
+    snprintf(raw, sizeof raw, JSON_OK "[%s]", smart);
+    serve_raw(PATH_SMART_COLLECTIONS, raw);
+}
+
+static skiff_err list_collections(void) {
+    const skiff_err err = skiff_romm_list_collections(&client, &collections);
+    TEST_PRINTF("collections -> %s, %zu", skiff_err_name(err), collections.count);
+    for (size_t i = 0; i < collections.count; i++) {
+        TEST_PRINTF("  %llu%s '%s', %llu ROMs", (unsigned long long)collections.items[i].id,
+                    collections.items[i].smart ? " (smart)" : "", collections.items[i].name,
+                    (unsigned long long)collections.items[i].rom_count);
+    }
+    return err;
+}
+
+static void test_collections_list_regular_then_smart_without_favourites(void) {
+    serve_collections(COLLECTION(1, "\"Favorites\"", 3, "false",
+                                 "true") "," REGULAR(5, "Shelf", 34) "," REGULAR(3, "Empty", 0),
+                      SMART(2, "Smart", 15));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_collections());
+    TEST_ASSERT_EQUAL_size_t(2, fake.request_count);
+    TEST_ASSERT_EQUAL_STRING(PATH_COLLECTIONS, fake.log[0].url + strlen(BASE_URL));
+    TEST_ASSERT_EQUAL_STRING(PATH_SMART_COLLECTIONS, fake.log[1].url + strlen(BASE_URL));
+    TEST_ASSERT_EQUAL_size_t(3, collections.count);
+    TEST_ASSERT_EQUAL_UINT64(5, collections.items[0].id);
+    TEST_ASSERT_EQUAL_STRING("Shelf", collections.items[0].name);
+    TEST_ASSERT_EQUAL_UINT64(34, collections.items[0].rom_count);
+    TEST_ASSERT_FALSE(collections.items[0].smart);
+    TEST_ASSERT_EQUAL_UINT64(0, collections.items[1].rom_count);
+    TEST_ASSERT_EQUAL_UINT64(2, collections.items[2].id);
+    TEST_ASSERT_TRUE(collections.items[2].smart);
+    TEST_PRINTF("the token is sent: listing collections needs collections.read");
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_GET, fake.log[0].method);
+}
+
+static void test_the_recorded_collections_and_their_games(void) {
+    serve_fixture(PATH_COLLECTIONS, "romm/collections.http");
+    serve_fixture(PATH_SMART_COLLECTIONS, "romm/collections-smart.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_collections());
+    TEST_PRINTF("the seed's shelves in RomM's order, the viewer's public one, then the smart one; "
+                "the favourites left out");
+    TEST_ASSERT_EQUAL_size_t(4, collections.count);
+    TEST_ASSERT_EQUAL_STRING("Skiff Empty Shelf", collections.items[0].name);
+    TEST_ASSERT_EQUAL_UINT64(0, collections.items[0].rom_count);
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", collections.items[1].name);
+    TEST_ASSERT_EQUAL_UINT64(2, collections.items[1].id);
+    TEST_ASSERT_EQUAL_UINT64(2, collections.items[1].rom_count);
+    TEST_ASSERT_EQUAL_STRING("Skiff Viewer Shelf", collections.items[2].name);
+    TEST_ASSERT_EQUAL_STRING("Skiff Smart Shelf", collections.items[3].name);
+    TEST_ASSERT_TRUE(collections.items[3].smart);
+    TEST_ASSERT_EQUAL_UINT64(1, collections.items[3].id);
+
+    TEST_PRINTF("each one's games, a page of one: the shelf starts with the extra ROM");
+    serve_fixture(PAGE_PATH(0) "&collection_id=2", "romm/roms-collection-page-0.http");
+    serve_fixture(PAGE_PATH(0) "&smart_collection_id=1", "romm/roms-smart-collection-page-0.http");
+    const skiff_romm_list_query shelf = {.platform_id = PSP_PLATFORM_ID,
+                                         .filter = SKIFF_ROMM_LIST_COLLECTION,
+                                         .collection_id = collections.items[1].id};
+    const skiff_romm_list_query smart = {.platform_id = PSP_PLATFORM_ID,
+                                         .filter = SKIFF_ROMM_LIST_SMART_COLLECTION,
+                                         .collection_id = collections.items[3].id};
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &shelf, 0, 1, &page));
+    TEST_ASSERT_EQUAL_UINT64(2, page.total);
+    TEST_ASSERT_EQUAL_UINT64(EXTRA_ROM_ID, page.items[0].id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &smart, 0, 1, &page));
+    TEST_ASSERT_EQUAL_UINT64(1, page.total);
+    TEST_ASSERT_EQUAL_STRING(EXTRA_NAME, page.items[0].fs_name);
+}
+
+static void test_a_token_without_collections_read_is_forbidden(void) {
+    serve_fixture(PATH_COLLECTIONS, "romm/collections-forbidden.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_FORBIDDEN, list_collections());
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+    TEST_ASSERT_EQUAL_size_t(1, fake.request_count);
+}
+
+static void test_a_failed_smart_list_empties_the_whole_list(void) {
+    serve_raw(PATH_COLLECTIONS, JSON_OK "[" REGULAR(5, "Shelf", 1) "]");
+    serve_raw(PATH_SMART_COLLECTIONS, "HTTP/1.1 500 Internal Server Error\r\n\r\n");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_SERVER, list_collections());
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+}
+
+typedef struct collection_case {
+    const char *what;
+    const char *item;
+} collection_case;
+
+static void test_every_field_of_a_collection_is_checked(void) {
+    static const collection_case CASES[] = {
+        {"not an object", "[]"},
+        {"no id", "{\"name\":\"a\",\"rom_count\":1,\"is_smart\":false}"},
+        {"id 0", COLLECTION(0, "\"a\"", 1, "false", "false")},
+        {"negative id", COLLECTION(-1, "\"a\"", 1, "false", "false")},
+        {"id as text", "{\"id\":\"5\",\"name\":\"a\",\"rom_count\":1,\"is_smart\":false}"},
+        {"no count", "{\"id\":5,\"name\":\"a\",\"is_smart\":false}"},
+        {"fractional count", COLLECTION(5, "\"a\"", 1.5, "false", "false")},
+        {"name not a string", COLLECTION(5, "7", 1, "false", "false")},
+        {"no kind", "{\"id\":5,\"name\":\"a\",\"rom_count\":1}"},
+        {"kind not a boolean", COLLECTION(5, "\"a\"", 1, "0", "false")},
+        {"a smart one in the regular list", COLLECTION(5, "\"a\"", 1, "true", "false")},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        tearDown();
+        setUp();
+        char regular[RAW_MAX];
+        snprintf(regular, sizeof regular, REGULAR(1, "Kept", 1) ",%s", CASES[i].item);
+        serve_collections(regular, "");
+        TEST_PRINTF("%s: %s", CASES[i].what, CASES[i].item);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_collections());
+        TEST_ASSERT_EQUAL_size_t(0, collections.count);
+    }
+    TEST_PRINTF("a regular one in the smart list is refused too");
+    tearDown();
+    setUp();
+    serve_collections("", REGULAR(5, "a", 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_collections());
+    TEST_PRINTF("and a list that is not an array");
+    tearDown();
+    setUp();
+    serve_raw(PATH_COLLECTIONS, JSON_OK "{\"items\":[]}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, list_collections());
+}
+
+static void test_a_collection_name_is_only_shown(void) {
+    serve_collections(COLLECTION(1, "null", 1, "false", "false") "," REGULAR(
+                          2, "Bad\\u0007Name", 1) "," REGULAR(3, "Caf\\u00e9", 1),
+                      COLLECTION(4, "\"\"", 1, "true", "false"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_collections());
+    TEST_PRINTF("no name is listed empty (the screen names it); a control character is shown as ?");
+    TEST_ASSERT_EQUAL_size_t(4, collections.count);
+    TEST_ASSERT_EQUAL_STRING("", collections.items[0].name);
+    TEST_ASSERT_EQUAL_STRING("Bad?Name", collections.items[1].name);
+    TEST_ASSERT_EQUAL_STRING("Caf\xC3\xA9", collections.items[2].name);
+    TEST_ASSERT_EQUAL_STRING("", collections.items[3].name);
+
+    TEST_PRINTF("a name too long for the PSP (RomM allows 400 characters) is cut, with a marker");
+    char name[SKIFF_ROMM_NAME_MAX + 16];
+    memset(name, 'a', sizeof name - 1);
+    name[sizeof name - 1] = '\0';
+    char json[RAW_MAX];
+    snprintf(json, sizeof json, "[{\"id\":9,\"name\":\"%s\",\"rom_count\":1,\"is_smart\":false}]",
+             name);
+    memset(&collections, 0, sizeof collections);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_collections(json, strlen(json), 0, &collections));
+    TEST_ASSERT_EQUAL_size_t(1, collections.count);
+    const size_t length = strlen(collections.items[0].name);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_NAME_MAX - 1, length);
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_NAME_CUT_MARKER, collections.items[0].name + length - 1);
+}
+
+static void test_favourites_and_virtual_collections_are_left_out(void) {
+    serve_collections(
+        COLLECTION(1, "\"Favorites\"", 3, "false", "true") "," REGULAR(
+            8, "Genre", 900) ",{\"id\":7,\"name\":\"v\",\"rom_count\":2,\"is_smart\":false,"
+                             "\"is_virtual\":true}",
+        "");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_collections());
+    TEST_ASSERT_EQUAL_size_t(1, collections.count);
+    TEST_ASSERT_EQUAL_UINT64(8, collections.items[0].id);
+}
+
+/* A JSON array of count regular collections, ids from 1. */
+static char *many_collections(size_t count) {
+    enum { ITEM_MAX = 96 };
+    char *json = malloc(count * ITEM_MAX + 3);
+    TEST_ASSERT_NOT_NULL(json);
+    size_t used = 0;
+    json[used++] = '[';
+    for (size_t i = 0; i < count; i++) {
+        used += (size_t)snprintf(json + used, ITEM_MAX,
+                                 "%s{\"id\":%zu,\"name\":\"c\",\"rom_count\":1,\"is_smart\":false}",
+                                 i > 0 ? "," : "", i + 1);
+    }
+    json[used++] = ']';
+    json[used] = '\0';
+    return json;
+}
+
+/* Serves body (a JSON text of any size) at path. */
+static void serve_json(const char *path, const char *body) {
+    const size_t size = sizeof JSON_OK + strlen(body);
+    char *raw = malloc(size);
+    TEST_ASSERT_NOT_NULL(raw);
+    snprintf(raw, size, JSON_OK "%s", body);
+    serve_raw(path, raw);
+    free(raw);
+}
+
+static void test_more_collections_than_a_list_keeps_are_refused_whole(void) {
+    char *json = many_collections(SKIFF_ROMM_COLLECTIONS_MAX);
+    memset(&collections, 0, sizeof collections);
+    TEST_PRINTF("%d collections: every one kept", SKIFF_ROMM_COLLECTIONS_MAX);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_collections(json, strlen(json), 0, &collections));
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_COLLECTIONS_MAX, collections.count);
+
+    TEST_PRINTF("the room counts both lists: one smart one more is too many, and nothing is kept");
+    serve_json(PATH_COLLECTIONS, json);
+    serve_json(PATH_SMART_COLLECTIONS, "[" SMART(1, "s", 1) "]");
+    free(json);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE, list_collections());
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+
+    json = many_collections(SKIFF_ROMM_COLLECTIONS_MAX + 1);
+    memset(&collections, 0, sizeof collections);
+    TEST_PRINTF("one more in one list: refused, never cut");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE,
+                          skiff_romm_parse_collections(json, strlen(json), 0, &collections));
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+    free(json);
+}
+
+/* A 200 response of bytes body bytes ("[]" and blanks), announcing its size or not. */
+static void serve_oversized_collections(size_t bytes, int with_length) {
+    char header[128];
+    const int header_length =
+        with_length ? snprintf(header, sizeof header,
+                               "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n", bytes)
+                    : snprintf(header, sizeof header, "HTTP/1.1 200 OK\r\n\r\n");
+    char *raw = malloc((size_t)header_length + bytes + 1);
+    TEST_ASSERT_NOT_NULL(raw);
+    memcpy(raw, header, (size_t)header_length);
+    memset(raw + header_length, ' ', bytes);
+    raw[header_length] = '[';
+    raw[header_length + 1] = ']';
+    raw[(size_t)header_length + bytes] = '\0';
+    serve_raw(PATH_COLLECTIONS, raw);
+    free(raw);
+}
+
+static void test_collections_past_the_caps_are_refused_with_their_own_error(void) {
+    for (int with_length = 0; with_length <= 1; with_length++) {
+        tearDown();
+        setUp();
+        TEST_PRINTF("a body over SKIFF_ROMM_BODY_MAX, %s Content-Length",
+                    with_length ? "with" : "without");
+        serve_oversized_collections(SKIFF_ROMM_BODY_MAX + 1, with_length);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE, list_collections());
+        TEST_ASSERT_EQUAL_size_t(0, collections.count);
+    }
+    tearDown();
+    setUp();
+    TEST_PRINTF("exactly the cap is read and parsed");
+    serve_oversized_collections(SKIFF_ROMM_BODY_MAX, 0);
+    serve_raw(PATH_SMART_COLLECTIONS, JSON_OK "[]");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, list_collections());
+
+    TEST_PRINTF("more values than SKIFF_ROMM_JSON_NODES_MAX: the ROM ids a large shelf sends");
+    enum { HEAD_MAX = 128 };
+    const size_t values = SKIFF_ROMM_JSON_NODES_MAX;
+    char *json = malloc(2 * values + HEAD_MAX);
+    TEST_ASSERT_NOT_NULL(json);
+    size_t used = (size_t)snprintf(
+        json, HEAD_MAX,
+        "[{\"id\":1,\"name\":\"c\",\"rom_count\":%zu,\"is_smart\":false,\"rom_ids\":[", values);
+    for (size_t i = 0; i < values; i++) {
+        json[used++] = '1';
+        json[used++] = i + 1 < values ? ',' : ']';
+    }
+    json[used++] = '}';
+    json[used++] = ']';
+    json[used] = '\0';
+    memset(&collections, 0, sizeof collections);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE,
+                          skiff_romm_parse_collections(json, used, 0, &collections));
+    TEST_PRINTF("the same over the network");
+    tearDown();
+    setUp();
+    serve_json(PATH_COLLECTIONS, json);
+    free(json);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE, list_collections());
+
+    TEST_PRINTF("a length over the cap given to the parser, and a body that is not JSON");
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE,
+        skiff_romm_parse_collections("[]", SKIFF_ROMM_BODY_MAX + 1, 0, &collections));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_collections("[x]", 3, 0, &collections));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_parse_collections(NULL, 0, 0, &collections));
+}
+
+static void test_parsing_collections_appends_and_checks_its_room(void) {
+    memset(&collections, 0, sizeof collections);
+    static const char regular[] = "[" REGULAR(5, "a", 1) "]";
+    static const char smart[] = "[" SMART(5, "b", 2) "]";
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_romm_parse_collections(regular, sizeof regular - 1, 0, &collections));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_parse_collections(smart, sizeof smart - 1, 1, &collections));
+    TEST_PRINTF("the same id in both lists: two collections, told apart by their kind");
+    TEST_ASSERT_EQUAL_size_t(2, collections.count);
+    TEST_ASSERT_FALSE(collections.items[0].smart);
+    TEST_ASSERT_TRUE(collections.items[1].smart);
+    TEST_PRINTF("a refused list leaves the count as it was");
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_ROMM_BAD_RESPONSE,
+        skiff_romm_parse_collections(regular, sizeof regular - 1, 1, &collections));
+    TEST_ASSERT_EQUAL_size_t(2, collections.count);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_parse_collections(regular, sizeof regular - 1, 0, NULL));
+    collections.count = SKIFF_ROMM_COLLECTIONS_MAX + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_parse_collections(
+                                                     regular, sizeof regular - 1, 0, &collections));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_list_collections(&client, NULL));
+    skiff_romm_client empty;
+    memset(&empty, 0, sizeof empty);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_list_collections(&empty, &collections));
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+    TEST_ASSERT_EQUAL_size_t(0, fake.request_count);
+}
+
+static void test_a_collections_games_list_with_its_filter(void) {
+    const skiff_romm_list_query shelf = {
+        .platform_id = PSP_PLATFORM_ID, .filter = SKIFF_ROMM_LIST_COLLECTION, .collection_id = 5};
+    const skiff_romm_list_query smart = {.platform_id = PSP_PLATFORM_ID,
+                                         .filter = SKIFF_ROMM_LIST_SMART_COLLECTION,
+                                         .collection_id = 2,
+                                         .with_files = 1};
+    const char *empty = JSON_OK "{\"items\":[],\"total\":0,\"limit\":1,\"offset\":0}";
+    serve_raw(PAGE_PATH(0) "&collection_id=5", empty);
+    serve_raw(PAGE_PATH(0) "&smart_collection_id=2&with_files=true", empty);
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &shelf, 0, 1, &page));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &smart, 0, 1, &page));
+    TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&collection_id=5", fake.log[0].url + strlen(BASE_URL));
+    TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&smart_collection_id=2&with_files=true",
+                             fake.log[1].url + strlen(BASE_URL));
+    TEST_PRINTF("the largest ids fit the request");
+    const skiff_romm_list_query largest = {.platform_id = UINT64_MAX,
+                                           .filter = SKIFF_ROMM_LIST_SMART_COLLECTION,
+                                           .collection_id = UINT64_MAX,
+                                           .with_files = 1};
+    (void)skiff_romm_list_roms(&client, &largest, UINT64_MAX, 1, &page);
+    TEST_PRINTF("%s", fake.log[2].url);
+    TEST_ASSERT_NOT_NULL(
+        strstr(fake.log[2].url, "&smart_collection_id=18446744073709551615&with_files=true"));
+    TEST_PRINTF("a collection filter without a collection, or a filter Skiff has not, is refused");
+    const skiff_romm_list_query no_collection = {.platform_id = PSP_PLATFORM_ID,
+                                                 .filter = SKIFF_ROMM_LIST_COLLECTION};
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_list_roms(&client, &no_collection, 0, 1, &page));
+    const skiff_romm_list_query unknown = {
+        .platform_id = PSP_PLATFORM_ID,
+        .filter = (skiff_romm_list_filter)(SKIFF_ROMM_LIST_SMART_COLLECTION + 1)};
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_list_roms(&client, &unknown, 0, 1, &page));
+    TEST_ASSERT_EQUAL_size_t(3, fake.request_count);
+}
 /* ---- One ROM ---- */
 
 static void test_a_rom_comes_with_its_files(void) {
@@ -1375,6 +1748,17 @@ int main(void) {
     RUN_TEST(test_a_server_error_is_a_romm_server_error);
     RUN_TEST(test_an_unreachable_server_keeps_the_network_error);
     RUN_TEST(test_a_body_past_the_cap_is_refused_not_cut);
+    RUN_TEST(test_collections_list_regular_then_smart_without_favourites);
+    RUN_TEST(test_the_recorded_collections_and_their_games);
+    RUN_TEST(test_a_token_without_collections_read_is_forbidden);
+    RUN_TEST(test_a_failed_smart_list_empties_the_whole_list);
+    RUN_TEST(test_every_field_of_a_collection_is_checked);
+    RUN_TEST(test_a_collection_name_is_only_shown);
+    RUN_TEST(test_favourites_and_virtual_collections_are_left_out);
+    RUN_TEST(test_more_collections_than_a_list_keeps_are_refused_whole);
+    RUN_TEST(test_collections_past_the_caps_are_refused_with_their_own_error);
+    RUN_TEST(test_parsing_collections_appends_and_checks_its_room);
+    RUN_TEST(test_a_collections_games_list_with_its_filter);
     RUN_TEST(test_a_rom_comes_with_its_files);
     RUN_TEST(test_another_rom_under_the_id_is_refused);
     RUN_TEST(test_a_rom_with_many_files_counts_them_all);

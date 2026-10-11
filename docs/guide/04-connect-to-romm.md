@@ -42,9 +42,12 @@ address of RomM's pairing page with this PSP's code in it, for example
    asks for, all ticked:
    - reading your platforms and ROMs, to browse and download. Skiff cannot work without them
      (error 209). Your favourites need nothing more;
-   - reading and writing your saves, and RomM's record of this PSP, for save sync, and reading
-     your collections. Both arrive in a later Skiff. You may untick them: Skiff still browses
-     and downloads, and those features ask you to pair again when you want them.
+   - reading your collections, for Skiff's **Collections** list (below);
+   - reading and writing your saves, and RomM's record of this PSP, for save sync, which arrives in
+     a later Skiff.
+
+   You may untick all but the first: Skiff still browses and downloads, and the features that need
+   the others ask you to pair again when you want them.
 
    None of them lets Skiff change your library.
 3. Skiff checks every few seconds, picks up the approval and shows your library.
@@ -77,11 +80,21 @@ installed. The games themselves stay on the Memory Stick.
   folder to free the space. Covers come from RomM's own copy, which is a PNG for every cover RomM
   downloads; artwork you uploaded to RomM as a JPEG or WebP shows as a grey box. The guide's
   [troubleshooting](troubleshooting.md) codes 210 and 211 explain covers that do not show.
-- From Skiff 0.4.0, **SELECT** switches the library between all your PSP games and your
-  **Favourites**: the games you marked as favourites in RomM's web app (Skiff cannot mark them
-  itself). The list you see is not remembered: Skiff starts on all games.
-- In Favourites, **START** offers **Download all**. Skiff checks every favourite first (the header
-  counts them), then asks, listing what it leaves out: games already installed or already in
+- From Skiff 0.4.0, **SELECT** moves the library from all your PSP games to your **Favourites**,
+  then to your **Collections**, then back to all games. Favourites are the games you marked as
+  favourites in RomM's web app (Skiff cannot mark them itself). The list you see is not
+  remembered: Skiff starts on all games.
+- **Collections** lists the collections you made in RomM, regular and smart, and other users'
+  public ones, each with the number of games RomM counts in it (every platform's). Open one to see
+  its PSP games, with the same details as the library; **Back** returns to the collections, and
+  **Back** again, or **SELECT**, to all games. You make and fill collections in RomM's web app.
+  Seeing them needs the collections permission from pairing: a PSP paired by an older Skiff, with
+  that permission unticked, or with a token pasted by hand says **Pair again to see your
+  collections**; choose **Pair again** (the address, the downloads and your installed games stay).
+  A RomM with very many or very large collections may be too much for the PSP's memory (error
+  214, see [troubleshooting](troubleshooting.md)).
+- In Favourites, or in an open collection, **START** offers **Download all**. Skiff checks every
+  game of the list first (the header counts them), then asks, listing what it leaves out: games already installed or already in
   Downloads, games RomM has changed since you installed them (open each to replace it), games it
   cannot install, and games that do not fit: Downloads holds 64 unfinished downloads, Skiff keeps
   track of 512 installed games, and the downloads must fit the Memory Stick's free space. It takes

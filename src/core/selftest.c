@@ -67,6 +67,13 @@ typedef struct selftest_check {
     "\"file_name\":\"Caf\xC3\xA9.iso\",\"file_size_bytes\":4294967295,\"crc_hash\":\"0a1b2c3d\"}]" \
     "}],"                                                                                          \
     "\"total\":1,\"offset\":0}"
+/* RomM's collections list: an id past 32 bits, a C1 control character in a name (escaped, so it
+ * reaches the parser decoded: the PSP's char is signed), and the favourites left out. */
+#define SKIFF_SELFTEST_COLLECTIONS                                                                 \
+    "[{\"id\":1,\"name\":\"Favorites\",\"rom_count\":2,\"is_smart\":false,\"is_favorite\":"        \
+    "true},{\"id\":1099511627776,\"name\":\"Caf\xC3\xA9\\u0085\",\"rom_count\":4294967295,"        \
+    "\"is_smart\":false,\"is_favorite\":false,\"rom_ids\":[1099511627776]}]"
+#define SKIFF_SELFTEST_COLLECTION_NAME "Caf\xC3\xA9?"
 #define SKIFF_SELFTEST_ROMM_ID 1099511627776ULL
 #define SKIFF_SELFTEST_ROMM_SIZE 4294967295ULL
 #define SKIFF_SELFTEST_ROMM_CRC32 0x0a1b2c3dU
@@ -308,10 +315,20 @@ static const char *check_log_timestamp(void) {
  * 64-bit integers in software (libgcc): ids and sizes past 32 bits must come out exact. */
 static const char *check_romm_json(void) {
     static const char page_text[] = SKIFF_SELFTEST_ROMM_PAGE;
+    static const char collections_text[] = SKIFF_SELFTEST_COLLECTIONS;
     static skiff_romm_rom_page page;
+    static skiff_romm_collection_list collections;
     if (skiff_romm_parse_rom_page(page_text, sizeof page_text - 1, &page) != SKIFF_OK ||
         page.count != 1) {
         return "a RomM page did not parse";
+    }
+    collections.count = 0;
+    if (skiff_romm_parse_collections(collections_text, sizeof collections_text - 1, 0,
+                                     &collections) != SKIFF_OK ||
+        collections.count != 1 || collections.items[0].id != SKIFF_SELFTEST_ROMM_ID ||
+        collections.items[0].rom_count != SKIFF_SELFTEST_ROMM_SIZE ||
+        strcmp(collections.items[0].name, SKIFF_SELFTEST_COLLECTION_NAME) != 0) {
+        return "a RomM collections list came back with other values";
     }
     return page.items[0].id == SKIFF_SELFTEST_ROMM_ID &&
                    page.items[0].size == SKIFF_SELFTEST_ROMM_SIZE && page.items[0].has_crc32 &&

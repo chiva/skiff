@@ -35,8 +35,13 @@ enum {
  * is kept, and those features ask the player to pair again. None of them changes the library.
  */
 static const char *const REQUESTED_SCOPES[] = {
-    "platforms.read", "roms.read",     "assets.read",      "assets.write",
-    "devices.read",   "devices.write", "collections.read",
+    "platforms.read",
+    "roms.read",
+    "assets.read",
+    "assets.write",
+    "devices.read",
+    "devices.write",
+    SKIFF_ROMM_SCOPE_COLLECTIONS_READ,
 };
 enum {
     REQUESTED_SCOPE_COUNT = sizeof REQUESTED_SCOPES / sizeof REQUESTED_SCOPES[0],

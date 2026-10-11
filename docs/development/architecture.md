@@ -62,7 +62,7 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   never freezes the screen. The app copies a request's inputs into its call before it starts and
   reads the results once the UI sees it done (`src/app/app_call.c`); the thread touches nothing
   else but the browse client, which is not replaced while a call runs. The one exception is
-  "Download all favourites" queueing its games: that call reads the app's installer, roots and
+  "Download all" queueing its games: that call reads the app's installer, roots and
   queue (all fixed while a call runs) and copies `installed.json` under its lock, and the library
   takes no input until it is done. Leaving what a request was
   for (Back from a game's details, a pairing given up) drops its result and asks its transfer to
@@ -157,10 +157,20 @@ dialogs and the network, and reaches it through `skiff_app_env`.
 - **The Wi-Fi connection** is picked once with the system's network picker and saved as
   `[network] profile`; later launches join it without asking, and a failed join offers the picker
   again. The network stays up until Skiff quits.
-- **The library** lists every PSP game, or with SELECT only the player's favourites (marked in
-  RomM's web UI; see [RomM integration](#romm-integration)). The choice is not saved. Switching
-  starts the other list from its first page; a page still loading for the list left behind
-  finishes and is dropped rather than cancelled, which would cost its connection.
+- **The library** lists every PSP game; SELECT goes on to the player's favourites (marked in
+  RomM's web UI; see [RomM integration](#romm-integration)), then their collections, then every
+  game again. The choice is not saved. Switching starts the other list from its first page; a page
+  still loading for the list left behind finishes and is dropped rather than cancelled, which would
+  cost its connection.
+- **Collections** (`src/app/app_collections.c`) list the RomM user's collections and every other
+  user's public ones, regular then smart, each with RomM's ROM count (every platform's, as RomM's
+  web UI shows it). The list loads each time it is entered. Opening one lists its PSP games in the
+  same list as the library (same rows, same dimming, 25 a page), under its name; Back returns to
+  the collections at the row it was opened from, and Back on the collections, like SELECT, goes on
+  to every game. Listing collections needs `collections.read`: without it in `[auth] scopes`, or
+  when RomM answers 403, the screen says to pair again and offers Pair again (the same pairing as
+  Settings', which keeps the address, the queue and the installs). A list that cannot load (214
+  below, or a lost connection) is said on the screen with Retry, and SELECT still leaves it.
 - **Startup order**: heartbeat first (205 below RomM 5.3; a newer release line gets a notice once,
   remembered as `[skiff] romm_notice`), then pairing when there is no token, then the `psp`
   platform. The worker starts once RomM answered, with its own copies of the server address, token
@@ -170,16 +180,17 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   ones), `installed.json` has room (512 records), and a game already installed asks "Replace your
   installed copy?". `games:` is created first. Downloads already queued count against the 512
   records too, since each will need one.
-- **Download all favourites** (START on the favourites, `src/app/app_batch.c`) applies the same
-  rules to every favourite. The browsing thread reads the favourites a page at a time with their
-  files (`with_files`, so no request per game), and the UI sorts each page as it arrives: installed,
-  changed in RomM (replacing stays a choice made game by game), already queued, or not installable
-  are left out and counted; the rest are taken in name order while the queue and `installed.json`
-  have room. A game repeated across pages (the favourites changed meanwhile) is taken once. The
+- **Download all** (START on the favourites or an open collection, `src/app/app_batch.c`) applies
+  the same rules to every game of the list; the question names the collection. The browsing thread
+  reads the list a page at a time with its games' files (`with_files`, so no request per game), and
+  the UI sorts each page as it arrives: installed, changed in RomM (replacing stays a choice made
+  game by game), already queued, or not installable are left out and counted; the rest are taken
+  in name order while the queue and `installed.json` have room. A game repeated across pages (the
+  list changed meanwhile) is taken once. The
   free space is read on the browsing thread and the longest run that fits (with the unfinished
   downloads' sizes and the 8 MiB margin) is kept. After the player confirms, the browsing thread
-  plans every target against a copy of `installed.json` (two favourites with the same safe name
-  get distinct targets) and queues them with `skiff_jobs_add_many()`: one save of the queue
+  plans every target against a copy of `installed.json` (two games with the same safe name get
+  distinct targets) and queues them with `skiff_jobs_add_many()`: one save of the queue
   instead of one per game (116 to 233 ms each on a PSP-1000). A game it cannot plan is reported
   with its error, apart from a full queue.
 - **Settings**: a new server address clears the token and RomM's device id (they belong to the old
@@ -363,6 +374,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Fallback auth | Client API token (`rmm_…`) as `Authorization: Bearer` |
 | Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files from `GET /api/roms/{id}` |
 | Favourites | The same list with `favorite=true` (and `with_files=true` when each ROM's file is needed) |
+| Collections | `GET /api/collections` and `GET /api/collections/smart` (`collections.read`); a collection's games are the same list with `collection_id=` or `smart_collection_id=` |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
 | Saves | `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
@@ -413,6 +425,23 @@ them. A player without favourites gets an empty list. RomM's collection endpoint
 [Pairing](#pairing)). RomM records CRC32, MD5 and SHA-1 for every file, so the
 integrity check can use any of them; its `crc_hash` is hexadecimal, read with or without leading
 zeros.
+
+Collections (`skiff_romm_list_collections()`) come from RomM's two lists, regular and smart, read
+one after the other and kept in that order (each is in RomM's name order). Neither is paged: each
+holds the user's own collections and every other user's public ones, each with every ROM id it
+holds and, for a regular one, a small and a large cover path per ROM (about 150 bytes a ROM; a
+smart one keeps 5 covers). Skiff reads only the id, the name (in display form, as a ROM's), the
+kind and RomM's `rom_count`, skips favourites collections (the favourites list holds their games)
+and asks for no virtual ones (RomM generates hundreds, one per genre, company and so on). Each
+answer must fit the same caps as any other (512 KiB, 32768 values), which holds about 3,300 covered
+ROMs across all the visible regular collections; at most 128 collections are kept. Past any of
+these the list is refused whole with its own error (214, "too many collections, or too large
+ones"), never shown in part: RomM offers no smaller request that still names the collections (its
+`/identifiers` calls give ids only, and one request per collection would cost 0.3 s each on a PSP
+and still fail on one large collection). A collection's games are the ROM list with
+`collection_id` or `smart_collection_id` (1 or more, which RomM requires), paged and checked as any
+other list; that needs only `roms.read`, and since RomM 5.4 another user's private collection
+lists nothing.
 
 Download URLs percent-encode every byte of the file name except letters, digits and `-._~`: a `#`
 would otherwise end the path, a `?` start a query, a `/` split it. The URL builder takes the file

@@ -435,6 +435,17 @@ static void test_a_game_without_saves_gets_the_unit_and_no_backup(void) {
     assert_work_clean();
 }
 
+/* A Memory Stick that never held a save has no PSP/SAVEDATA: the restore creates it. */
+static void test_a_missing_save_root_is_created(void) {
+    put_new_unit();
+    char saves[SKIFF_STORAGE_PATH_MAX];
+    resolve(SAVES, saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(posix, saves));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, restore_on(&storage.base, NULL));
+    assert_text(NEW_DATA02, SAVES "/" DATA02 "/DATA.BIN");
+    assert_work_clean();
+}
+
 /* ---- Refused before anything is written ---- */
 
 static void assert_nothing_changed(skiff_err expected, skiff_err err) {
@@ -789,6 +800,9 @@ static void test_journals_skiff_did_not_write_are_given_up(void) {
         "\"files\":[{\"name\":\"nofolder\",\"size\":1}]}",
         "{\"version\":1,\"save_target\":\"" GAME "\"} trailing",
         "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
+        "\",\"live\":\"" DATA00 "\"},{\"stage\":\"" GAME "data00\",\"live\":\"" GAME
+        "data00\"}],\"remove\":[],\"files\":[]}",
+        "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
         "\",\"live\":\"" DATA00 "\"}],\"remove\":[\"" GAME "data00\"],\"files\":[]}",
         "",
         "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
@@ -1068,6 +1082,7 @@ int main(void) {
     RUN_TEST(test_an_install_is_found_among_hundreds_of_other_folders);
     RUN_TEST(test_an_empty_unit_removes_the_save_folders_after_a_backup);
     RUN_TEST(test_a_game_without_saves_gets_the_unit_and_no_backup);
+    RUN_TEST(test_a_missing_save_root_is_created);
     RUN_TEST(test_a_full_memory_stick_is_refused_before_anything_is_written);
     RUN_TEST(test_a_device_that_cannot_tell_its_free_space_is_not_refused);
     RUN_TEST(test_a_damaged_unit_is_refused_before_anything_is_written);

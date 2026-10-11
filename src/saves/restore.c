@@ -283,8 +283,10 @@ static int read_replace(journal *j, const cJSON *item) {
                          strlen(folder->live))) {
         return 0;
     }
+    /* FAT folds case: two such folders are one live folder, cleared twice. */
     for (size_t i = 0; i < j->replace_count; i++) {
-        if (strcmp(j->replace[i].stage, folder->stage) == 0) {
+        if (saves_same_name(j->replace[i].live, strlen(j->replace[i].live), folder->live,
+                            strlen(folder->live))) {
             return 0;
         }
     }
@@ -531,12 +533,13 @@ static skiff_err check_stage(restorer *r) {
     return err;
 }
 
-/* The live folder exists as a folder: created when missing. */
+/* The live folder exists as a folder: created when missing, with the save root (a Memory Stick
+ * that never held a save has no PSP/SAVEDATA). */
 static skiff_err ensure_folder(restorer *r, const char *path) {
     skiff_storage_info info;
     skiff_err err = skiff_storage_stat(r->storage, path, &info);
     if (err == SKIFF_ERR_STORAGE_NOT_FOUND) {
-        return skiff_storage_mkdir(r->storage, path);
+        return skiff_storage_mkdirs(r->storage, path);
     }
     return err == SKIFF_OK && !info.is_dir ? SKIFF_ERR_STORAGE_IO : err;
 }

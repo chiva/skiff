@@ -618,6 +618,44 @@ static void test_a_file_that_changes_while_it_is_sent_fails(void) {
     TEST_ASSERT_EQUAL_INT(storage.opens, storage.closes);
 }
 
+/* A file of size bytes in the temp dir with the multipart delimiter at offset. */
+static void write_with_delimiter(const char *path, size_t size, size_t offset) {
+    static const char DELIMITER[] = "--" BOUNDARY;
+    static unsigned char bytes[2 * SKIFF_ROMM_UPLOAD_BUFFER_BYTES];
+    TEST_ASSERT_TRUE(size <= sizeof bytes && offset + sizeof DELIMITER - 1 <= size);
+    memset(bytes, 'z', size);
+    memcpy(bytes + offset, DELIMITER, sizeof DELIMITER - 1);
+    FILE *file = fopen(path, "wb");
+    TEST_ASSERT_NOT_NULL(file);
+    TEST_ASSERT_EQUAL_size_t(size, fwrite(bytes, 1, size, file));
+    fclose(file);
+}
+
+static void test_a_file_holding_the_boundary_is_never_sent_whole(void) {
+    char path[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, FILE_NAME, path, sizeof path));
+    const skiff_romm_upload spec = unit_upload(path);
+    const size_t size = SKIFF_ROMM_UPLOAD_BUFFER_BYTES + SKIFF_ROMM_UPLOAD_BUFFER_BYTES / 2;
+    const size_t offsets[] = {0, 100, SKIFF_ROMM_UPLOAD_BUFFER_BYTES - 10,
+                              SKIFF_ROMM_UPLOAD_BUFFER_BYTES,
+                              size - 2 - SKIFF_ROMM_CONTENT_HASH_LENGTH - (sizeof "skiff-" - 1)};
+    for (size_t i = 0; i < sizeof offsets / sizeof offsets[0]; i++) {
+        reset_fake();
+        serve(PATH_UPLOAD_A, "romm/saves-upload.http");
+        write_with_delimiter(path, size, offsets[i]);
+        TEST_PRINTF("the delimiter at byte %zu of %zu (reads of %zu)", offsets[i], size,
+                    SKIFF_ROMM_UPLOAD_BUFFER_BYTES);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, upload(&spec));
+        TEST_ASSERT_TRUE_MESSAGE(fake.log[0].body_received < fake.log[0].body_size,
+                                 "the body never reached its announced end");
+        TEST_ASSERT_TRUE_MESSAGE(fake.log[0].body_received < sizeof MULTIPART_HEAD - 1 +
+                                                                 offsets[i] + sizeof "--" BOUNDARY -
+                                                                 1,
+                                 "the delimiter was never sent whole");
+    }
+    TEST_ASSERT_EQUAL_INT(storage.opens, storage.closes);
+}
+
 static void test_a_missing_unit_sends_nothing(void) {
     char path[TEMP_DIR_PATH_MAX];
     TEST_ASSERT_TRUE(temp_dir_path(dir, "missing.zip", path, sizeof path));
@@ -898,6 +936,14 @@ static void test_downloaded_tells_romm_the_hash_this_psp_holds(void) {
     assert_token_only_in_headers();
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_NOT_FOUND,
                           skiff_romm_saves_downloaded(&client, SAVE_2, DEVICE_B, HASH_1));
+    TEST_PRINTF("an answer that is not the save confirms nothing");
+    serve_raw("/api/saves/3/downloaded", JSON_200 "<html>login</html>");
+    serve_raw("/api/saves/4/downloaded", JSON_200 "{" SAVE_FIELDS SAVE_TIMES "}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_saves_downloaded(&client, 3, DEVICE_B, HASH_1));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                                  skiff_romm_saves_downloaded(&client, 4, DEVICE_B, HASH_1),
+                                  "save 1 in answer to save 4");
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_saves_downloaded(&client, 0, DEVICE_B, HASH_1));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
@@ -906,7 +952,7 @@ static void test_downloaded_tells_romm_the_hash_this_psp_holds(void) {
                           skiff_romm_saves_downloaded(&client, SAVE_1, DEVICE_B, "x"));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_saves_downloaded(NULL, SAVE_1, DEVICE_B, HASH_1));
-    TEST_ASSERT_EQUAL_size_t(2, fake.request_count);
+    TEST_ASSERT_EQUAL_size_t(4, fake.request_count);
 }
 
 static void test_complete_closes_the_session_with_its_counts(void) {
@@ -922,6 +968,15 @@ static void test_complete_closes_the_session_with_its_counts(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_ROMM_BAD_RESPONSE,
                                   skiff_romm_saves_complete(&client, SESSION_A, 1, 0),
                                   "a session closed already");
+    TEST_PRINTF("an answer that does not name the session confirms nothing");
+    reset_fake();
+    serve_raw(PATH_COMPLETE, JSON_200 "<html>login</html>");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_saves_complete(&client, SESSION_A, 1, 0));
+    reset_fake();
+    serve_raw(PATH_COMPLETE, JSON_200 "{\"session\":{\"id\":2}}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_saves_complete(&client, SESSION_A, 1, 0));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_saves_complete(&client, 0, 1, 0));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_saves_complete(NULL, 1, 1, 0));
 }
@@ -948,6 +1003,7 @@ int main(void) {
     RUN_TEST(test_an_upload_cut_part_way_leaves_nothing_behind);
     RUN_TEST(test_a_memory_stick_failing_mid_upload_stops_it);
     RUN_TEST(test_a_file_that_changes_while_it_is_sent_fails);
+    RUN_TEST(test_a_file_holding_the_boundary_is_never_sent_whole);
     RUN_TEST(test_a_missing_unit_sends_nothing);
     RUN_TEST(test_upload_refuses_what_romm_would_and_sends_nothing);
     RUN_TEST(test_every_malformed_save_is_refused);

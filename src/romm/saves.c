@@ -14,10 +14,15 @@
 #define PATH_SESSIONS "/api/sync/sessions"
 #define CONTENT_TYPE_ZIP "application/zip"
 #define CONTENT_TYPE_MULTIPART "multipart/form-data; boundary="
-/* The multipart boundary: this prefix and the file's content hash, which the file cannot hold (it
- * would have to contain the MD5 of its own entries), so no scan of the file is needed. */
+/* The multipart boundary: this prefix and the file's content hash. A zip's entries cannot hold it
+ * (they would have to contain the MD5 of themselves), but its comment could: the file is checked
+ * for it as it is sent. */
 #define BOUNDARY_PREFIX "skiff-"
 #define BOUNDARY_MAX (sizeof BOUNDARY_PREFIX + SKIFF_ROMM_CONTENT_HASH_LENGTH)
+/* What opens the delimiter of a part: a file that holds "--" and the boundary would end its own
+ * part early. */
+#define DELIMITER_DASHES "--"
+#define DELIMITER_MAX (sizeof DELIMITER_DASHES + BOUNDARY_MAX)
 #define MULTIPART_FIELD "saveFile"
 /* The head: the boundary line, the part's headers and a blank line; the tail ends the body. */
 #define MULTIPART_HEAD_FORMAT                                                                      \
@@ -285,11 +290,10 @@ skiff_err skiff_romm_parse_save(const char *json, size_t length, skiff_romm_save
 /* ---- Requests ---- */
 
 /* POSTs json (freed here with cJSON_free(); NULL means out of memory) to path, and maps the status;
- * a 2xx answer's JSON goes to *out when out is not NULL (free it with cJSON_Delete()). */
+ * a 2xx answer's JSON goes to *out (free it with cJSON_Delete()), and a 2xx that is not JSON (a
+ * proxy's page) is SKIFF_ERR_ROMM_BAD_RESPONSE: it confirms nothing. */
 static skiff_err post_json(skiff_romm_client *client, const char *path, char *json, cJSON **out) {
-    if (out != NULL) {
-        *out = NULL;
-    }
+    *out = NULL;
     if (json == NULL) {
         return SKIFF_ERR_NO_MEMORY;
     }
@@ -301,7 +305,10 @@ static skiff_err post_json(skiff_romm_client *client, const char *path, char *js
     if (err == SKIFF_OK) {
         err = skiff_http_status_error(status);
     }
-    if (err == SKIFF_OK && out != NULL) {
+    if (err == SKIFF_OK && root == NULL) {
+        err = SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    if (err == SKIFF_OK) {
         *out = root;
         root = NULL;
     }
@@ -423,7 +430,7 @@ skiff_err skiff_romm_saves_negotiate(skiff_romm_client *client, const skiff_romm
     }
     cJSON *root = NULL;
     skiff_err err = post_json(client, PATH_NEGOTIATE, negotiate_body(query), &root);
-    if (err == SKIFF_OK && (root == NULL || !fill_plan(root, out))) {
+    if (err == SKIFF_OK && !fill_plan(root, out)) {
         err = SKIFF_ERR_ROMM_BAD_RESPONSE;
     }
     /* Operations for ROMs this PSP did not ask about would be applied to the wrong game. */
@@ -459,6 +466,12 @@ typedef struct upload_stream {
     unsigned char buffer[SKIFF_ROMM_UPLOAD_BUFFER_BYTES];
     size_t buffered;
     size_t buffer_offset;
+    /* "--" and the boundary, which the file must not hold, and the file's last bytes before the
+     * buffer (one fewer than the delimiter), for a delimiter split between two reads. */
+    char delimiter[DELIMITER_MAX];
+    size_t delimiter_size;
+    unsigned char carry[DELIMITER_MAX];
+    size_t carry_size;
 } upload_stream;
 
 static int upload_valid(const skiff_romm_upload *upload) {
@@ -480,6 +493,8 @@ static int frame_upload(const skiff_romm_upload *upload, upload_stream *stream) 
     const int head = snprintf(stream->head, sizeof stream->head, MULTIPART_HEAD_FORMAT, boundary,
                               upload->file_name);
     const int tail = snprintf(stream->tail, sizeof stream->tail, MULTIPART_TAIL_FORMAT, boundary);
+    snprintf(stream->delimiter, sizeof stream->delimiter, DELIMITER_DASHES "%s", boundary);
+    stream->delimiter_size = strlen(stream->delimiter);
     snprintf(limit, sizeof limit, AUTOCLEANUP_LIMIT_PARAMETER "%u",
              (unsigned)upload->keep_versions);
     snprintf(stream->path, sizeof stream->path, PATH_SAVES "?rom_id=%llu",
@@ -501,6 +516,43 @@ static int frame_upload(const skiff_romm_upload *upload, upload_stream *stream) 
            append_plain(stream->path, size, limit);
 }
 
+/* 1 if needle (size > 0) occurs in haystack. */
+static int contains(const unsigned char *haystack, size_t haystack_size, const char *needle,
+                    size_t needle_size) {
+    for (size_t i = 0; i + needle_size <= haystack_size; i++) {
+        if (memcmp(haystack + i, needle, needle_size) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Checks the bytes just read, with those before them, for the delimiter, before any of them is
+ * sent: a part that ended early would reach RomM as a cut file. */
+static int holds_delimiter(upload_stream *stream) {
+    const size_t keep = stream->delimiter_size - 1;
+    unsigned char seam[2 * DELIMITER_MAX];
+    const size_t head = stream->buffered < keep ? stream->buffered : keep;
+    memcpy(seam, stream->carry, stream->carry_size);
+    memcpy(seam + stream->carry_size, stream->buffer, head);
+    if (contains(seam, stream->carry_size + head, stream->delimiter, stream->delimiter_size) ||
+        contains(stream->buffer, stream->buffered, stream->delimiter, stream->delimiter_size)) {
+        return 1;
+    }
+    /* The last bytes of what has been read, for the next check. */
+    const size_t total = stream->carry_size + stream->buffered;
+    const size_t kept = total < keep ? total : keep;
+    unsigned char last[DELIMITER_MAX] = {0};
+    for (size_t i = 0; i < kept; i++) {
+        const size_t at = total - kept + i;
+        last[i] =
+            at < stream->carry_size ? stream->carry[at] : stream->buffer[at - stream->carry_size];
+    }
+    memcpy(stream->carry, last, kept);
+    stream->carry_size = kept;
+    return 0;
+}
+
 /* Refills the buffer from the file; a file that ends early, or goes on past the size it had,
  * changed while it was being sent. */
 static skiff_err refill(upload_stream *stream) {
@@ -517,7 +569,7 @@ static skiff_err refill(upload_stream *stream) {
     stream->buffered = got;
     stream->buffer_offset = 0;
     stream->file_read += got;
-    return SKIFF_OK;
+    return holds_delimiter(stream) ? SKIFF_ERR_INVALID_ARG : SKIFF_OK;
 }
 
 static skiff_err confirm_end(upload_stream *stream) {
@@ -787,7 +839,20 @@ skiff_err skiff_romm_saves_downloaded(skiff_romm_client *client, uint64_t save_i
         json = cJSON_PrintUnformatted(body);
     }
     cJSON_Delete(body);
-    return post_json(client, path, json, NULL);
+    /* RomM answers with the save it recorded this PSP for. */
+    cJSON *root = NULL;
+    skiff_romm_save *save = malloc(sizeof *save);
+    skiff_err err = save == NULL ? SKIFF_ERR_NO_MEMORY : post_json(client, path, json, &root);
+    if (save == NULL) {
+        cJSON_free(json);
+    }
+    if (err == SKIFF_OK) {
+        memset(save, 0, sizeof *save);
+        err = fill_save(root, save) && save->id == save_id ? SKIFF_OK : SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    cJSON_Delete(root);
+    free(save);
+    return err;
 }
 
 skiff_err skiff_romm_saves_complete(skiff_romm_client *client, uint64_t session_id,
@@ -806,5 +871,15 @@ skiff_err skiff_romm_saves_complete(skiff_romm_client *client, uint64_t session_
         json = cJSON_PrintUnformatted(body);
     }
     cJSON_Delete(body);
-    return post_json(client, path, json, NULL);
+    /* RomM answers with the session it closed. */
+    cJSON *root = NULL;
+    skiff_err err = post_json(client, path, json, &root);
+    uint64_t closed = 0;
+    if (err == SKIFF_OK &&
+        (!skiff_romm_read_count(cJSON_GetObjectItemCaseSensitive(root, "session"), "id", &closed) ||
+         closed != session_id)) {
+        err = SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    cJSON_Delete(root);
+    return err;
 }

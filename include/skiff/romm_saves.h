@@ -202,8 +202,10 @@ skiff_err skiff_romm_saves_negotiate(skiff_romm_client *client, const skiff_romm
  * SKIFF_ERR_ROMM_SAVE_TOO_LARGE for its 413 (RomM's MAX_ASSET_UPLOAD_SIZE_BYTES, or a proxy's
  * limit), or for a file too large to send at all, the storage's error (unchanged, also mid-upload:
  * the transfer stops and RomM keeps nothing), SKIFF_ERR_STORAGE_IO for a file whose size changed
- * while it was sent, and SKIFF_ERR_ROMM_BAD_RESPONSE for a save of another ROM or slot, or what
- * skiff_romm_parse_save() refuses. The file is closed on every path; out is empty on error.
+ * while it was sent, SKIFF_ERR_INVALID_ARG (also mid-upload) for a file that holds the multipart
+ * delimiter, "--skiff-<content_hash>" (only a zip comment could; Skiff's units have none), and
+ * SKIFF_ERR_ROMM_BAD_RESPONSE for a save of another ROM or slot, or what skiff_romm_parse_save()
+ * refuses. The file is closed on every path; out is empty on error.
  */
 skiff_err skiff_romm_saves_upload(skiff_romm_client *client, const skiff_romm_upload *upload,
                                   skiff_romm_save *out);
@@ -226,12 +228,14 @@ skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_
 #define SKIFF_ROMM_DOWNLOAD_PART_SUFFIX ".part"
 
 /* POST /api/saves/{save_id}/downloaded with {device_id, content_hash}: this PSP now holds the
- * version whose content_hash is given. */
+ * version whose content_hash is given. An answer that is not that save (skiff_romm_parse_save()'s
+ * rules, and its id) is SKIFF_ERR_ROMM_BAD_RESPONSE: it confirms nothing. */
 skiff_err skiff_romm_saves_downloaded(skiff_romm_client *client, uint64_t save_id,
                                       const char *device_id, const char *content_hash);
 
 /* POST /api/sync/sessions/{session_id}/complete with the operations done and failed. A session
- * already closed is RomM's 400, SKIFF_ERR_ROMM_BAD_RESPONSE. */
+ * already closed is RomM's 400, and an answer that does not name the session closed, both
+ * SKIFF_ERR_ROMM_BAD_RESPONSE. */
 skiff_err skiff_romm_saves_complete(skiff_romm_client *client, uint64_t session_id,
                                     uint32_t operations_completed, uint32_t operations_failed);
 

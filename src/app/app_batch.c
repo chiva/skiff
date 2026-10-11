@@ -1,8 +1,8 @@
 /*
- * "Download all favourites": START on the favourites checks every one of them, then asks to queue
- * what fits. The pages, the free space and the queueing run on the browsing thread, one call at a
- * time, so the screen never waits for RomM or the Memory Stick; the screen's thread only sorts each
- * page's games as it arrives (memory lookups) and asks.
+ * "Download all": START on the favourites, or on an open collection, checks every game of the list,
+ * then asks to queue what fits. The pages, the free space and the queueing run on the browsing
+ * thread, one call at a time, so the screen never waits for RomM or the Memory Stick; the screen's
+ * thread only sorts each page's games as it arrives (memory lookups) and asks.
  *
  * A game is left out when it is installed, changed in RomM (replacing stays a choice made game by
  * game), already in Downloads, or one Skiff cannot install. The rest are taken in name order while
@@ -42,14 +42,21 @@ void app_batch_start(skiff_app *app) {
     }
     app_batch *batch = &app->batch;
     memset(batch, 0, offsetof(app_batch, games));
+    app_current_list(app, &batch->filter, &batch->collection_id);
+    if (app->source == SOURCE_COLLECTIONS) {
+        app_fit(app, app_collection_name(app, &app->collection), SKIFF_APP_LABEL_WIDTH, batch->name,
+                sizeof batch->name);
+    }
     app_queue_refresh(app);
     const size_t unfinished = app_queue_unfinished(app);
     batch->queue_room = unfinished < SKIFF_JOBS_MAX ? SKIFF_JOBS_MAX - unfinished : 0;
     batch->record_room = app_installed_records_free(app);
     batch->step = BATCH_SCANNING;
     app->dirty = 1;
+    char list[APP_LIST_NAME_MAX];
+    app_list_name(batch->filter, batch->collection_id, list, sizeof list);
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
-                    "download all favourites: room for %zu downloads, %zu records",
+                    "download all of %s: room for %zu downloads, %zu records", list,
                     batch->queue_room, batch->record_room);
 }
 
@@ -61,8 +68,7 @@ void app_batch_cancel(skiff_app *app) {
         (app->call.kind == CALL_BATCH_PAGE || app->call.kind == CALL_BATCH_SPACE)) {
         app_call_abandon(app);
     }
-    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
-                    "download all favourites: stopped");
+    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG, "download all: stopped");
     end_batch(app);
 }
 
@@ -79,7 +85,8 @@ void app_batch_update(skiff_app *app) {
     }
     if (batch->step == BATCH_SCANNING) {
         app->call.platform_id = app->platform.id;
-        app->call.favourites = 1;
+        app->call.filter = batch->filter;
+        app->call.collection_id = batch->collection_id;
         app->call.with_files = 1;
         app->call.page_index = batch->next_page;
         app_call_start(app, CALL_BATCH_PAGE);
@@ -91,12 +98,12 @@ void app_batch_update(skiff_app *app) {
     app_call_start(app, CALL_BATCH_SPACE);
 }
 
-/* Sorts one favourite: counted as left out, or chosen while the queue and installed.json have
- * room. */
+/* Sorts one game of the list: counted as left out, or chosen while the queue and installed.json
+ * have room. */
 static void take(skiff_app *app, const skiff_romm_rom_summary *rom) {
     app_batch *batch = &app->batch;
-    /* Offset pages can repeat a game when the favourites change while they are read: once is
-     * enough, and a second copy must not take room another game could use. */
+    /* Offset pages can repeat a game when the list changes while it is read: once is enough, and a
+     * second copy must not take room another game could use. */
     for (size_t i = 0; i < batch->count; i++) {
         if (batch->games[i].id == rom->id) {
             return;
@@ -135,7 +142,7 @@ void app_batch_page_done(skiff_app *app) {
     const app_call *call = &app->call;
     const skiff_err err = call->err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
-                    SKIFF_APP_LOG_TAG, "download all favourites: page %llu, %zu of %llu: %s (%d)",
+                    SKIFF_APP_LOG_TAG, "download all: page %llu, %zu of %llu: %s (%d)",
                     (unsigned long long)call->page_index, err == SKIFF_OK ? call->page.count : 0,
                     (unsigned long long)(err == SKIFF_OK ? call->page.total : 0),
                     skiff_err_name(err), (int)err);
@@ -155,7 +162,7 @@ void app_batch_page_done(skiff_app *app) {
     batch->total = call->page.total;
     batch->seen += call->page.count;
     batch->next_page++;
-    /* The favourites may change meanwhile: an empty page ends the list too. */
+    /* The list may change meanwhile: an empty page ends it too. */
     if (call->page.count == 0 || batch->seen >= batch->total) {
         batch->step = BATCH_SPACE;
     }
@@ -203,8 +210,13 @@ size_t app_batch_lines(const skiff_app *app, char lines[][SKIFF_TEXT_MAX], size_
         char number[NUMBER_TEXT_MAX];
         snprintf(number, sizeof number, "%zu", batch->count);
         app_format_bytes(app, batch->bytes, size, sizeof size);
-        const char *args[] = {number, size};
-        app_format(app, SKIFF_TEXT_BATCH_QUESTION, args, 2, lines[used++]);
+        if (batch->filter == SKIFF_ROMM_LIST_FAVOURITES) {
+            const char *args[] = {number, size};
+            app_format(app, SKIFF_TEXT_BATCH_QUESTION, args, 2, lines[used++]);
+        } else {
+            const char *args[] = {number, batch->name, size};
+            app_format(app, SKIFF_TEXT_BATCH_QUESTION_COLLECTION, args, 3, lines[used++]);
+        }
     } else if (capacity > 0) {
         snprintf(lines[used++], SKIFF_TEXT_MAX, "%s", app_text(app, SKIFF_TEXT_BATCH_NOTHING));
     }
@@ -233,7 +245,7 @@ void app_batch_space_done(skiff_app *app) {
         return;
     }
     /* What unfinished downloads still need, as the queue stands now: one that finished while the
-     * favourites were read is already in the free space. */
+     * list was read is already in the free space. */
     app_queue_refresh(app);
     batch->pending_bytes = app_queue_unfinished_bytes(app);
     /* A Memory Stick that cannot say is not held against the batch: each download checks room. */
@@ -241,7 +253,7 @@ void app_batch_space_done(skiff_app *app) {
     batch->free_bytes = batch->free_known ? call->free_bytes : 0;
     fit_space(batch);
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
-                    "download all favourites: %llu checked, %zu to download (%llu bytes); "
+                    "download all: %llu checked, %zu to download (%llu bytes); "
                     "installed %zu, queued %zu, changed %zu, refused %zu, over queue %zu, over "
                     "records %zu, over space %zu; free space %s",
                     (unsigned long long)batch->seen, batch->count, (unsigned long long)batch->bytes,
@@ -284,7 +296,7 @@ void app_batch_confirmed(skiff_app *app) {
 /* ---- On the browsing thread ---- */
 
 /* skiff_install_plan_download()'s taken hook: a target an unfinished job uses, or one planned for
- * an earlier game of this batch (two favourites whose safe names are the same). */
+ * an earlier game of this batch (two games whose safe names are the same). */
 static int promised(void *ctx, const char *logical_path) {
     const app_call *call = ctx;
     const skiff_app *app = call->app;
@@ -371,7 +383,7 @@ void app_batch_queued(skiff_app *app) {
     app_batch *batch = &app->batch;
     const skiff_err err = app->call.err;
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
-                    "download all favourites: queued %zu of %zu (%zu planned, first failure %s): "
+                    "download all: queued %zu of %zu (%zu planned, first failure %s): "
                     "%s (%d)",
                     batch->added, batch->count, batch->request_count,
                     skiff_err_name(batch->plan_error), skiff_err_name(err), (int)err);

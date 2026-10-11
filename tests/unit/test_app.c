@@ -516,15 +516,25 @@ static int hints(unsigned action, const char *label) {
 
 static const char *english(skiff_text_id id) { return skiff_text(SKIFF_LANGUAGE_ENGLISH, id); }
 
-static void open_paired_library(unsigned total) {
-    write_config(
-        "[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN
-        "\ndevice_identifier = 00112233445566778899aabbccddeeff\nscopes = platforms.read,roms.read,"
-        "assets.read\n[network]\nprofile = 1\n");
+/* What a token paired by this Skiff holds, with and without the optional collections scope. */
+#define BROWSE_SCOPES "platforms.read,roms.read,assets.read"
+#define COLLECTIONS_SCOPES "platforms.read,roms.read,collections.read"
+
+/* A paired library of total games, its token holding scopes. */
+static void open_library_with_scopes(unsigned total, const char *scopes) {
+    char config[TEXT_MAX];
+    snprintf(config, sizeof config,
+             "[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN
+             "\ndevice_identifier = 00112233445566778899aabbccddeeff\nscopes = %s\n[network]\n"
+             "profile = 1\n",
+             scopes);
+    write_config(config);
     serve_library(total);
     create_app();
     run_until(SKIFF_APP_SCREEN_LIBRARY);
 }
+
+static void open_paired_library(unsigned total) { open_library_with_scopes(total, BROWSE_SCOPES); }
 
 static void wait_ms(int64_t ms) {
     const int64_t until = env_state.now_ms + ms;
@@ -1059,10 +1069,17 @@ static void test_select_switches_the_library_to_favourites_and_back(void) {
     TEST_ASSERT_FALSE(shows("Game 1.iso"));
     TEST_PRINTF("the favourites start at their top, whatever was selected before");
     TEST_ASSERT_EQUAL_size_t(0, view()->list.selected);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_COLLECTIONS)));
+
+    TEST_PRINTF("SELECT: the collections (this token cannot list them: no request)");
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_COLLECTIONS), view()->title);
     TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
 
     TEST_PRINTF("SELECT again: every game, from their first page again");
-    const size_t requests = transport.request_count;
     frame(SKIFF_UI_ACTION_SELECT);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
@@ -1080,7 +1097,7 @@ static void test_favourites_without_any_say_where_to_mark_them(void) {
     TEST_ASSERT_TRUE(view()->line_count > 0);
     TEST_ASSERT_FALSE(view()->has_list);
     TEST_PRINTF("still switchable, and nothing to open");
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_COLLECTIONS)));
     TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SELECT)));
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
@@ -1093,7 +1110,9 @@ static void test_a_page_of_the_list_left_behind_is_dropped(void) {
     frame(SKIFF_UI_ACTION_SELECT);
     frame(0);
     TEST_ASSERT_TRUE(app_call_busy(app));
-    TEST_PRINTF("back to every game while the favourites' first page is on its way");
+    TEST_PRINTF("on to the collections and every game while the favourites' first page is on its "
+                "way");
+    frame(SKIFF_UI_ACTION_SELECT);
     frame(SKIFF_UI_ACTION_SELECT);
     env_state.hold_calls = 0;
     run_until(SKIFF_APP_SCREEN_LIBRARY);
@@ -1131,6 +1150,349 @@ static void test_a_library_without_psp_games_offers_no_favourites(void) {
     frame(SKIFF_UI_ACTION_SELECT);
     run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_LIBRARY_EMPTY)));
+}
+
+/* ---- Collections ---- */
+
+/* A collection as RomM lists it: Skiff reads its id, name, kind and count, and skips the ROM ids
+ * and covers RomM sends with it. */
+static int collection_item(char *out, size_t size, unsigned id, const char *name, unsigned count,
+                           int smart, int favourite) {
+    return snprintf(out, size,
+                    "{\"name\":\"%s\",\"description\":\"\",\"rom_ids\":[1,2],"
+                    "\"path_covers_small\":[],\"is_public\":false,\"is_favorite\":%s,"
+                    "\"is_virtual\":false,\"is_smart\":%s,\"id\":%u,\"rom_count\":%u}",
+                    name, favourite ? "true" : "false", smart ? "true" : "false", id, count);
+}
+
+/* RomM's two collections lists, each a JSON array's items. */
+static void serve_collections(const char *regular, const char *smart) {
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw, JSON_OK "[%s]", regular);
+    serve_raw("/api/collections", raw);
+    snprintf(raw, sizeof raw, JSON_OK "[%s]", smart);
+    serve_raw("/api/collections/smart", raw);
+}
+
+/* The player's collections: their favourites (not listed), a shelf of SHELF_GAMES and an empty
+ * shelf, then a smart shelf. */
+#define SHELF_ID 5
+#define EMPTY_SHELF_ID 6
+#define SMART_SHELF_ID 2
+#define SHELF_GAMES 30
+#define SHELF_FILTER "&collection_id=5"
+#define EMPTY_SHELF_FILTER "&collection_id=6"
+#define SMART_SHELF_FILTER "&smart_collection_id=2"
+#define SHELF_ID_BASE 200
+static void serve_shelves(void) {
+    char regular[1024];
+    char smart[512];
+    int used = collection_item(regular, sizeof regular, 1, "Favorites", 3, 0, 1);
+    regular[used++] = ',';
+    used += collection_item(regular + used, sizeof regular - (size_t)used, SHELF_ID, "Skiff Shelf",
+                            SHELF_GAMES + 4, 0, 0);
+    regular[used++] = ',';
+    collection_item(regular + used, sizeof regular - (size_t)used, EMPTY_SHELF_ID, "Empty Shelf", 0,
+                    0, 0);
+    collection_item(smart, sizeof smart, SMART_SHELF_ID, "Smart Shelf", 3, 1, 0);
+    serve_collections(regular, smart);
+}
+
+/* The shelf's first page of games (ids from SHELF_ID_BASE + 1). */
+static void serve_shelf_page(unsigned offset) {
+    const unsigned left = SHELF_GAMES - offset;
+    serve_list_page(SHELF_FILTER, SHELF_ID_BASE, offset,
+                    left < SKIFF_ROMM_PAGE_SIZE ? left : SKIFF_ROMM_PAGE_SIZE, SHELF_GAMES);
+}
+
+/* A library whose token lists collections, on the collections list. */
+static void open_collections(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(3);
+    serve_shelves();
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
+/* The URL path of request i, after the server. */
+static const char *requested(size_t i) { return transport.log[i].url + strlen(SERVER); }
+
+static void test_select_cycles_every_game_favourites_and_collections(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(3);
+    serve_shelves();
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_FAVOURITES), view()->title);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_COLLECTIONS)));
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("both of RomM's lists, regular then smart; the favourites collection left out");
+    TEST_ASSERT_EQUAL_size_t(requests + 2, transport.request_count);
+    TEST_ASSERT_EQUAL_STRING("/api/collections", requested(requests));
+    TEST_ASSERT_EQUAL_STRING("/api/collections/smart", requested(requests + 1));
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_COLLECTIONS), view()->title);
+    TEST_ASSERT_TRUE(shows("3 collections"));
+    TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", view()->rows[0].label);
+    TEST_PRINTF("each with RomM's count, every platform's");
+    TEST_ASSERT_EQUAL_STRING("34 games", view()->rows[0].detail);
+    TEST_ASSERT_EQUAL_STRING("Empty Shelf", view()->rows[1].label);
+    TEST_ASSERT_EQUAL_STRING("Smart Shelf", view()->rows[2].label);
+    TEST_ASSERT_FALSE(shows("Favorites"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SELECT)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_ASSERT_TRUE(view()->hint_count <= SKIFF_APP_HINTS_MAX);
+    TEST_PRINTF("SELECT: every game again");
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+    TEST_ASSERT_TRUE(shows("Game 1"));
+    TEST_PRINTF("and the collections load again each time they are entered");
+    serve_shelves();
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING("/api/collections/smart", requested(transport.request_count - 1));
+    TEST_PRINTF("Back on the list goes on to every game, as SELECT does");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+}
+
+static void test_a_collection_opens_its_psp_games_and_back_keeps_its_row(void) {
+    open_collections();
+    serve_shelf_page(0);
+    serve_shelf_page(SKIFF_ROMM_PAGE_SIZE);
+    TEST_PRINTF("open the shelf: its PSP games, under its name");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", view()->title);
+    TEST_ASSERT_TRUE(shows("30 games"));
+    TEST_ASSERT_TRUE(shows("Game 201"));
+    TEST_ASSERT_EQUAL_STRING("/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY SHELF_FILTER,
+                             requested(transport.request_count - 1));
+    TEST_PRINTF("the same rows as the library: 213's name is unusable, so it is dimmed");
+    int dimmed = 0;
+    for (size_t i = 0; i < view()->row_count; i++) {
+        dimmed += view()->rows[i].dim;
+    }
+    TEST_ASSERT_EQUAL_INT(1, dimmed);
+    TEST_PRINTF("five hints at most: Back to the collections takes Settings' place");
+    TEST_ASSERT_EQUAL_size_t(SKIFF_APP_HINTS_MAX, view()->hint_count);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_DOWNLOAD_ALL)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_MENU, english(SKIFF_TEXT_SETTINGS)));
+    TEST_PRINTF("pages of 25: the second loads as its rows come on screen");
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Game 230"));
+    TEST_ASSERT_EQUAL_STRING("/api/roms?platform_ids=1&limit=25&offset=25" LIST_QUERY SHELF_FILTER,
+                             requested(transport.request_count - 1));
+    TEST_PRINTF("Back: the collections list, at the shelf's row, without asking RomM again");
+    frame(SKIFF_UI_ACTION_DOWN);
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_COLLECTIONS), view()->title);
+    TEST_ASSERT_EQUAL_size_t(0, view()->list.selected);
+    TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
+    TEST_PRINTF("the smart shelf opens with its own filter; an empty shelf says so");
+    serve_list_page(SMART_SHELF_FILTER, SHELF_ID_BASE, 0, 3, 3);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING("Smart Shelf", view()->title);
+    TEST_ASSERT_TRUE(shows("3 games"));
+    TEST_ASSERT_EQUAL_STRING(
+        "/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY SMART_SHELF_FILTER,
+        requested(transport.request_count - 1));
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(2, view()->list.selected);
+    serve_list_page(EMPTY_SHELF_FILTER, SHELF_ID_BASE, 0, 0, 0);
+    frame(SKIFF_UI_ACTION_UP);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_COLLECTION_EMPTY)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_DOWNLOAD_ALL)));
+    TEST_PRINTF("SELECT from a collection's games goes on to every game");
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+}
+
+static void test_back_from_a_games_details_returns_to_its_collection(void) {
+    open_collections();
+    serve_shelf_page(0);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_DOWN);
+    open_details(SHELF_ID_BASE + 2);
+    TEST_ASSERT_TRUE(shows("Game 202.iso"));
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", view()->title);
+    TEST_ASSERT_EQUAL_size_t(1, view()->list.selected);
+    TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
+}
+
+static void test_without_collections_say_where_to_make_them(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(0);
+    char favourites[512];
+    collection_item(favourites, sizeof favourites, 1, "Favorites", 3, 0, 1);
+    serve_collections(favourites, "");
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_COLLECTIONS_EMPTY)));
+    TEST_ASSERT_FALSE(view()->has_list);
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SELECT)));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_COLLECTIONS_EMPTY)));
+}
+
+static void test_a_token_without_collections_read_offers_pair_again(void) {
+    open_paired_library(2);
+    serve_favourites(0);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const size_t requests = transport.request_count;
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("[auth] scopes lacks collections.read: RomM is not even asked");
+    TEST_ASSERT_EQUAL_size_t(requests, transport.request_count);
+    TEST_ASSERT_TRUE(shows("Pair again to see your collections"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_PAIR_AGAIN)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+
+    TEST_PRINTF("Pair again: the device flow; RomM grants collections.read this time");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_TOKEN, "romm/device-token.http"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    serve_heartbeat("5.3.1");
+    serve_platforms();
+    serve_shelves();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "collections.read"));
+    TEST_PRINTF("the address, the queue and the installs stay; the collections load");
+    TEST_ASSERT_NOT_NULL(strstr(config, "url = " SERVER));
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_COLLECTIONS), view()->title);
+    TEST_ASSERT_TRUE(shows("Skiff Shelf"));
+}
+
+static void test_a_forbidden_collections_list_offers_pair_again(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(0);
+    serve_raw("/api/collections", "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                                  "\r\n{\"detail\":\"Forbidden\"}");
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_PRINTF("RomM refused the token: read as a missing scope, no error screen");
+    TEST_ASSERT_TRUE(shows("Pair again to see your collections"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_PAIR_AGAIN)));
+}
+
+static void test_collections_too_large_for_the_psp_say_so_and_retry(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(0);
+    TEST_PRINTF("one collection more than a list keeps");
+    static char many[RAW_MAX];
+    int used = 0;
+    for (unsigned i = 0; i <= SKIFF_ROMM_COLLECTIONS_MAX; i++) {
+        if (i > 0) {
+            many[used++] = ',';
+        }
+        used += collection_item(many + used, sizeof many - (size_t)used, i + 1, "Shelf", 1, 0, 0);
+    }
+    fake_route *large = NULL;
+    {
+        static char raw[RAW_MAX + 64];
+        snprintf(raw, sizeof raw, JSON_OK "[%s]", many);
+        large = serve_raw("/api/collections", raw);
+        large->max_uses = 1;
+    }
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("[214]"));
+    TEST_ASSERT_FALSE(view()->has_list);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RETRY)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_SELECT, english(SKIFF_TEXT_SHOW_ALL_GAMES)));
+    TEST_PRINTF("Retry asks again (the player made room in RomM meanwhile)");
+    serve_shelves();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Skiff Shelf"));
+    TEST_ASSERT_FALSE(shows("[214]"));
+}
+
+static void test_a_collections_list_that_lands_after_leaving_is_dropped(void) {
+    open_library_with_scopes(2, COLLECTIONS_SCOPES);
+    serve_favourites(0);
+    serve_shelves();
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_SELECT);
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(CALL_COLLECTIONS, (int)app->call.kind);
+    TEST_PRINTF("SELECT on to every game while the list is on its way");
+    frame(SKIFF_UI_ACTION_SELECT);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_LIBRARY), view()->title);
+    TEST_ASSERT_FALSE(shows("Skiff Shelf"));
+    TEST_ASSERT_FALSE(app->collections_known);
+}
+
+static void test_download_all_in_a_collection_names_it(void) {
+    open_collections();
+    serve_shelf_page(0);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    for (unsigned offset = 0; offset < SHELF_GAMES; offset += SKIFF_ROMM_PAGE_SIZE) {
+        const unsigned left = SHELF_GAMES - offset;
+        serve_list_page(SHELF_FILTER "&with_files=true", SHELF_ID_BASE, offset,
+                        left < SKIFF_ROMM_PAGE_SIZE ? left : SKIFF_ROMM_PAGE_SIZE, SHELF_GAMES);
+    }
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_START);
+    frame(0);
+    TEST_ASSERT_TRUE(shows("Checking the collection... 0/30"));
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_PRINTF("the same checks as the favourites: 213's name is unusable");
+    TEST_ASSERT_TRUE(shows("Download 29 games from Skiff Shelf (84 KB)?"));
+    TEST_ASSERT_TRUE(shows("1 can't be installed"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_TRUE(shows("Added 29 downloads"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(29, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(SHELF_ID_BASE + 1, jobs[0].rom_id);
+    TEST_PRINTF("still on the collection's games");
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", view()->title);
 }
 
 /* ---- Download all favourites ---- */
@@ -1346,7 +1708,7 @@ static void test_nothing_else_runs_while_download_all_queues(void) {
     frame(SKIFF_UI_ACTION_SELECT);
     frame(SKIFF_UI_ACTION_BACK);
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, (int)view()->screen);
-    TEST_ASSERT_TRUE(app->favourites);
+    TEST_ASSERT_EQUAL_INT(SOURCE_FAVOURITES, (int)app->source);
     TEST_ASSERT_EQUAL_size_t(0, view()->hint_count);
     env_state.hold_calls = 0;
     run_until(SKIFF_APP_SCREEN_LIBRARY);
@@ -2730,6 +3092,15 @@ int main(void) {
     RUN_TEST(test_a_page_of_the_list_left_behind_is_dropped);
     RUN_TEST(test_back_from_a_favourites_details_returns_to_the_favourites);
     RUN_TEST(test_a_library_without_psp_games_offers_no_favourites);
+    RUN_TEST(test_select_cycles_every_game_favourites_and_collections);
+    RUN_TEST(test_a_collection_opens_its_psp_games_and_back_keeps_its_row);
+    RUN_TEST(test_back_from_a_games_details_returns_to_its_collection);
+    RUN_TEST(test_without_collections_say_where_to_make_them);
+    RUN_TEST(test_a_token_without_collections_read_offers_pair_again);
+    RUN_TEST(test_a_forbidden_collections_list_offers_pair_again);
+    RUN_TEST(test_collections_too_large_for_the_psp_say_so_and_retry);
+    RUN_TEST(test_a_collections_list_that_lands_after_leaving_is_dropped);
+    RUN_TEST(test_download_all_in_a_collection_names_it);
     RUN_TEST(test_download_all_queues_every_favourite_with_one_save);
     RUN_TEST(test_download_all_leaves_out_installed_queued_changed_and_refused_games);
     RUN_TEST(test_download_all_with_a_full_queue_queues_nothing_and_says_why);

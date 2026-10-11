@@ -23,6 +23,13 @@ ROMs and the three special files, plus a second favourites collection with LIBRA
 more (a user may have several; RomM lists their union). Adding a ROM to a collection renames
 nothing, so any ROM may be a favourite.
 
+Collections, for the Collections screen: the admin keeps a regular collection holding both seeded
+ROMs (with SKIFF_LIBRARY_ROMS also the first LIBRARY_SHELF numbered ROMs and the three special
+files, two pages), an empty one, and a smart one RomM fills from a saved search (the extra ROM). A
+second user, a viewer, keeps a public collection holding the extra ROM, which RomM lists to the
+admin too, and a private one, which it lists to nobody else. A second client token can read
+collections; the first cannot (RomM answers it 403).
+
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
 SKIFF_LIBRARY_ROMS (optional).
 """
@@ -94,9 +101,20 @@ FAVOURITES_NAME = "Favorites"
 MORE_FAVOURITES_NAME = "Skiff More Favourites"
 LIBRARY_FAVOURITES = 30
 LIBRARY_MORE_FAVOURITES = 2
+# The collections (see the module's docstring).
+SHELF_NAME = "Skiff Shelf"
+EMPTY_SHELF_NAME = "Skiff Empty Shelf"
+SMART_SHELF_NAME = "Skiff Smart Shelf"
+SMART_SHELF_CRITERIA = {"search_term": "Extra"}
+VIEWER_USER = "skiffviewer"
+VIEWER_PUBLIC_NAME = "Skiff Viewer Shelf"
+VIEWER_PRIVATE_NAME = "Skiff Viewer Private"
+LIBRARY_SHELF = 30
+VIEWER_PASSWORD_BYTES = 16
 # Every call is bounded, so a stalled RomM fails the seed instead of hanging it.
 REQUEST_TIMEOUT_SECONDS = 30
 TOKEN_NAME = "skiff-integration"
+COLLECTIONS_TOKEN_NAME = "skiff-integration-collections"
 # What a Skiff client needs: browse and download, upload saves, register itself as a device.
 TOKEN_SCOPES = [
     "me.read",
@@ -108,6 +126,8 @@ TOKEN_SCOPES = [
     "devices.read",
     "devices.write",
 ]
+# The same, and the optional scope the Collections screen needs.
+COLLECTIONS_TOKEN_SCOPES = TOKEN_SCOPES + ["collections.read"]
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_FORBIDDEN = 403
@@ -205,27 +225,83 @@ def set_cover(auth, rom_id, fs_name, seed=COVER_SEED, jpeg=False):
     return path
 
 
-def create_favourites(auth, name, rom_ids):
-    """A private favourites collection holding rom_ids, created the way RomM's web UI creates one."""
-    body = (
+def post_form(auth, path, fields):
+    """A multipart form POST, the way RomM's web UI creates collections; returns the parsed answer."""
+    body = "".join(
         f"--{MULTIPART_BOUNDARY}\r\n"
-        'Content-Disposition: form-data; name="name"\r\n\r\n'
-        f"{name}\r\n--{MULTIPART_BOUNDARY}--\r\n"
-    ).encode()
-    req = urllib.request.Request(
-        f"{API}/api/collections?is_favorite=true&is_public=false", data=body, method="POST"
-    )
+        f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+        f"{value}\r\n"
+        for name, value in fields.items()
+    ).encode() + f"--{MULTIPART_BOUNDARY}--\r\n".encode()
+    req = urllib.request.Request(f"{API}{path}", data=body, method="POST")
     req.add_header("Authorization", auth)
     req.add_header("Content-Type", f"multipart/form-data; boundary={MULTIPART_BOUNDARY}")
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            collection = json.loads(response.read())
+            return json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise SystemExit(f"seed: creating the favourites {name!r} failed with HTTP {error.code}")
-    status, _ = request("POST", f"/api/collections/{collection['id']}/roms", auth, {"rom_ids": rom_ids})
-    if status != HTTP_OK:
-        raise SystemExit(f"seed: adding favourites to {name!r} failed with HTTP {status}")
-    log(f"favourites {name!r} (collection {collection['id']}): {len(rom_ids)} ROMs")
+        raise SystemExit(f"seed: POST {path} ({fields.get('name')!r}) failed with HTTP {error.code}")
+
+
+def create_collection(auth, name, rom_ids, public=False, favourite=False):
+    """A collection holding rom_ids; returns its id."""
+    query = f"is_public={str(public).lower()}" + ("&is_favorite=true" if favourite else "")
+    collection = post_form(auth, f"/api/collections?{query}", {"name": name})
+    if rom_ids:
+        status, _ = request("POST", f"/api/collections/{collection['id']}/roms", auth, {"rom_ids": rom_ids})
+        if status != HTTP_OK:
+            raise SystemExit(f"seed: adding ROMs to {name!r} failed with HTTP {status}")
+    log(f"{'favourites' if favourite else 'collection'} {name!r} (collection {collection['id']}, "
+        f"{'public' if public else 'private'}): {len(rom_ids)} ROMs")
+    return collection["id"]
+
+
+def create_favourites(auth, name, rom_ids):
+    """A private favourites collection holding rom_ids, created the way RomM's web UI creates one."""
+    create_collection(auth, name, rom_ids, favourite=True)
+
+
+def create_smart_collection(auth, name, criteria):
+    """A private smart collection RomM fills from criteria; returns its id."""
+    collection = post_form(auth, "/api/collections/smart?is_public=false",
+                           {"name": name, "filter_criteria": json.dumps(criteria)})
+    log(f"smart collection {name!r} (smart collection {collection['id']}): "
+        f"{collection.get('rom_count')} ROMs")
+    return collection["id"]
+
+
+def create_viewer(auth):
+    """A second RomM user with the viewer role; returns its Basic authorisation."""
+    password = os.urandom(VIEWER_PASSWORD_BYTES).hex()
+    status, _ = request(
+        "POST",
+        "/api/users",
+        auth,
+        {"username": VIEWER_USER, "email": f"{VIEWER_USER}@example.invalid", "password": password,
+         "role": "viewer"},
+    )
+    if status != HTTP_CREATED:
+        raise SystemExit(f"seed: creating the viewer failed with HTTP {status}")
+    return basic_auth(VIEWER_USER, password)
+
+
+def set_collections(auth, rom_id, extra_rom_id, library, library_roms):
+    """The collections (see the module's docstring); returns their ids by role."""
+    shelf = [rom_id, extra_rom_id]
+    if library:
+        numbered, special = library[:library_roms], library[library_roms:]
+        _, shelf_ids = find_roms(auth, numbered[:LIBRARY_SHELF] + special)
+        shelf += shelf_ids
+    ids = {
+        "shelf": create_collection(auth, SHELF_NAME, shelf),
+        "empty": create_collection(auth, EMPTY_SHELF_NAME, []),
+        "smart": create_smart_collection(auth, SMART_SHELF_NAME, SMART_SHELF_CRITERIA),
+    }
+    viewer = create_viewer(auth)
+    ids["viewer_public"] = create_collection(viewer, VIEWER_PUBLIC_NAME, [extra_rom_id], public=True)
+    ids["viewer_private"] = create_collection(viewer, VIEWER_PRIVATE_NAME, [rom_id])
+    ids["shelf_roms"] = len(shelf)
+    return ids
 
 
 def set_favourites(auth, payload_rom_id, library, library_roms):
@@ -360,9 +436,9 @@ def set_library_covers(auth, count):
     log(f"library covers: {len(names)} ROMs ({LIBRARY_JPEG_COVER_INDEX:02d} as JPEG)")
 
 
-def create_token(auth):
+def create_token(auth, name=TOKEN_NAME, scopes=TOKEN_SCOPES):
     status, token = request(
-        "POST", "/api/client-tokens", auth, {"name": TOKEN_NAME, "scopes": TOKEN_SCOPES}
+        "POST", "/api/client-tokens", auth, {"name": name, "scopes": scopes}
     )
     if status != HTTP_CREATED or not token:
         raise SystemExit(f"seed: creating the client token failed with HTTP {status}")
@@ -393,6 +469,7 @@ def main():
     if library:
         set_library_covers(auth, library_roms)
     favourite_rom_ids = set_favourites(auth, rom_id, library, library_roms)
+    collections = set_collections(auth, rom_id, extra_rom_id, library, library_roms)
     extra["rom_id"] = extra_rom_id
     print(
         json.dumps(
@@ -403,6 +480,8 @@ def main():
                 **payload,
                 "extra": extra,
                 "favourite_rom_ids": favourite_rom_ids,
+                "collections_token": create_token(auth, COLLECTIONS_TOKEN_NAME, COLLECTIONS_TOKEN_SCOPES),
+                "collections": collections,
             }
         )
     )

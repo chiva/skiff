@@ -65,6 +65,7 @@ add_library(
   src/app/app.c
   src/app/app_batch.c
   src/app/app_call.c
+  src/app/app_collections.c
   src/app/app_connect.c
   src/app/app_library.c
   src/app/app_queue.c
@@ -87,6 +88,7 @@ add_library(
   src/net/entropy.c
   src/net/http.c
   src/net/transport.c
+  src/romm/collections.c
   src/romm/pairing.c
   src/romm/romm.c
   src/romm/saves.c

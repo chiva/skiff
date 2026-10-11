@@ -23,6 +23,8 @@
 #define KEY_DEVICE_IDENTIFIER SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER
 #define KEY_DEVICE_ID SKIFF_CONFIG_KEY_DEVICE_ID
 #define KEY_SCOPES SKIFF_CONFIG_KEY_SCOPES
+/* Between the scopes of [auth] scopes. */
+#define SCOPES_SEPARATOR ","
 #define KEY_CERT_FILE "cert_file"
 #define KEY_KEY_FILE "key_file"
 #define KEY_LEVEL "level"
@@ -455,6 +457,22 @@ size_t skiff_config_headers(const skiff_config *config, skiff_http_header *out, 
         out[count].value = config->headers[count].value;
     }
     return count;
+}
+
+int skiff_config_has_scope(const skiff_config *config, const char *scope) {
+    if (config == NULL || scope == NULL || scope[0] == '\0') {
+        return 0;
+    }
+    const size_t length = strlen(scope);
+    for (const char *start = config->scopes; *start != '\0';) {
+        const size_t listed = strcspn(start, SCOPES_SEPARATOR);
+        if (listed == length && strncmp(start, scope, length) == 0) {
+            return 1;
+        }
+        start += listed;
+        start += strspn(start, SCOPES_SEPARATOR);
+    }
+    return 0;
 }
 
 /* ---- Editing ---- */

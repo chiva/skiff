@@ -26,6 +26,19 @@
 /* Lines a game's title and its file name each take at most on the details screen, beside the
  * cover: the size, the download state and the free space always fit under them. */
 #define APP_DETAILS_NAME_LINES 3
+/* An open collection's name as the library's title, in the measure's units: the title is drawn 4/3
+ * the size of body text, and the status on its right takes up to SKIFF_APP_STATUS_WIDTH (in a
+ * smaller font), so this keeps the two apart. */
+#define APP_TITLE_NAME_WIDTH 180.0f
+
+/* What the library lists; SELECT goes to the next one (every game, the favourites, the
+ * collections, every game again). Not saved: every launch starts on every game. */
+typedef enum app_source {
+    SOURCE_ALL,
+    SOURCE_FAVOURITES,
+    /* The RomM user's collections, then the games of the one opened from them. */
+    SOURCE_COLLECTIONS,
+} app_source;
 
 /* Where the walk from a launch to the library is. */
 typedef enum app_connect_step {
@@ -60,7 +73,7 @@ typedef enum app_confirm_action {
     CONFIRM_REPLACE,
     CONFIRM_CANCEL_JOB,
     CONFIRM_SERVER_CHANGE,
-    /* "Download all favourites": the confirmation lists what the batch found (app->batch). */
+    /* "Download all": the confirmation lists what the batch found (app->batch). */
     CONFIRM_DOWNLOAD_ALL,
 } app_confirm_action;
 
@@ -71,6 +84,8 @@ typedef enum app_request {
     REQUEST_ROM,
     /* The ROM's cover, once its details are in. */
     REQUEST_COVER,
+    /* The collections list. */
+    REQUEST_COLLECTIONS,
 } app_request;
 
 /* A request to RomM, which runs off the screen's thread (env.call_start), one at a time. Its inputs
@@ -87,14 +102,16 @@ typedef enum app_call_kind {
     CALL_PAIRING_POLL,
     /* The details screen's cover, from the Memory Stick cache or RomM (decoded and cached). */
     CALL_COVER,
-    /* "Download all favourites" (app_batch.c): a page of favourites with their files, the Memory
+    /* "Download all" (app_batch.c): a page of the list's games with their files, the Memory
      * Stick's free space, then planning and queueing the chosen games with one save. */
     CALL_BATCH_PAGE,
     CALL_BATCH_SPACE,
     CALL_BATCH_QUEUE,
+    /* The RomM user's collections, regular and smart. */
+    CALL_COLLECTIONS,
 } app_call_kind;
 
-/* The most games one "Download all favourites" queues: the queue holds no more unfinished ones. */
+/* The most games one "Download all" queues: the queue holds no more unfinished ones. */
 #define APP_BATCH_MAX SKIFF_JOBS_MAX
 
 typedef enum app_batch_step {
@@ -108,10 +125,14 @@ typedef enum app_batch_step {
     BATCH_QUEUEING,
 } app_batch_step;
 
-/* "Download all favourites": what the favourites hold, and the games chosen to queue, in name
- * order. While it queues (BATCH_QUEUEING), the browsing thread reads it and fills plans,
- * requests and ids; the screen's thread leaves it alone until the call is done. */
+/* "Download all" on the favourites or an open collection: what the list holds, and the games
+ * chosen to queue, in name order. While it queues (BATCH_QUEUEING), the browsing thread reads it
+ * and fills plans, requests and ids; the screen's thread leaves it alone until the call is done. */
 typedef struct app_batch {
+    /* The list it reads, and the collection's name for the question (empty for the favourites). */
+    skiff_romm_list_filter filter;
+    uint64_t collection_id;
+    char name[SKIFF_APP_LABEL_MAX];
     uint64_t next_page;
     uint64_t total;
     uint64_t seen;
@@ -154,7 +175,8 @@ typedef struct app_call {
     skiff_romm_client *romm;
     /* In: the platform, list and page to list (with each ROM's files), the ROM to fetch. */
     uint64_t platform_id;
-    int favourites;
+    skiff_romm_list_filter filter;
+    uint64_t collection_id;
     int with_files;
     uint64_t page_index;
     uint64_t rom_id;
@@ -163,6 +185,7 @@ typedef struct app_call {
     skiff_romm_platform platform;
     skiff_romm_rom_page page;
     skiff_romm_rom rom;
+    skiff_romm_collection_list collections;
     /* In and out: a poll reads the pairing and may lengthen its interval; the approval's token.
      * Wiped once used (skiff_romm_pairing_clear()). */
     skiff_romm_pairing pairing;
@@ -183,7 +206,7 @@ typedef struct app_call {
     int64_t cover_decode_ms;
     skiff_err cover_cache_err;
     skiff_err cover_store_err;
-    /* "Download all favourites": out, the free space (CALL_BATCH_SPACE); in, the app whose batch
+    /* "Download all": out, the free space (CALL_BATCH_SPACE); in, the app whose batch
      * CALL_BATCH_QUEUE plans and queues (its installer, manifest under its lock, roots and queue:
      * none of them changes while a call runs). */
     uint64_t free_bytes;
@@ -285,6 +308,14 @@ struct skiff_app {
     int64_t note_until_ms;
     skiff_ui_list library;
     app_page pages[SKIFF_APP_CACHED_PAGES];
+    /* The collections (SOURCE_COLLECTIONS): RomM's list as last loaded, its rows, and the
+     * collection whose games the library lists while one is open. */
+    skiff_romm_collection_list collections;
+    char collection_labels[SKIFF_ROMM_COLLECTIONS_MAX][SKIFF_APP_LABEL_MAX];
+    skiff_ui_list collections_list;
+    skiff_romm_collection collection;
+    /* Why the list could not load (shown with Retry); SKIFF_OK when it did or loads. */
+    skiff_err collections_error;
     /* The ROM on the details screen. */
     skiff_romm_rom rom;
     /* Its cover (when cover_key is its key, see app_cover_shown()), and the buffer the next one is
@@ -325,9 +356,12 @@ struct skiff_app {
     /* The screen the keyboard edits the server address for. */
     skiff_app_screen keyboard_from;
     int has_platform;
-    /* The library lists the player's favourites rather than every game (SELECT switches it). Not
-     * saved: every launch starts on every game. */
-    int favourites;
+    app_source source;
+    /* The collections list is in, and a collection of it is open. */
+    int collections_known;
+    int collection_open;
+    /* RomM refused the token the collections (403): Pair again, as without collections.read. */
+    int collections_forbidden;
     int total_known;
     app_request request;
     app_request failed_request;
@@ -436,14 +470,44 @@ int app_installed_room(skiff_app *app, uint64_t rom_id, const char *file_name);
 size_t app_installed_records_free(skiff_app *app);
 /* The name a ROM shows: its title, or its file name without one. */
 const char *app_rom_name(const skiff_romm_rom_summary *rom);
+/* The games the library lists: every game, the favourites, or the open collection's (its id). */
+void app_current_list(const skiff_app *app, skiff_romm_list_filter *filter,
+                      uint64_t *collection_id);
+/* The library lists games (not the collections themselves). */
+int app_games_listed(const skiff_app *app);
+/* "every game", "favourites", "collection 5", "smart collection 2": a list as the log names it. */
+#define APP_LIST_NAME_MAX 48
+void app_list_name(skiff_romm_list_filter filter, uint64_t collection_id, char *out, size_t size);
+/* START offers "Download all": the favourites or an open collection, with games. */
+int app_batch_offered(const skiff_app *app);
+
+/* ---- app_collections.c ---- */
+
+/* The collections list is entered: it loads again (or says to pair again). */
+void app_collections_enter(skiff_app *app);
+/* Forgets the list, the open collection and RomM's refusal (a new server or token). */
+void app_collections_forget(skiff_app *app);
+/* The token cannot list collections: no collections.read in [auth] scopes, or RomM said 403. */
+int app_collections_denied(const skiff_app *app);
+/* Asks for the list when the screen needs it and it is not on its way. */
+void app_collections_request(skiff_app *app);
+/* Starts the list's call, when it is still wanted (REQUEST_COLLECTIONS). */
+void app_collections_run(skiff_app *app);
+void app_collections_done(skiff_app *app);
+/* The collections list's own buttons (the library handles the shared ones first): moving, Retry,
+ * Pair again. 1 when the player opened the selected collection. */
+int app_collections_update(skiff_app *app, unsigned actions);
+/* The name a collection shows: its own, or "Untitled collection". */
+const char *app_collection_name(const skiff_app *app, const skiff_romm_collection *collection);
 
 /* ---- app_batch.c ---- */
 
-/* START on the favourites: checks them, then asks to download what fits. */
+/* START on the favourites or an open collection: checks its games, then asks to download what
+ * fits. */
 void app_batch_start(skiff_app *app);
 /* Once a frame, after app_call_update(): starts the batch's next call when none runs. */
 void app_batch_update(skiff_app *app);
-/* Back while the favourites are checked: the batch ends, its call dropped. */
+/* Back while the list's games are checked: the batch ends, its call dropped. */
 void app_batch_cancel(skiff_app *app);
 void app_batch_confirmed(skiff_app *app);
 /* The confirmation's lines (CONFIRM_DOWNLOAD_ALL), for the view. */

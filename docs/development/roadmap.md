@@ -79,8 +79,10 @@ on their own thread since (#67).
   pairing), and START queues every favourite that fits, with one save of the queue. On a PSP-1000,
   checking 36 favourites takes about half a second and queueing 34 of them holds up the screen
   for one frame at most. See [Hardware findings](hardware-findings.md#favourites).
-  **Collections** need `collections.read`: they come with Phase 4's pairing again rather than ask
-  players to pair twice.
+  **Collections**: SELECT also lists the player's collections (regular and smart, their own and other
+  users' public ones); opening one lists its PSP games, and START downloads them as it does the
+  favourites. Listing them needs `collections.read`, which Phase 4's pairing asks for as an optional
+  scope, so players pair again once for both; a token without it shows Pair again.
 - **Screen off during downloads**: while games download, the firmware turns the backlight off after
   60 s without a press instead of the player's 2, 5 or 10 minutes (a player's Off is left alone),
   and the press that lights it again does nothing else. Waiting for hardware run B5.

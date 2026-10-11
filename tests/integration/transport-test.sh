@@ -31,6 +31,16 @@ SKIFF_IT_EXTRA_CRC32="$(jq -r .extra.crc32 "$SEED")"
 export SKIFF_IT_CERTS SKIFF_IT_TOKEN SKIFF_IT_ROM_ID SKIFF_IT_FILE_NAME SKIFF_IT_SIZE SKIFF_IT_CRC32
 export SKIFF_IT_FILE_NAME_RAW SKIFF_IT_EXTRA_ROM_ID SKIFF_IT_EXTRA_FILE_NAME_RAW SKIFF_IT_EXTRA_SIZE
 export SKIFF_IT_EXTRA_CRC32
+# The collections: a token that may list them, and the seeded ones' ids and the shelf's size.
+SKIFF_IT_COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"
+SKIFF_IT_SHELF_ID="$(jq -r .collections.shelf "$SEED")"
+SKIFF_IT_SHELF_ROMS="$(jq -r .collections.shelf_roms "$SEED")"
+SKIFF_IT_EMPTY_SHELF_ID="$(jq -r .collections.empty "$SEED")"
+SKIFF_IT_SMART_SHELF_ID="$(jq -r .collections.smart "$SEED")"
+SKIFF_IT_VIEWER_SHELF_ID="$(jq -r .collections.viewer_public "$SEED")"
+SKIFF_IT_VIEWER_PRIVATE_ID="$(jq -r .collections.viewer_private "$SEED")"
+export SKIFF_IT_COLLECTIONS_TOKEN SKIFF_IT_SHELF_ID SKIFF_IT_SHELF_ROMS SKIFF_IT_EMPTY_SHELF_ID
+export SKIFF_IT_SMART_SHELF_ID SKIFF_IT_VIEWER_SHELF_ID SKIFF_IT_VIEWER_PRIVATE_ID
 # The pairing and save sync tests approve and refuse pairings as the admin, as RomM's web UI does.
 ADMIN_USER="$(grep '^SKIFF_ADMIN_USER=' "$DIR/romm.env" | cut -d= -f2-)"
 ADMIN_PASSWORD="$(grep '^SKIFF_ADMIN_PASSWORD=' "$DIR/romm.env" | cut -d= -f2-)"

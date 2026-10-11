@@ -40,6 +40,7 @@ typedef enum skiff_language {
     /* Screen titles. */                                                                           \
     X(SKIFF_TEXT_TITLE_LIBRARY, 0, "Library", "Biblioteca")                                        \
     X(SKIFF_TEXT_TITLE_FAVOURITES, 0, "Favourites", "Favoritos")                                   \
+    X(SKIFF_TEXT_TITLE_COLLECTIONS, 0, "Collections", "Colecciones")                               \
     X(SKIFF_TEXT_TITLE_DETAILS, 0, "Details", "Detalles")                                          \
     X(SKIFF_TEXT_TITLE_QUEUE, 0, "Downloads", "Descargas")                                         \
     X(SKIFF_TEXT_TITLE_SETTINGS, 0, "Settings", "Ajustes")                                         \
@@ -105,14 +106,29 @@ typedef enum skiff_language {
       "Aún no tienes favoritos. Márcalos en RomM y vuelve.")                                       \
     /* SELECT on the library: the list it switches to. */                                          \
     X(SKIFF_TEXT_SHOW_FAVOURITES, 0, "Favourites", "Favoritos")                                    \
+    X(SKIFF_TEXT_SHOW_COLLECTIONS, 0, "Collections", "Colecciones")                                \
     X(SKIFF_TEXT_SHOW_ALL_GAMES, 0, "All games", "Todos")                                          \
-    /* "Download all favourites". */                                                               \
+    /* Collections. */                                                                             \
+    X(SKIFF_TEXT_COLLECTIONS_COUNT, 1, "{1} collections", "{1} colecciones")                       \
+    X(SKIFF_TEXT_COLLECTIONS_EMPTY, 0, "No collections yet. Make them in RomM, then come back.",   \
+      "Aún no tienes colecciones. Créalas en RomM y vuelve.")                                      \
+    X(SKIFF_TEXT_COLLECTIONS_PAIR_AGAIN, 0,                                                        \
+      "Pair again to see your collections, and allow them when you approve this PSP in RomM.",     \
+      "Vincula de nuevo para ver tus colecciones, y permítelas al aprobar esta PSP en RomM.")      \
+    X(SKIFF_TEXT_COLLECTION_EMPTY, 0, "There are no PSP games in this collection",                 \
+      "No hay juegos de PSP en esta colección")                                                    \
+    X(SKIFF_TEXT_COLLECTION_UNNAMED, 0, "Untitled collection", "Colección sin nombre")             \
+    /* "Download all" (the favourites, or an open collection). */                                  \
     X(SKIFF_TEXT_DOWNLOAD_ALL, 0, "Download all", "Descargar todo")                                \
     X(SKIFF_TEXT_BATCH_CHECKING, 2, "Checking favourites... {1}/{2}",                              \
       "Revisando favoritos... {1}/{2}")                                                            \
+    X(SKIFF_TEXT_BATCH_CHECKING_COLLECTION, 2, "Checking the collection... {1}/{2}",               \
+      "Revisando la colección... {1}/{2}")                                                         \
     X(SKIFF_TEXT_BATCH_ADDING, 0, "Adding downloads...", "Añadiendo descargas...")                 \
     X(SKIFF_TEXT_BATCH_QUESTION, 2, "Download {1} favourites ({2})?",                              \
       "¿Descargar {1} favoritos ({2})?")                                                           \
+    X(SKIFF_TEXT_BATCH_QUESTION_COLLECTION, 3, "Download {1} games from {2} ({3})?",               \
+      "¿Descargar {1} juegos de {2} ({3})?")                                                       \
     X(SKIFF_TEXT_BATCH_NOTHING, 0, "Nothing to download.", "No hay nada que descargar.")           \
     X(SKIFF_TEXT_BATCH_INSTALLED, 1, "{1} already installed", "{1} ya instalados")                 \
     X(SKIFF_TEXT_BATCH_QUEUED, 1, "{1} already in Downloads", "{1} ya están en Descargas")         \

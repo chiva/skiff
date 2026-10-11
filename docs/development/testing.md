@@ -116,7 +116,11 @@ the PSP's network checks:
   RomM resizes into a 240×320 small cover; the server has no metadata providers, so it is the only
   cover. The second gets none: every ROM update in RomM (5.3 and 5.4) also cleans the file's name on disk,
   which would drop its `+`. The first is also the admin's favourite, kept as RomM's web UI keeps
-  favourites: a private collection named "Favorites" marked as favourites.
+  favourites: a private collection named "Favorites" marked as favourites. For the Collections
+  screen, the admin also keeps a collection holding both ROMs ("Skiff Shelf"), an empty one and a
+  smart one RomM fills from a saved search (the second ROM); a second user, a viewer, keeps a
+  public collection holding the second ROM and a private one holding the first. A second API token
+  holds `collections.read` as well; the first does not.
 
 | Command | What it does |
 |---|---|
@@ -173,8 +177,11 @@ platform holds both seeded ROMs, pages of one ROM return each once and then an e
 page lists them in name order, the second file's details match the seed, and its download URL,
 built from the name with reserved characters, brings back exactly its bytes; the seeded cover comes
 back without the token from the URL its ROM's details give, the other ROM has none, and a cover
-RomM lacks is a 404; the favourites list holds the seeded favourite with its file; a wrong token is
-a RomM refusal (200).
+RomM lacks is a 404; the favourites list holds the seeded favourite with its file; the token with
+`collections.read` lists the admin's three collections and the viewer's public one (not the
+viewer's private one, nor the favourites), while the other token's request is refused (201, RomM's
+403); each collection's games list with `roms.read` alone, and the viewer's private collection
+lists none (RomM 5.4 checks the owner); a wrong token is a RomM refusal (200).
 
 The fourth pairs with RomM (`include/skiff/romm_pairing.h`): a pairing starts, a poll before the
 admin approves is not approved, the admin approves through RomM's own endpoint (as its web UI does),
@@ -564,7 +571,9 @@ own and Skiff Library 02 a JPEG one (shown as the placeholder: Skiff decodes PNG
 stay the large seeded file (for the interruptions, with a PNG cover) and the small one with
 reserved characters in its name (no cover: a RomM edit would rename it). The admin's favourites are
 the large file, the first 30 numbered ROMs and the three odd names, plus a second favourites
-collection with the next two numbered ROMs (RomM lists the union: 36 favourites, two pages).
+collection with the next two numbered ROMs (RomM lists the union: 36 favourites, two pages). Its
+"Skiff Shelf" collection holds both seeded files, the first 30 numbered ROMs and the three odd
+names (35 games, two pages).
 
 The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff
 downloaded can be launched from the XMB without any game file from outside the project: a tiny
@@ -631,9 +640,24 @@ can't be installed (the `.zip` and the BEL name; the long name downloads under a
 34 to download, 64.3 MB in all; OK adds them ("Added 34 downloads"), in name order on the
 Downloads screen. Press START once more while they download: games already in Downloads are left
 out and nothing is queued twice. Quit and relaunch: the queue carries on. Read back: `slow frame:`
-lines (none while the favourites are checked or queued), the `download all favourites:` lines
+lines (none while the favourites are checked or queued), the `download all` lines
 (counts and bytes) and `stats:` (longest frame at most 33 ms, the browsing thread's lowest free
 stack at least 8 KB, system memory unchanged).
+
+**Collections (A4).** With the same library, paired again with collections allowed (the approval
+page's collections permission left ticked): press SELECT twice and check the title says
+Collections with 4 collections: Skiff Empty Shelf (0 games), Skiff Shelf (35), Skiff Viewer Shelf
+(1, the viewer's public one) and Skiff Smart Shelf (1); neither favourites collection nor the
+viewer's private one is listed. Open Skiff Shelf: its name in the title, 35 games, the `.zip` and
+the BEL name dimmed, the second page loading as it comes on screen. Open a game and press Back
+(back on the shelf, same row), then Back again (the collections list, on Skiff Shelf). Open Skiff
+Empty Shelf ("There are no PSP games in this collection"), Back, and SELECT (every game). In Skiff
+Shelf, press START: "Checking the collection" in the header, then "Download … games from Skiff
+Shelf" with 2 that can't be installed (on a stick fresh from A3's clean-up, 33 to download; after
+A3's downloads, those games count as already installed or in Downloads); Back queues nothing. Then pair again with the collections
+permission unticked: the Collections list says to pair again, with Pair again on ✕/○, and nothing
+is requested. Read back: the `collections:` lines (count, or the error) and the `library:` lines,
+no `slow frame:` line while the list loads, and `stats:` as in A3.
 
 **Backlight (B5).** On battery, with Settings → Power Save Settings → Backlight Auto-Off at 2, 5
 or 10 minutes: queue the 64 MiB file, open Downloads and put the PSP down. About a minute later the

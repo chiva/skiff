@@ -46,8 +46,8 @@ static void run(void *arg) {
     case CALL_PAGE:
     case CALL_BATCH_PAGE: {
         const skiff_romm_list_query query = {.platform_id = call->platform_id,
-                                             .filter = call->favourites ? SKIFF_ROMM_LIST_FAVOURITES
-                                                                        : SKIFF_ROMM_LIST_ALL,
+                                             .filter = call->filter,
+                                             .collection_id = call->collection_id,
                                              .with_files = call->with_files};
         call->err =
             skiff_romm_list_roms(call->romm, &query, call->page_index * SKIFF_ROMM_PAGE_SIZE,
@@ -71,6 +71,9 @@ static void run(void *arg) {
         break;
     case CALL_BATCH_QUEUE:
         call->err = app_batch_queue_run(call);
+        break;
+    case CALL_COLLECTIONS:
+        call->err = skiff_romm_list_collections(call->romm, &call->collections);
         break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
@@ -147,6 +150,9 @@ static void apply(skiff_app *app, app_call_kind kind) {
         break;
     case CALL_BATCH_QUEUE:
         app_batch_queued(app);
+        break;
+    case CALL_COLLECTIONS:
+        app_collections_done(app);
         break;
     case CALL_NONE:
         break;

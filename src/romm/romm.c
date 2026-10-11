@@ -21,8 +21,10 @@
 #define ROM_LIST_QUERY                                                                             \
     "&order_by=name&order_dir=asc&with_char_index=false&with_filter_values=false"                  \
     "&with_rom_id_index=false"
-/* What a ROM list adds for SKIFF_ROMM_LIST_FAVOURITES and for with_files. */
+/* What a ROM list adds for each filter, and for with_files. */
 #define ROM_LIST_FAVOURITES "&favorite=true"
+#define ROM_LIST_COLLECTION "&collection_id="
+#define ROM_LIST_SMART_COLLECTION "&smart_collection_id="
 #define ROM_LIST_WITH_FILES "&with_files=true"
 #define UNRESERVED_SYMBOLS "-._~"
 /* Kept as they are in a cover URL besides the unreserved ones: they separate the path's segments
@@ -32,6 +34,8 @@
 #define CRC32_HEX_DIGITS_MAX 8
 #define HEX_BASE 16
 #define DECIMAL_BASE 10
+/* The digits of the largest uint64_t, 18446744073709551615. */
+#define DECIMAL_DIGITS_MAX 20
 #define ASCII_DELETE 0x7F
 /* First size of the response buffer; it doubles up to SKIFF_ROMM_BODY_MAX. */
 #define BODY_INITIAL_BYTES ((size_t)16 * 1024)
@@ -306,13 +310,22 @@ static void read_cover_path(const cJSON *object, char *out, size_t out_size) {
 
 static int is_json_blank(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
+/* What json_shape() found. */
+typedef enum json_shape_result {
+    JSON_SHAPE_OK,
+    /* Not RomM's JSON: a NUL or a raw control character. */
+    JSON_SHAPE_BAD,
+    /* More values than SKIFF_ROMM_JSON_NODES_MAX: too large for the PSP, whatever it holds. */
+    JSON_SHAPE_TOO_MANY_VALUES,
+} json_shape_result;
+
 /*
  * Checks a body before cJSON builds a tree from it: at most SKIFF_ROMM_JSON_NODES_MAX values (each
  * value but the first follows a ',' or opens its '[' or '{', so counting those outside strings
  * bounds them without parsing), no NUL anywhere, raw or escaped (it would cut a name short at the
  * C string's end), and no raw control character in a string.
  */
-static int json_shape_ok(const char *json, size_t length) {
+static json_shape_result json_shape(const char *json, size_t length) {
     size_t openings = 0;
     int in_string = 0;
     for (size_t i = 0; i < length; i++) {
@@ -320,13 +333,13 @@ static int json_shape_ok(const char *json, size_t length) {
         /* JSON has no raw C0 control characters inside a string and no NUL anywhere; a raw DEL is
          * refused with them, so only an escaped control character reaches a name. */
         if (c == '\0' || (in_string && is_control_byte(c))) {
-            return 0;
+            return JSON_SHAPE_BAD;
         }
         if (in_string) {
             if (c == '\\') {
                 if (length - i > JSON_ESCAPED_NUL_LENGTH &&
                     memcmp(json + i + 1, JSON_ESCAPED_NUL, JSON_ESCAPED_NUL_LENGTH) == 0) {
-                    return 0;
+                    return JSON_SHAPE_BAD;
                 }
                 i++;
             } else if (c == '"') {
@@ -336,11 +349,11 @@ static int json_shape_ok(const char *json, size_t length) {
             in_string = 1;
         } else if (c == ',' || c == '[' || c == '{') {
             if (++openings >= SKIFF_ROMM_JSON_NODES_MAX) {
-                return 0;
+                return JSON_SHAPE_TOO_MANY_VALUES;
             }
         }
     }
-    return 1;
+    return JSON_SHAPE_OK;
 }
 
 /* The whole body as one JSON value, followed by nothing but blanks. */
@@ -387,9 +400,17 @@ static void delete_tree(cJSON *root, int secret) {
 }
 
 /* The whole body as one JSON value, followed by nothing but blanks; a refused tree holding a
- * credential is wiped before it is freed. */
-static cJSON *parse_json_tree(const char *json, size_t length, int secret) {
-    if (json == NULL || length == 0 || !json_shape_ok(json, length)) {
+ * credential is wiped before it is freed. *too_large (when not NULL) says a body was refused for
+ * holding more values than SKIFF_ROMM_JSON_NODES_MAX. */
+static cJSON *parse_json_tree(const char *json, size_t length, int secret, int *too_large) {
+    if (json == NULL || length == 0) {
+        return NULL;
+    }
+    const json_shape_result shape = json_shape(json, length);
+    if (shape != JSON_SHAPE_OK) {
+        if (too_large != NULL && shape == JSON_SHAPE_TOO_MANY_VALUES) {
+            *too_large = 1;
+        }
         return NULL;
     }
     const char *end = NULL;
@@ -408,12 +429,25 @@ static cJSON *parse_json_tree(const char *json, size_t length, int secret) {
 }
 
 static cJSON *parse_json(const char *json, size_t length) {
-    return parse_json_tree(json, length, 0);
+    return parse_json_tree(json, length, 0, NULL);
 }
 
-/* ---- Shared with src/romm/saves.c (romm_internal.h) ---- */
+/* ---- Shared with src/romm/saves.c and collections.c (romm_internal.h) ---- */
 
 cJSON *skiff_romm_parse_json(const char *json, size_t length) { return parse_json(json, length); }
+
+cJSON *skiff_romm_parse_json_capped(const char *json, size_t length, int *too_large) {
+    if (too_large != NULL) {
+        *too_large = 0;
+    }
+    if (json != NULL && length > SKIFF_ROMM_BODY_MAX) {
+        if (too_large != NULL) {
+            *too_large = 1;
+        }
+        return NULL;
+    }
+    return parse_json_tree(json, length, 0, too_large);
+}
 
 int skiff_romm_read_count(const cJSON *object, const char *name, uint64_t *out) {
     return read_count(object, name, out);
@@ -601,6 +635,8 @@ typedef struct body_sink {
     /* The body may hold a credential (pairing's device code or token): every copy of it is wiped
      * before its memory is given back. */
     int secret;
+    /* The body was refused for being over SKIFF_ROMM_BODY_MAX. */
+    int too_large;
     char *data;
     size_t used;
     size_t capacity;
@@ -634,6 +670,7 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
     if ((sink->response->has_content_length &&
          sink->response->content_length > SKIFF_ROMM_BODY_MAX) ||
         size > SKIFF_ROMM_BODY_MAX - sink->used) {
+        sink->too_large = 1;
         return SKIFF_ERR_ROMM_BAD_RESPONSE;
     }
     if (sink->used + size > sink->capacity) {
@@ -656,10 +693,11 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
 /* Sends one request to base + path, with body (NULL for none) as a POST's body, and parses the
  * response body as JSON into *out (NULL when it is not JSON; free it with cJSON_Delete()). Bodies
  * of error statuses are read only with keep_errors. Returns the transport's error; the HTTP status
- * is left to the caller in *status. */
+ * is left to the caller in *status. *too_large (when not NULL) says the body was refused for its
+ * size or its number of values rather than for what it holds. */
 static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, const char *path,
                            const skiff_romm_body *body, int with_token, int keep_errors,
-                           long *status, cJSON **out) {
+                           long *status, cJSON **out, int *too_large) {
     /* Only pairing reads error bodies, and only pairing's bodies hold credentials. */
     const int secret = keep_errors;
     *out = NULL;
@@ -672,7 +710,7 @@ static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, 
     skiff_http_header authorization = {HEADER_AUTHORIZATION, client->authorization};
     const int send_token = with_token && client->authorization[0] != '\0';
     skiff_http_response response;
-    body_sink sink = {&response, keep_errors, secret, NULL, 0, 0};
+    body_sink sink = {&response, keep_errors, secret, 0, NULL, 0, 0};
     skiff_http_request request;
     memset(&request, 0, sizeof request);
     request.method = method;
@@ -694,7 +732,10 @@ static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, 
     const skiff_err err = skiff_transport_perform(client->transport, &request, &response);
     *status = response.status;
     if (err == SKIFF_OK && (keep_errors || is_success(response.status))) {
-        *out = parse_json_tree(sink.data, sink.used, secret);
+        *out = parse_json_tree(sink.data, sink.used, secret, too_large);
+    }
+    if (too_large != NULL && sink.too_large) {
+        *too_large = 1;
     }
     if (secret) {
         wipe(sink.data, sink.capacity);
@@ -703,11 +744,13 @@ static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, 
     return err;
 }
 
-/* GETs base + path and parses the body as JSON into *out (free it with cJSON_Delete()). */
-static skiff_err get_json(skiff_romm_client *client, const char *path, int with_token,
-                          cJSON **out) {
+/* GETs base + path and parses the body as JSON into *out (free it with cJSON_Delete()); *too_large
+ * as send_json() sets it. */
+static skiff_err get_json_capped(skiff_romm_client *client, const char *path, int with_token,
+                                 cJSON **out, int *too_large) {
     long status = 0;
-    skiff_err err = send_json(client, SKIFF_HTTP_GET, path, NULL, with_token, 0, &status, out);
+    skiff_err err =
+        send_json(client, SKIFF_HTTP_GET, path, NULL, with_token, 0, &status, out, too_large);
     if (err == SKIFF_OK) {
         err = skiff_http_status_error(status);
     }
@@ -719,6 +762,27 @@ static skiff_err get_json(skiff_romm_client *client, const char *path, int with_
         *out = NULL;
     }
     return err;
+}
+
+static skiff_err get_json(skiff_romm_client *client, const char *path, int with_token,
+                          cJSON **out) {
+    return get_json_capped(client, path, with_token, out, NULL);
+}
+
+skiff_err skiff_romm_get_json(skiff_romm_client *client, const char *path, cJSON **out,
+                              int *too_large) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (too_large != NULL) {
+        *too_large = 0;
+    }
+    if (client == NULL || client->transport == NULL || client->base_url[0] == '\0' ||
+        path == NULL || strlen(path) > SKIFF_ROMM_REQUEST_PATH_MAX || out == NULL ||
+        too_large == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    return get_json_capped(client, path, 1, out, too_large);
 }
 
 skiff_err skiff_romm_post_json(skiff_romm_client *client, const char *path, const char *json_body,
@@ -734,7 +798,7 @@ skiff_err skiff_romm_post_json(skiff_romm_client *client, const char *path, cons
         return SKIFF_ERR_INVALID_ARG;
     }
     const skiff_romm_body body = {.json = json_body};
-    return send_json(client, SKIFF_HTTP_POST, path, &body, 0, 1, status, out);
+    return send_json(client, SKIFF_HTTP_POST, path, &body, 0, 1, status, out, NULL);
 }
 
 skiff_err skiff_romm_request_json(skiff_romm_client *client, skiff_http_method method,
@@ -751,7 +815,7 @@ skiff_err skiff_romm_request_json(skiff_romm_client *client, skiff_http_method m
         out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    return send_json(client, method, path, body, 1, 0, status, out);
+    return send_json(client, method, path, body, 1, 0, status, out, NULL);
 }
 
 /* ---- The client ---- */
@@ -893,12 +957,33 @@ skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_
         limit > SKIFF_ROMM_PAGE_SIZE) {
         return SKIFF_ERR_INVALID_ARG;
     }
+    char filter[sizeof ROM_LIST_SMART_COLLECTION + DECIMAL_DIGITS_MAX];
+    switch (query->filter) {
+    case SKIFF_ROMM_LIST_ALL:
+        filter[0] = '\0';
+        break;
+    case SKIFF_ROMM_LIST_FAVOURITES:
+        snprintf(filter, sizeof filter, "%s", ROM_LIST_FAVOURITES);
+        break;
+    case SKIFF_ROMM_LIST_COLLECTION:
+    case SKIFF_ROMM_LIST_SMART_COLLECTION:
+        /* RomM refuses id 0 (422): it is no collection. */
+        if (query->collection_id == 0) {
+            return SKIFF_ERR_INVALID_ARG;
+        }
+        snprintf(filter, sizeof filter, "%s%llu",
+                 query->filter == SKIFF_ROMM_LIST_COLLECTION ? ROM_LIST_COLLECTION
+                                                             : ROM_LIST_SMART_COLLECTION,
+                 (unsigned long long)query->collection_id);
+        break;
+    default:
+        return SKIFF_ERR_INVALID_ARG;
+    }
     const uint64_t platform_id = query->platform_id;
     char path[SKIFF_ROMM_URL_MAX];
     snprintf(path, sizeof path,
              PATH_ROMS "?platform_ids=%llu&limit=%zu&offset=%llu" ROM_LIST_QUERY "%s%s",
-             (unsigned long long)platform_id, limit, (unsigned long long)offset,
-             query->filter == SKIFF_ROMM_LIST_FAVOURITES ? ROM_LIST_FAVOURITES : "",
+             (unsigned long long)platform_id, limit, (unsigned long long)offset, filter,
              query->with_files ? ROM_LIST_WITH_FILES : "");
     cJSON *root = NULL;
     skiff_err err = get_json(client, path, 1, &root);
@@ -1034,7 +1119,7 @@ skiff_err skiff_romm_get_cover(skiff_romm_client *client, const char *cover_path
         return err;
     }
     skiff_http_response response;
-    body_sink sink = {&response, 0, 0, NULL, 0, 0};
+    body_sink sink = {&response, 0, 0, 0, NULL, 0, 0};
     skiff_http_request request;
     memset(&request, 0, sizeof request);
     request.method = SKIFF_HTTP_GET;

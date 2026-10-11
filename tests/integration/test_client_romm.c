@@ -1,10 +1,10 @@
 /*
  * The RomM client (skiff/romm.h) against the integration RomM behind Caddy, over the curl transport
  * and the TLS stack the PSP links: the version check, the PSP platform, every ROM page by page, the
- * seeded favourite with its file, a
- * ROM's files, and a download URL built from a file name full of reserved characters that brings
- * back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched without the
- * token from the URL its ROM's details give.
+ * seeded favourite with its file, the seeded collections (listed only with collections.read) and
+ * their games, a ROM's files, and a download URL built from a file name full of reserved characters
+ * that brings back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched
+ * without the token from the URL its ROM's details give.
  *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh), with the server's
  * details in SKIFF_IT_* environment variables. Not a ctest test: it needs the server.
@@ -56,6 +56,15 @@ typedef struct received {
 } received;
 
 static const char *token;
+/* A token that may list collections, and the seeded collections (tests/integration/seed.py). */
+static const char *collections_token;
+static uint64_t shelf_id;
+static uint64_t shelf_roms;
+static uint64_t empty_shelf_id;
+static uint64_t smart_shelf_id;
+static uint64_t viewer_shelf_id;
+static uint64_t viewer_private_id;
+static skiff_romm_collection_list collections;
 static seeded_file payload;
 static seeded_file extra;
 static char ca_file[PATH_MAX_LENGTH];
@@ -69,6 +78,10 @@ static const char *required_env(const char *name) {
         exit(EXIT_FAILURE);
     }
     return value;
+}
+
+static uint64_t env_number(const char *name) {
+    return strtoull(required_env(name), NULL, DECIMAL_BASE);
 }
 
 static seeded_file seeded(const char *prefix) {
@@ -157,6 +170,85 @@ static void test_the_favourites_hold_the_seeded_favourite_with_its_file(void) {
     TEST_ASSERT_EQUAL_UINT64(payload.size, page.items[0].file.size);
     TEST_ASSERT_TRUE(page.items[0].file.has_crc32);
     TEST_ASSERT_EQUAL_HEX32(payload.crc32, page.items[0].file.crc32);
+}
+
+/* The listed collection with id and kind, or NULL. */
+static const skiff_romm_collection *listed(uint64_t id, int smart) {
+    for (size_t i = 0; i < collections.count; i++) {
+        if (collections.items[i].id == id && collections.items[i].smart == smart) {
+            return &collections.items[i];
+        }
+    }
+    return NULL;
+}
+
+static void test_a_token_with_collections_read_lists_every_visible_collection(void) {
+    skiff_romm_client reader;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_client_init(&reader, transport, TLS_SITE, collections_token));
+    const skiff_err err = skiff_romm_list_collections(&reader, &collections);
+    skiff_romm_client_clear(&reader);
+    TEST_PRINTF("collections: %s, %zu", skiff_err_name(err), collections.count);
+    for (size_t i = 0; i < collections.count; i++) {
+        TEST_PRINTF("  %llu%s '%s': %llu ROMs", (unsigned long long)collections.items[i].id,
+                    collections.items[i].smart ? " (smart)" : "", collections.items[i].name,
+                    (unsigned long long)collections.items[i].rom_count);
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_PRINTF("the admin's shelf, empty shelf and smart shelf, and the viewer's public shelf");
+    TEST_ASSERT_EQUAL_size_t(4, collections.count);
+    TEST_ASSERT_NOT_NULL(listed(shelf_id, 0));
+    TEST_ASSERT_EQUAL_UINT64(shelf_roms, listed(shelf_id, 0)->rom_count);
+    TEST_ASSERT_NOT_NULL(listed(empty_shelf_id, 0));
+    TEST_ASSERT_EQUAL_UINT64(0, listed(empty_shelf_id, 0)->rom_count);
+    TEST_ASSERT_NOT_NULL(listed(smart_shelf_id, 1));
+    TEST_ASSERT_EQUAL_UINT64(1, listed(smart_shelf_id, 1)->rom_count);
+    TEST_ASSERT_NOT_NULL(listed(viewer_shelf_id, 0));
+    TEST_PRINTF("not the viewer's private one, nor the admin's favourites");
+    TEST_ASSERT_NULL(listed(viewer_private_id, 0));
+    TEST_ASSERT_EQUAL_STRING("Skiff Shelf", listed(shelf_id, 0)->name);
+}
+
+static void test_a_token_without_collections_read_is_refused_the_collections(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_FORBIDDEN,
+                          skiff_romm_list_collections(&client, &collections));
+    TEST_ASSERT_EQUAL_size_t(0, collections.count);
+}
+
+/* The total of a collection's PSP games, as the first page of 25 gives it. */
+static uint64_t collection_total(uint64_t platform_id, skiff_romm_list_filter filter,
+                                 uint64_t collection_id) {
+    const skiff_romm_list_query query = {.platform_id = platform_id,
+                                         .filter = filter,
+                                         .collection_id = collection_id,
+                                         .with_files = 1};
+    static skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_list_roms(&client, &query, 0, SKIFF_ROMM_PAGE_SIZE, &page));
+    TEST_PRINTF("%s %llu: %zu of %llu%s%s",
+                filter == SKIFF_ROMM_LIST_SMART_COLLECTION ? "smart collection" : "collection",
+                (unsigned long long)collection_id, page.count, (unsigned long long)page.total,
+                page.count > 0 ? ", first " : "", page.count > 0 ? page.items[0].fs_name : "");
+    for (size_t i = 0; i < page.count; i++) {
+        TEST_ASSERT_TRUE(page.items[i].has_file);
+    }
+    return page.total;
+}
+
+static void test_a_collections_games_are_listed_with_roms_read_alone(void) {
+    skiff_romm_platform platform;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&client, PLATFORM_SLUG, &platform));
+    TEST_ASSERT_EQUAL_UINT64(shelf_roms,
+                             collection_total(platform.id, SKIFF_ROMM_LIST_COLLECTION, shelf_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        0, collection_total(platform.id, SKIFF_ROMM_LIST_COLLECTION, empty_shelf_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        1, collection_total(platform.id, SKIFF_ROMM_LIST_SMART_COLLECTION, smart_shelf_id));
+    TEST_ASSERT_EQUAL_UINT64(
+        1, collection_total(platform.id, SKIFF_ROMM_LIST_COLLECTION, viewer_shelf_id));
+    TEST_PRINTF("another user's private collection lists nothing (RomM 5.4 checks the owner)");
+    TEST_ASSERT_EQUAL_UINT64(
+        0, collection_total(platform.id, SKIFF_ROMM_LIST_COLLECTION, viewer_private_id));
 }
 
 static skiff_err count_body(void *ctx, const unsigned char *data, size_t size) {
@@ -249,6 +341,13 @@ static void test_a_wrong_token_is_refused_by_romm(void) {
 int main(void) {
     snprintf(ca_file, sizeof ca_file, "%s/ca.crt", required_env("SKIFF_IT_CERTS"));
     token = required_env("SKIFF_IT_TOKEN");
+    collections_token = required_env("SKIFF_IT_COLLECTIONS_TOKEN");
+    shelf_id = env_number("SKIFF_IT_SHELF_ID");
+    shelf_roms = env_number("SKIFF_IT_SHELF_ROMS");
+    empty_shelf_id = env_number("SKIFF_IT_EMPTY_SHELF_ID");
+    smart_shelf_id = env_number("SKIFF_IT_SMART_SHELF_ID");
+    viewer_shelf_id = env_number("SKIFF_IT_VIEWER_SHELF_ID");
+    viewer_private_id = env_number("SKIFF_IT_VIEWER_PRIVATE_ID");
     payload = seeded("");
     extra = seeded("EXTRA_");
     if (skiff_net_global_init() != SKIFF_OK) {
@@ -260,6 +359,9 @@ int main(void) {
     RUN_TEST(test_the_server_version_is_supported);
     RUN_TEST(test_every_rom_is_listed_page_by_page);
     RUN_TEST(test_the_favourites_hold_the_seeded_favourite_with_its_file);
+    RUN_TEST(test_a_token_with_collections_read_lists_every_visible_collection);
+    RUN_TEST(test_a_token_without_collections_read_is_refused_the_collections);
+    RUN_TEST(test_a_collections_games_are_listed_with_roms_read_alone);
     RUN_TEST(test_a_reserved_file_name_downloads_through_its_url);
     RUN_TEST(test_a_cover_comes_without_the_token_from_its_rom_details);
     RUN_TEST(test_a_wrong_token_is_refused_by_romm);

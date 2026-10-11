@@ -52,16 +52,64 @@ static const skiff_romm_rom_summary *rom_at(skiff_app *app, size_t index, const 
     return &page->page.items[at];
 }
 
+void app_current_list(const skiff_app *app, skiff_romm_list_filter *filter,
+                      uint64_t *collection_id) {
+    *collection_id = 0;
+    switch (app->source) {
+    case SOURCE_FAVOURITES:
+        *filter = SKIFF_ROMM_LIST_FAVOURITES;
+        return;
+    case SOURCE_COLLECTIONS:
+        *filter =
+            app->collection.smart ? SKIFF_ROMM_LIST_SMART_COLLECTION : SKIFF_ROMM_LIST_COLLECTION;
+        *collection_id = app->collection.id;
+        return;
+    case SOURCE_ALL:
+        break;
+    }
+    *filter = SKIFF_ROMM_LIST_ALL;
+}
+
+int app_games_listed(const skiff_app *app) {
+    return app->source != SOURCE_COLLECTIONS || app->collection_open;
+}
+
+void app_list_name(skiff_romm_list_filter filter, uint64_t collection_id, char *out, size_t size) {
+    switch (filter) {
+    case SKIFF_ROMM_LIST_FAVOURITES:
+        snprintf(out, size, "favourites");
+        return;
+    case SKIFF_ROMM_LIST_COLLECTION:
+    case SKIFF_ROMM_LIST_SMART_COLLECTION:
+        snprintf(out, size, "%scollection %llu",
+                 filter == SKIFF_ROMM_LIST_SMART_COLLECTION ? "smart " : "",
+                 (unsigned long long)collection_id);
+        return;
+    case SKIFF_ROMM_LIST_ALL:
+        break;
+    }
+    snprintf(out, size, "every game");
+}
+
+/* The running or finished call lists the games the library lists now. */
+static int call_for_listed_games(const skiff_app *app) {
+    skiff_romm_list_filter filter = SKIFF_ROMM_LIST_ALL;
+    uint64_t collection_id = 0;
+    app_current_list(app, &filter, &collection_id);
+    return app_games_listed(app) && app->call.filter == filter &&
+           app->call.collection_id == collection_id;
+}
+
 /* The page is on its way: a call for it runs, and its result will be kept. */
 static int page_loading(const skiff_app *app, uint64_t index) {
     return app->call.kind == CALL_PAGE && !app->call.abandoned && app->call.page_index == index &&
-           app->call.favourites == app->favourites;
+           call_for_listed_games(app);
 }
 
 /* Asks for the first page, or the page of a row on screen that is not loaded, unless it is on its
- * way; 0 when every row is loaded. */
+ * way; 0 when every row is loaded (or the library lists no games: the collections). */
 static int request_missing_page(skiff_app *app) {
-    if (!app->has_platform) {
+    if (!app->has_platform || !app_games_listed(app)) {
         return 0;
     }
     if (!app->total_known) {
@@ -88,6 +136,9 @@ static int request_missing_page(skiff_app *app) {
 
 void app_library_open(skiff_app *app) {
     app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
+    if (app->has_platform && !app_games_listed(app)) {
+        app_collections_request(app);
+    }
     (void)request_missing_page(app);
 }
 
@@ -96,14 +147,16 @@ void app_library_refresh_markers(skiff_app *app) { app->dirty = 1; }
 void app_page_done(skiff_app *app) {
     const app_call *call = &app->call;
     const skiff_err err = call->err;
+    char list[APP_LIST_NAME_MAX];
+    app_list_name(call->filter, call->collection_id, list, sizeof list);
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_ERROR,
-                    SKIFF_APP_LOG_TAG, "page %llu%s: %zu of %llu: %s (%d)",
-                    (unsigned long long)call->page_index, call->favourites ? " (favourites)" : "",
+                    SKIFF_APP_LOG_TAG, "page %llu of %s: %zu of %llu: %s (%d)",
+                    (unsigned long long)call->page_index, list,
                     err == SKIFF_OK ? call->page.count : 0,
                     (unsigned long long)(err == SKIFF_OK ? call->page.total : 0),
                     skiff_err_name(err), (int)err);
     /* A page of the list the player switched away from: dropped, the other list loads next. */
-    if (call->favourites != app->favourites) {
+    if (!call_for_listed_games(app)) {
         app_network_failed(app, err);
         return;
     }
@@ -245,8 +298,14 @@ void app_request_run(skiff_app *app) {
         app_connect_begin(app, CONNECT_NETWORK);
         return;
     }
-    /* Asked for while another page loaded: the player may have scrolled on since. */
-    if (request == REQUEST_PAGE && app->total_known && !request_missing_page(app)) {
+    if (request == REQUEST_COLLECTIONS) {
+        app_collections_run(app);
+        return;
+    }
+    /* Asked for while another page loaded: the player may have scrolled on since, or left the
+     * games for the collections. */
+    if (request == REQUEST_PAGE &&
+        (!app_games_listed(app) || (app->total_known && !request_missing_page(app)))) {
         return;
     }
     if (app->request == REQUEST_PAGE) {
@@ -254,7 +313,7 @@ void app_request_run(skiff_app *app) {
     }
     if (request == REQUEST_PAGE) {
         app->call.platform_id = app->platform.id;
-        app->call.favourites = app->favourites;
+        app_current_list(app, &app->call.filter, &app->call.collection_id);
         app->call.with_files = 0;
         app->call.page_index = app->request_page;
         app_call_start(app, CALL_PAGE);
@@ -317,25 +376,75 @@ void app_rom_detail(skiff_app *app, const skiff_romm_rom_summary *rom, char *out
 
 /* ---- The library screen ---- */
 
-/* Every game or the favourites: the other list starts from its first page, at its top. A page
- * still loading for the list left behind finishes and is dropped (app_page_done()), rather than
- * cancelled with its connection. */
-static void switch_list(skiff_app *app) {
-    app->favourites = !app->favourites;
+/* The games listed go: the next list starts from its first page, at its top. A page still loading
+ * for the list left behind finishes and is dropped (app_page_done()), rather than cancelled with
+ * its connection. */
+static void forget_games(skiff_app *app) {
     memset(app->pages, 0, sizeof app->pages);
     app->total = 0;
     app->total_known = 0;
     skiff_ui_list_init(&app->library, 0, APP_LIBRARY_ROWS);
-    if (app->request == REQUEST_PAGE) {
+    if (app->request == REQUEST_PAGE || app->request == REQUEST_COLLECTIONS) {
         app->request = REQUEST_NONE;
     }
-    if (app->failed_request == REQUEST_PAGE) {
+    if (app->failed_request == REQUEST_PAGE || app->failed_request == REQUEST_COLLECTIONS) {
         app->failed_request = REQUEST_NONE;
     }
     app->dirty = 1;
+}
+
+static void log_list(skiff_app *app) {
+    char list[APP_LIST_NAME_MAX];
+    skiff_romm_list_filter filter = SKIFF_ROMM_LIST_ALL;
+    uint64_t collection_id = 0;
+    app_current_list(app, &filter, &collection_id);
+    app_list_name(filter, collection_id, list, sizeof list);
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG, "library: %s",
-                    app->favourites ? "favourites" : "every game");
+                    app_games_listed(app) ? list : "collections");
+}
+
+/* SELECT, or Back from the collections: the library lists source, from its start. */
+static void show_source(skiff_app *app, app_source source) {
+    app->source = source;
+    app->collection_open = 0;
+    forget_games(app);
+    if (source == SOURCE_COLLECTIONS) {
+        app_collections_enter(app);
+    }
+    log_list(app);
     (void)request_missing_page(app);
+}
+
+static app_source next_source(app_source source) {
+    switch (source) {
+    case SOURCE_ALL:
+        return SOURCE_FAVOURITES;
+    case SOURCE_FAVOURITES:
+        return SOURCE_COLLECTIONS;
+    case SOURCE_COLLECTIONS:
+        break;
+    }
+    return SOURCE_ALL;
+}
+
+/* The collection selected in the collections list: its games, from their first page. */
+static void open_collection(skiff_app *app) {
+    app->collection = app->collections.items[app->collections_list.selected];
+    app->collection_open = 1;
+    forget_games(app);
+    log_list(app);
+    (void)request_missing_page(app);
+}
+
+/* Back from a collection's games: the collections list, at the row it was opened from. */
+static void close_collection(skiff_app *app) {
+    app->collection_open = 0;
+    forget_games(app);
+    log_list(app);
+}
+
+int app_batch_offered(const skiff_app *app) {
+    return app->source != SOURCE_ALL && app_games_listed(app) && app->total_known && app->total > 0;
 }
 
 void app_library_update(skiff_app *app, unsigned actions) {
@@ -350,13 +459,22 @@ void app_library_update(skiff_app *app, unsigned actions) {
         }
         return;
     }
-    if ((actions & SKIFF_UI_ACTION_START) && app->favourites && app->total_known &&
-        app->total > 0) {
+    if ((actions & SKIFF_UI_ACTION_START) && app_batch_offered(app)) {
         app_batch_start(app);
         return;
     }
     if ((actions & SKIFF_UI_ACTION_SELECT) && app->has_platform) {
-        switch_list(app);
+        show_source(app, next_source(app->source));
+        return;
+    }
+    /* Back walks out of the collections: from a collection's games to the list, from the list on
+     * to every game, as SELECT does. */
+    if ((actions & SKIFF_UI_ACTION_BACK) && app->source == SOURCE_COLLECTIONS) {
+        if (app->collection_open) {
+            close_collection(app);
+        } else {
+            show_source(app, SOURCE_ALL);
+        }
         return;
     }
     if (actions & SKIFF_UI_ACTION_EXTRA) {
@@ -366,6 +484,12 @@ void app_library_update(skiff_app *app, unsigned actions) {
     }
     if (actions & SKIFF_UI_ACTION_MENU) {
         app_set_screen(app, SKIFF_APP_SCREEN_SETTINGS);
+        return;
+    }
+    if (!app_games_listed(app)) {
+        if (app_collections_update(app, actions)) {
+            open_collection(app);
+        }
         return;
     }
     if (skiff_ui_list_apply(&app->library, actions)) {

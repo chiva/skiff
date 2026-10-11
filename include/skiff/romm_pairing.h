@@ -73,6 +73,9 @@ typedef struct skiff_romm_pairing_result {
     /* Set only when approved. The token is a secret: wiped by skiff_romm_pairing_clear(). */
     char token[SKIFF_CONFIG_TOKEN_MAX];
     char device_id[SKIFF_CONFIG_DEVICE_ID_MAX];
+    /* What RomM granted, comma-separated in the order Skiff asks: the two browsing scopes always,
+     * then whichever optional ones the player left ticked (config.ini's [auth] scopes). */
+    char scopes[SKIFF_CONFIG_SCOPES_MAX];
 } skiff_romm_pairing_result;
 
 /*
@@ -88,11 +91,13 @@ skiff_err skiff_romm_device_identifier(const unsigned char *random, size_t size,
 /*
  * Starts a pairing as device_identifier (from skiff_romm_device_identifier() or config.ini),
  * telling RomM Skiff's name, the platform and skiff_version_string(), and asking for the scopes
- * Skiff needs. SKIFF_OK fills out; otherwise out is empty and the result is the transport's error,
- * the RomM error for the HTTP status (skiff_http_status_error()), SKIFF_ERR_ROMM_BAD_RESPONSE for
- * an answer that is not a pairing (codes missing, too long or with blanks, a verification path that
- * is not a path on the server, an interval or lifetime out of range), or SKIFF_ERR_INVALID_ARG for
- * a NULL argument or a device_identifier that is empty, too long or has blanks.
+ * Skiff needs (platforms.read and roms.read) and those its optional features use (assets.read,
+ * assets.write, devices.read, devices.write for save sync; collections.read). SKIFF_OK fills out;
+ * otherwise out is empty and the result is the transport's error, the RomM error for the HTTP
+ * status (skiff_http_status_error()), SKIFF_ERR_ROMM_BAD_RESPONSE for an answer that is not a
+ * pairing (codes missing, too long or with blanks, a verification path that is not a path on the
+ * server, an interval or lifetime out of range), or SKIFF_ERR_INVALID_ARG for a NULL argument or a
+ * device_identifier that is empty, too long or has blanks.
  */
 skiff_err skiff_romm_pairing_start(skiff_romm_client *client, const char *device_identifier,
                                    skiff_romm_pairing *out);
@@ -100,12 +105,13 @@ skiff_err skiff_romm_pairing_start(skiff_romm_client *client, const char *device
 /*
  * Asks once whether the pairing was approved. SKIFF_OK with result->state PENDING, SLOW_DOWN (and
  * pairing->interval_s grown by SKIFF_ROMM_PAIRING_SLOW_DOWN_S; a 429 counts as one) or APPROVED
- * (the token and RomM's device id in result). Otherwise result is empty and the error says why the
- * pairing is over:
+ * (the token, RomM's device id and the granted scopes in result). Otherwise result is empty and the
+ * error says why the pairing is over:
  *   - SKIFF_ERR_ROMM_PAIRING_DENIED (207): the player refused it in RomM;
  *   - SKIFF_ERR_ROMM_PAIRING_EXPIRED (208): its code expired or was already used;
  *   - SKIFF_ERR_ROMM_PAIRING_SCOPES (209): approved without reading platforms and ROMs, so the
- *     token could neither browse nor download and is not kept;
+ *     token could neither browse nor download and is not kept (an optional scope left out is
+ *     fine);
  *   - the transport's error, or the RomM error for another HTTP status;
  *   - SKIFF_ERR_ROMM_BAD_RESPONSE: an answer that is neither (an unknown "detail", a token too long
  *     or with blanks, no list of scopes, or a scope Skiff did not ask for);
@@ -115,7 +121,7 @@ skiff_err skiff_romm_pairing_poll(skiff_romm_client *client, skiff_romm_pairing 
                                   skiff_romm_pairing_result *result);
 
 /*
- * Writes config.ini's text with the approved pairing in [auth]: token, device_id and
+ * Writes config.ini's text with the approved pairing in [auth]: token, device_id, scopes and
  * device_identifier, each through skiff_config_set() (so the rest of the file stays as it was, and
  * the result parses back). out_size should be SKIFF_CONFIG_TEXT_MAX + 1. Returns
  * skiff_config_set()'s errors with issue filled, SKIFF_ERR_NO_MEMORY, or SKIFF_ERR_INVALID_ARG for

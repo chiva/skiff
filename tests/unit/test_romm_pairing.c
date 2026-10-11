@@ -34,6 +34,10 @@
 #define RAW_MAX 1024
 /* The scopes RomM grants when the approver keeps what Skiff asked for. */
 #define SCOPES "\"scopes\":[\"platforms.read\",\"roms.read\"]"
+/* config.ini's list when RomM grants everything Skiff asks for (the recorded approval). */
+#define ALL_SCOPES                                                                                 \
+    "platforms.read,roms.read,assets.read,assets.write,devices.read,devices.write,collections."    \
+    "read"
 #define TEXT_BUFFER (SKIFF_CONFIG_TEXT_MAX + 1)
 
 static fake_transport fake;
@@ -126,7 +130,8 @@ static void test_start_asks_for_skiffs_scopes_and_shows_the_code(void) {
     snprintf(expected, sizeof expected,
              "{\"client_device_identifier\":\"" IDENTIFIER "\",\"name\":\"Skiff on PSP\","
              "\"client\":\"skiff\",\"platform\":\"psp\",\"client_version\":\"%s\","
-             "\"requested_scopes\":[\"platforms.read\",\"roms.read\"]}",
+             "\"requested_scopes\":[\"platforms.read\",\"roms.read\",\"assets.read\","
+             "\"assets.write\",\"devices.read\",\"devices.write\",\"collections.read\"]}",
              skiff_version_string());
     TEST_ASSERT_EQUAL_STRING(expected, sent->body);
 }
@@ -240,6 +245,8 @@ static void test_pending_then_slow_down_then_approved(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
     TEST_ASSERT_EQUAL_STRING(TOKEN, result.token);
     TEST_ASSERT_EQUAL_STRING(DEVICE_ID, result.device_id);
+    TEST_PRINTF("the recorded approval granted every scope Skiff asks for");
+    TEST_ASSERT_EQUAL_STRING(ALL_SCOPES, result.scopes);
 
     TEST_ASSERT_EQUAL_STRING("{\"device_code\":\"" DEVICE_CODE "\"}", fake.log[1].body);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("", fake.log[1].headers, "polling sends no token");
@@ -348,25 +355,53 @@ static void test_a_token_that_cannot_browse_or_download_is_not_kept(void) {
 }
 
 static void test_a_token_with_scopes_skiff_did_not_ask_for_is_not_kept(void) {
-    start_recorded();
-    serve_token_with_scopes("[\"platforms.read\",\"roms.read\",\"roms.write\"]");
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, poll());
-    TEST_ASSERT_EQUAL_STRING("", result.token);
+    static const char *const CASES[] = {
+        "[\"platforms.read\",\"roms.read\",\"roms.write\"]",
+        "[\"platforms.read\",\"roms.read\",\"collections.write\"]",
+        "[\"platforms.read\",\"roms.read\",\"assets.read\",\"users.read\"]",
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        skiff_transport_destroy(&fake.base);
+        fake_transport_init(&fake);
+        start_recorded();
+        TEST_PRINTF("granted %s: more than Skiff asked for", CASES[i]);
+        serve_token_with_scopes(CASES[i]);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, poll());
+        TEST_ASSERT_EQUAL_STRING("", result.token);
+        TEST_ASSERT_EQUAL_STRING("", result.scopes);
+    }
 }
 
-static void test_the_save_sync_scopes_are_not_kept_before_save_sync_asks_for_them(void) {
+static void test_a_token_without_the_optional_scopes_is_kept_and_says_so(void) {
     start_recorded();
-    TEST_PRINTF("a server that grants devices.* or assets.* unasked gets its token refused");
-    serve_token_with_scopes("[\"platforms.read\",\"roms.read\",\"devices.write\"]");
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, poll());
-    TEST_ASSERT_EQUAL_STRING("", result.token);
-}
-
-static void test_the_granted_scopes_may_come_in_any_order(void) {
-    start_recorded();
-    serve_token_with_scopes("[\"roms.read\",\"platforms.read\"]");
+    TEST_PRINTF("the approver unticked save sync and collections: browsing still works");
+    serve_token_with_scopes("[\"platforms.read\",\"roms.read\"]");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, poll());
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
+    TEST_ASSERT_EQUAL_STRING("platforms.read,roms.read", result.scopes);
+}
+
+static void test_every_scope_granted_is_listed_in_skiffs_order(void) {
+    start_recorded();
+    TEST_PRINTF("RomM's order and a repeated scope do not change the list");
+    serve_token_with_scopes(
+        "[\"collections.read\",\"devices.write\",\"roms.read\",\"assets.write\","
+        "\"devices.read\",\"platforms.read\",\"assets.read\",\"roms.read\"]");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, poll());
+    TEST_PRINTF("scopes: %s (%zu of %d bytes)", result.scopes, strlen(result.scopes),
+                SKIFF_CONFIG_SCOPES_MAX);
+    TEST_ASSERT_EQUAL_STRING(ALL_SCOPES, result.scopes);
+}
+
+static void test_some_optional_scopes_may_be_left_out(void) {
+    start_recorded();
+    TEST_PRINTF("save sync kept, collections unticked");
+    serve_token_with_scopes("[\"roms.read\",\"platforms.read\",\"assets.read\",\"assets.write\","
+                            "\"devices.read\",\"devices.write\"]");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, poll());
+    TEST_ASSERT_EQUAL_STRING(
+        "platforms.read,roms.read,assets.read,assets.write,devices.read,devices.write",
+        result.scopes);
 }
 
 static void test_a_token_without_a_list_of_scopes_is_refused(void) {
@@ -449,6 +484,7 @@ static void approved(void) {
     result.state = SKIFF_ROMM_PAIRING_APPROVED;
     snprintf(result.token, sizeof result.token, "%s", TOKEN);
     snprintf(result.device_id, sizeof result.device_id, "%s", DEVICE_ID);
+    snprintf(result.scopes, sizeof result.scopes, "%s", "platforms.read,roms.read,assets.read");
 }
 
 static void test_the_pairing_lands_in_config_ini_and_parses_back(void) {
@@ -464,14 +500,31 @@ static void test_the_pairing_lands_in_config_ini_and_parses_back(void) {
     TEST_ASSERT_EQUAL_size_t(strlen(out), length);
     TEST_ASSERT_EQUAL_STRING("# my PSP\n[server]\nurl = https://romm.test:8443\n\n[auth]\n"
                              "token = " TOKEN "\ndevice_identifier = " IDENTIFIER
-                             "\ndevice_id = " DEVICE_ID "\n",
+                             "\ndevice_id = " DEVICE_ID
+                             "\nscopes = platforms.read,roms.read,assets.read\n",
                              out);
     skiff_config config;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_config_parse(out, length, &config, NULL));
     TEST_ASSERT_EQUAL_STRING(TOKEN, config.token);
     TEST_ASSERT_EQUAL_STRING(IDENTIFIER, config.device_identifier);
     TEST_ASSERT_EQUAL_STRING(DEVICE_ID, config.device_id);
+    TEST_ASSERT_EQUAL_STRING("platforms.read,roms.read,assets.read", config.scopes);
     TEST_ASSERT_EQUAL_STRING("https://romm.test:8443", config.server_url);
+}
+
+static void test_pairing_again_replaces_the_old_scopes(void) {
+    static const char TEXT[] = "[auth]\ntoken = rmm_old\nscopes = platforms.read,roms.read\n";
+    static char out[TEXT_BUFFER];
+    size_t length = 0;
+    approved();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_pairing_config_text(TEXT, sizeof TEXT - 1, IDENTIFIER, &result,
+                                                         out, sizeof out, &length, NULL));
+    TEST_PRINTF("config.ini after pairing again:\n%s", out);
+    TEST_ASSERT_EQUAL_STRING("[auth]\ntoken = " TOKEN
+                             "\nscopes = platforms.read,roms.read,assets.read\n"
+                             "device_identifier = " IDENTIFIER "\ndevice_id = " DEVICE_ID "\n",
+                             out);
 }
 
 static void test_saving_refuses_a_pairing_that_is_not_approved_or_does_not_fit(void) {
@@ -525,8 +578,9 @@ int main(void) {
     RUN_TEST(test_a_token_too_long_for_config_is_refused);
     RUN_TEST(test_a_token_that_cannot_browse_or_download_is_not_kept);
     RUN_TEST(test_a_token_with_scopes_skiff_did_not_ask_for_is_not_kept);
-    RUN_TEST(test_the_save_sync_scopes_are_not_kept_before_save_sync_asks_for_them);
-    RUN_TEST(test_the_granted_scopes_may_come_in_any_order);
+    RUN_TEST(test_a_token_without_the_optional_scopes_is_kept_and_says_so);
+    RUN_TEST(test_every_scope_granted_is_listed_in_skiffs_order);
+    RUN_TEST(test_some_optional_scopes_may_be_left_out);
     RUN_TEST(test_a_token_without_a_list_of_scopes_is_refused);
     RUN_TEST(test_a_long_secret_answer_grows_its_buffer_and_is_refused);
     RUN_TEST(test_wiping_a_tree_clears_every_string_in_place);
@@ -534,6 +588,7 @@ int main(void) {
     RUN_TEST(test_poll_needs_a_started_pairing);
     RUN_TEST(test_clear_wipes_the_secrets);
     RUN_TEST(test_the_pairing_lands_in_config_ini_and_parses_back);
+    RUN_TEST(test_pairing_again_replaces_the_old_scopes);
     RUN_TEST(test_saving_refuses_a_pairing_that_is_not_approved_or_does_not_fit);
     return UNITY_END();
 }

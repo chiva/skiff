@@ -364,6 +364,23 @@ static void test_the_pairing_keys_parse_and_refuse_blanks(void) {
     assert_refused(text, SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth", "device_id");
 }
 
+static void test_the_granted_scopes_parse_and_refuse_blanks(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[auth]\ntoken = rmm_x\n"));
+    TEST_PRINTF("a token without scopes (pasted, or paired by an older Skiff): empty");
+    TEST_ASSERT_EQUAL_STRING("", config.scopes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          parse("[auth]\nscopes = platforms.read,roms.read,assets.read\n"));
+    TEST_ASSERT_EQUAL_STRING("platforms.read,roms.read,assets.read", config.scopes);
+    assert_refused("[auth]\nscopes = roms.read, assets.read\n", SKIFF_ERR_CONFIG_INVALID_VALUE, 2,
+                   "auth", "scopes");
+    char text[SKIFF_CONFIG_SCOPES_MAX + 32];
+    snprintf(text, sizeof text, "[auth]\nscopes = ");
+    const size_t start = strlen(text);
+    memset(text + start, 's', SKIFF_CONFIG_SCOPES_MAX);
+    text[start + SKIFF_CONFIG_SCOPES_MAX] = '\0';
+    assert_refused(text, SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "auth", "scopes");
+}
+
 static void test_file_names_must_stay_in_the_skiff_folder(void) {
     const char *refused[] = {"certs/ca.pem", "..\\ca.pem", "ms0:/ca.pem", "..", "."};
     for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
@@ -848,6 +865,7 @@ int main(void) {
     RUN_TEST(test_values_at_their_limit_pass_and_one_more_is_refused);
     RUN_TEST(test_tokens_with_blanks_or_controls_are_refused);
     RUN_TEST(test_the_pairing_keys_parse_and_refuse_blanks);
+    RUN_TEST(test_the_granted_scopes_parse_and_refuse_blanks);
     RUN_TEST(test_file_names_must_stay_in_the_skiff_folder);
     RUN_TEST(test_a_client_certificate_needs_its_key);
     RUN_TEST(test_newer_schema_versions_are_refused);

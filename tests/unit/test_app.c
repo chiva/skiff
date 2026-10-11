@@ -519,7 +519,8 @@ static const char *english(skiff_text_id id) { return skiff_text(SKIFF_LANGUAGE_
 static void open_paired_library(unsigned total) {
     write_config(
         "[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN
-        "\ndevice_identifier = 00112233445566778899aabbccddeeff\n[network]\nprofile = 1\n");
+        "\ndevice_identifier = 00112233445566778899aabbccddeeff\nscopes = platforms.read,roms.read,"
+        "assets.read\n[network]\nprofile = 1\n");
     serve_library(total);
     create_app();
     run_until(SKIFF_APP_SCREEN_LIBRARY);
@@ -702,6 +703,7 @@ static void test_a_first_launch_asks_for_the_server_then_pairs(void) {
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
     TEST_ASSERT_NOT_NULL(strstr(config, "token = " PAIRED_TOKEN));
     TEST_ASSERT_NOT_NULL(strstr(config, "device_id = 00000000-0000-4000-8000-000000000001"));
+    TEST_ASSERT_NOT_NULL(strstr(config, "scopes = platforms.read,roms.read,assets.read"));
     TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
     TEST_ASSERT_EQUAL_STRING("Game 1", view()->rows[0].label);
     TEST_PRINTF("the worker runs with the new token and the picked connection");
@@ -1777,6 +1779,7 @@ static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
     TEST_PRINTF("config.ini:\n%s", config);
     TEST_ASSERT_NOT_NULL(strstr(config, "url = https://other.test"));
     TEST_ASSERT_NULL(strstr(config, TOKEN));
+    TEST_ASSERT_NULL_MESSAGE(strstr(config, "assets.read"), "the old token's scopes go with it");
     TEST_ASSERT_NOT_NULL(strstr(config, "device_identifier = 00112233445566778899aabbccddeeff"));
     TEST_ASSERT_TRUE(shows("https://other.test/pair/device"));
     TEST_ASSERT_TRUE(shows("?user_code=" USER_CODE));

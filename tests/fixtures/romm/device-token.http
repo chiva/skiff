@@ -1,8 +1,8 @@
 HTTP/1.1 200 OK
-Content-Length: 196
+Content-Length: 275
 Content-Type: application/json
 Server: nginx/1.30.5
 Vary: Origin
 Via: 1.1 Caddy
 
-{"access_token":"rmm_synthetic_pairing_token_rmm_synthetic_pairing_token_rmm_syntheti","device_id":"00000000-0000-4000-8000-000000000001","scopes":["platforms.read","roms.read"],"expires_at":null}
+{"access_token":"rmm_synthetic_pairing_token_rmm_synthetic_pairing_token_rmm_syntheti","device_id":"00000000-0000-4000-8000-000000000001","scopes":["assets.read","assets.write","collections.read","devices.read","devices.write","platforms.read","roms.read"],"expires_at":null}

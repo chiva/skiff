@@ -40,6 +40,8 @@ typedef struct transfer {
     const skiff_http_request *request;
     skiff_http_response *response;
     skiff_err callback_error;
+    /* Bytes of a streamed body handed to curl so far. */
+    size_t body_sent;
 } transfer;
 
 skiff_err skiff_net_global_init(void) {
@@ -90,6 +92,23 @@ static size_t on_body(char *buffer, size_t size, size_t count, void *userdata) {
     }
     current->response->body_bytes += length;
     return length;
+}
+
+/* curl asks for a streamed body (read_body) here, never for more than CURLOPT_POSTFIELDSIZE_LARGE
+ * leaves; a body sent whole comes from CURLOPT_POSTFIELDS instead and never reaches it. */
+static size_t on_read(char *buffer, size_t size, size_t count, void *userdata) {
+    transfer *current = userdata;
+    if (current == NULL || current->request->read_body == NULL) {
+        return CURL_READFUNC_ABORT;
+    }
+    size_t got = 0;
+    const skiff_err err = skiff_http_read_body(current->request, &current->body_sent,
+                                               (unsigned char *)buffer, size * count, &got);
+    if (err != SKIFF_OK) {
+        current->callback_error = err;
+        return CURL_READFUNC_ABORT; /* curl stops with CURLE_ABORTED_BY_CALLBACK */
+    }
+    return got;
 }
 
 /* curl calls this about once a second, and after every chunk, whether or not bytes arrive. */
@@ -191,16 +210,20 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
 }
 
 /* The handle is reused, so every request sets its method: a GET after a POST must not resend the
- * body. curl reads the body from request->body during the transfer and copies nothing. */
+ * body. curl reads a body sent whole from request->body during the transfer and copies nothing;
+ * with no CURLOPT_POSTFIELDS it asks on_read() for a streamed one instead. Either way the size is
+ * set, so curl sends Content-Length and never chunks. */
 static int set_method(CURL *curl, const skiff_http_request *request) {
     if (request->method == SKIFF_HTTP_GET) {
         return curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) == CURLE_OK;
     }
+    const char *fields = request->read_body != NULL ? NULL
+                         : request->body != NULL    ? request->body
+                                                    : "";
     return curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)request->body_size) ==
                CURLE_OK &&
-           curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body != NULL ? request->body : "") ==
-               CURLE_OK;
+           curl_easy_setopt(curl, CURLOPT_POSTFIELDS, fields) == CURLE_OK;
 }
 
 /* The host and port (the scheme's default when the URL names none) of url. */
@@ -267,7 +290,7 @@ static skiff_err pin_address(curl_transport *transport, const char *url) {
 static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *request,
                               skiff_http_response *response) {
     curl_transport *transport = (curl_transport *)base;
-    transfer current = {transport->curl, request, response, SKIFF_OK};
+    transfer current = {transport->curl, request, response, SKIFF_OK, 0};
     skiff_err err = pin_address(transport, request->url);
     if (err != SKIFF_OK) {
         return err;
@@ -283,6 +306,7 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
         curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, &current) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, &current) != CURLE_OK ||
+        curl_easy_setopt(transport->curl, CURLOPT_READDATA, &current) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_XFERINFODATA, &current) != CURLE_OK) {
         code = CURLE_OUT_OF_MEMORY;
     } else {
@@ -300,6 +324,7 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, NULL);
+    curl_easy_setopt(transport->curl, CURLOPT_READDATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_XFERINFODATA, NULL);
     curl_easy_setopt(transport->curl, CURLOPT_POSTFIELDS, NULL);
     curl_slist_free_all(headers);
@@ -340,6 +365,7 @@ static int configure(curl_transport *transport, const skiff_curl_config *config)
            curl_easy_setopt(curl, CURLOPT_TIMEOUT, config->total_timeout_s) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body) == CURLE_OK &&
+           curl_easy_setopt(curl, CURLOPT_READFUNCTION, on_read) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, on_progress) == CURLE_OK &&
            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
            set_optional_string(curl, CURLOPT_CAINFO, config->ca_file) &&

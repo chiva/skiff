@@ -49,6 +49,10 @@ skiff_err skiff_net_error_from_curl(const skiff_net_failure *failure) {
         return untrusted_or_clock(failure);
     case CURLE_SSL_CERTPROBLEM:
         return SKIFF_ERR_NET_TLS_CLIENT_CERT;
+    case CURLE_SEND_FAIL_REWIND:
+        /* A kept-alive connection died under a streamed body, which curl cannot send again on a
+         * new one: the caller retries the request. */
+        return SKIFF_ERR_NET_CONNECTION_LOST;
     case CURLE_SSL_CONNECT_ERROR:
     case CURLE_RECV_ERROR:
     case CURLE_SEND_ERROR:

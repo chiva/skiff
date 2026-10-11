@@ -720,8 +720,9 @@ release would have had a meaningful life. The image is built from source in ever
 than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
 excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
-The `transport` interface (`include/skiff/transport.h`) takes a method (GET, or POST with a small
-body sent whole, for pairing), a URL, headers, `Range`/`If-Range` (GET only) and a body callback, and fills a small response record: status, ETag, Content-Length and
+The `transport` interface (`include/skiff/transport.h`) takes a method (GET, or POST with a body
+sent whole from memory, for RomM's JSON calls, or streamed from a reader callback, for a save's
+upload), a URL, headers, `Range`/`If-Range` (GET only) and a body callback, and fills a small response record: status, ETag, Content-Length and
 Content-Range, read by one header parser shared with the fake transport, plus the TLS version and
 cipher suite of the connection, for logs. Custom headers from
 `config.ini` are sent on every request and may not contain line breaks. Only URLs with an
@@ -734,6 +735,14 @@ stop hook, asked about once a second even while no bytes arrive, so the caller c
 soon as it knows the network is gone (Wi-Fi switch off, suspend) or the player cancels, instead of
 waiting out the stall timeout.
 
+A streamed body (`read_body`) has its exact size up front: curl sends it with `Content-Length`,
+never chunked (a PSP saves a few bytes and RomM sees the size before the body), and like every POST
+never with `Expect: 100-continue`, which would cost a round trip. The reader must give exactly that
+many bytes, checked by `skiff_http_read_body()` for both transports: a file that shrank or grew
+since its size was taken fails the request (1) instead of sending a body the server would store
+cut. A streamed body is read once, so curl cannot resend it when a kept-alive connection turns out
+dead under it; that request fails as a lost connection (111) and the caller retries it.
+
 Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
 `tests/unit/test_net_errors.c` and checked against Caddy by the integration tests):
 
@@ -744,7 +753,8 @@ Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
 | Server certificate rejected, clock plausible / clock before `SKIFF_TLS_CLOCK_FLOOR` | 105 / 108 |
 | Server closed the connection right after the handshake (how a TLS 1.3 server refuses a missing or unaccepted client certificate); client certificate unreadable | 106 |
 | Connection broke after the response started, without TLS, or on a connection kept from an earlier request | 111 |
-| The body callback or the stop hook stopped the transfer (e.g. Memory Stick full, Wi-Fi switch off) | the callback's code |
+| A kept-alive connection died under a streamed body, which curl cannot resend | 111 |
+| The body callback, the body reader or the stop hook stopped the transfer (e.g. Memory Stick full or unreadable, Wi-Fi switch off) | the callback's code |
 | Bad server address or unreadable CA file | 402 |
 
 An HTTP response is not a network failure: callers map its status with `skiff_http_status_error()`

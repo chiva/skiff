@@ -13,8 +13,12 @@
  *
  * Range requests are answered the way RomM's server does, from the recorded 200 body: a matching
  * If-Range gives 206 with Content-Range, a stale one the whole body with 200, an offset
- * at or past the end 416. The request's stop hook is asked before the response and before each
- * body chunk, as the curl transport asks it.
+ * at or past the end 416. The request's stop hook is asked before each chunk of a streamed request
+ * body, before the response and before each response body chunk, as the curl transport asks it.
+ *
+ * A streamed request body (read_body) is read the way curl reads it, through skiff_http_read_body()
+ * in chunks of FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES, so a reader that breaks its contract fails here
+ * too; a route can cut the upload part way, as a Wi-Fi drop does.
  *
  * Several routes may serve one path, for a client that polls: the first route whose path and
  * method match and that has uses left answers, so a route limited to one use followed by another
@@ -30,11 +34,14 @@
 #define FAKE_TRANSPORT_MAX_LOG 16
 #define FAKE_TRANSPORT_URL_MAX 256
 #define FAKE_TRANSPORT_HEADERS_MAX 512
-/* Request body bytes kept in the log (more are counted in body_size only). */
+/* Request body bytes kept in the log (more are counted and hashed only). */
 #define FAKE_TRANSPORT_BODY_MAX 512
 #define FAKE_TRANSPORT_CONTENT_TYPE_MAX 64
 /* Body bytes per call to the body callback, so a test sees more than one chunk. */
 #define FAKE_TRANSPORT_CHUNK_BYTES 1024
+/* What the fake asks a body reader for at a time: not a power of two, so a reader's own buffer
+ * boundaries fall inside a chunk. */
+#define FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES 1000
 
 typedef struct fake_route {
     /* Matched against the URL after the scheme and host: path and query. */
@@ -47,6 +54,11 @@ typedef struct fake_route {
      * fail_after_bytes body bytes, or the whole body if shorter; SKIFF_OK for none. */
     uint64_t fail_after_bytes;
     skiff_err fail_mid_body;
+    /* Stop reading a streamed request body with fail_mid_upload (e.g.
+     * SKIFF_ERR_NET_CONNECTION_LOST) once fail_after_upload_bytes of it are read, before any
+     * response; never when the body is shorter. SKIFF_OK for none. */
+    uint64_t fail_after_upload_bytes;
+    skiff_err fail_mid_upload;
     /* Replaces the recorded ETag: the file changed on the server since it was recorded. */
     const char *current_etag;
     /* Answers a Range request with the whole body (200) even when If-Range matches, as a server
@@ -69,10 +81,14 @@ typedef struct fake_request {
     char if_range[SKIFF_HTTP_ETAG_MAX];
     /* "Name: value\n" for every request header, in order. */
     char headers[FAKE_TRANSPORT_HEADERS_MAX];
-    /* The request body, NUL-terminated (cut at FAKE_TRANSPORT_BODY_MAX - 1), its size, and its
-     * Content-Type. */
+    /* The request body as it arrived, sent whole or streamed: its first bytes, NUL-terminated (cut
+     * at FAKE_TRANSPORT_BODY_MAX - 1), how many bytes arrived and their CRC-32 (zlib's), the size
+     * the request announced, whether it was streamed, and its Content-Type. */
     char body[FAKE_TRANSPORT_BODY_MAX];
+    size_t body_received;
+    uint32_t body_crc32;
     size_t body_size;
+    int body_streamed;
     char content_type[FAKE_TRANSPORT_CONTENT_TYPE_MAX];
 } fake_request;
 

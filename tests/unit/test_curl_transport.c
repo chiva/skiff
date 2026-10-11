@@ -257,6 +257,200 @@ static void test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_n
     TEST_ASSERT_NULL(strstr(server.requests[1], "device_code"));
 }
 
+/* A streamed body: size bytes of a pattern, at most per_call a call, waiting delay_ms before each
+ * call; fails with fail_with once fail_at bytes are given (SKIFF_OK for never). */
+typedef struct body_reader {
+    size_t size;
+    size_t given;
+    size_t per_call;
+    long delay_ms;
+    size_t fail_at;
+    skiff_err fail_with;
+    int calls;
+} body_reader;
+
+static body_reader reader;
+
+/* Bytes the local server records per request leave room for the headers. */
+#define UPLOAD_BYTES 1000U
+#define UPLOAD_PER_CALL 13U
+#define SLOW_UPLOAD_PER_CALL 10U
+#define SLOW_UPLOAD_DELAY_MS 20L
+#define SLOW_UPLOAD_STOP_AFTER_MS 300L
+
+static char pattern_char(size_t index) {
+    static const char ALPHABET[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    return ALPHABET[index % (sizeof ALPHABET - 1)];
+}
+
+static void sleep_ms(long ms) {
+    const struct timespec wait = {.tv_sec = ms / MS_PER_SECOND,
+                                  .tv_nsec = (ms % MS_PER_SECOND) * NS_PER_MS};
+    nanosleep(&wait, NULL);
+}
+
+static skiff_err read_pattern(void *ctx, unsigned char *buffer, size_t capacity, size_t *out_size) {
+    body_reader *state = ctx;
+    state->calls++;
+    if (state->delay_ms > 0) {
+        sleep_ms(state->delay_ms);
+    }
+    if (state->fail_with != SKIFF_OK && state->given >= state->fail_at) {
+        TEST_PRINTF("reader fails after %zu bytes with %s", state->given,
+                    skiff_err_name(state->fail_with));
+        return state->fail_with;
+    }
+    size_t count = state->size - state->given;
+    count = count < capacity ? count : capacity;
+    count = state->per_call > 0 && count > state->per_call ? state->per_call : count;
+    for (size_t i = 0; i < count; i++) {
+        buffer[i] = (unsigned char)pattern_char(state->given + i);
+    }
+    state->given += count;
+    *out_size = count;
+    return SKIFF_OK;
+}
+
+/* A POST of declared bytes streamed from reader, which holds size bytes. */
+static void stream_post(size_t size, size_t declared) {
+    memset(&reader, 0, sizeof reader);
+    reader.size = size;
+    reader.per_call = UPLOAD_PER_CALL;
+    request.method = SKIFF_HTTP_POST;
+    request.read_body = read_pattern;
+    request.read_ctx = &reader;
+    request.body_size = declared;
+    request.content_type = "multipart/form-data; boundary=skiff";
+}
+
+static void test_a_streamed_body_goes_out_exactly_with_content_length(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    static const char WHOLE[] = "{\"operations_completed\":1}";
+    serve(REPLIES, 3, "http");
+    create(&TEST_CONFIG);
+    stream_post(UPLOAD_BYTES, UPLOAD_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    TEST_PRINTF("the reader was asked %d times for %u bytes (%u at most per call)", reader.calls,
+                UPLOAD_BYTES, UPLOAD_PER_CALL);
+    TEST_ASSERT_EQUAL_size_t(UPLOAD_BYTES, reader.given);
+    TEST_ASSERT_GREATER_THAN_INT(1, reader.calls);
+
+    TEST_PRINTF("the handle is reused: a body sent whole, then a GET, must not reach the reader");
+    const int calls = reader.calls;
+    request.read_body = NULL;
+    request.read_ctx = NULL;
+    request.body = WHOLE;
+    request.body_size = sizeof WHOLE - 1;
+    request.content_type = "application/json";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT(calls, reader.calls);
+    stop_server();
+
+    TEST_PRINTF("streamed POST:\n%s", server.requests[0]);
+    char expected[UPLOAD_BYTES + 1];
+    for (size_t i = 0; i < UPLOAD_BYTES; i++) {
+        expected[i] = pattern_char(i);
+    }
+    expected[UPLOAD_BYTES] = '\0';
+    assert_request_has(0, "Content-Length: 1000\r\n");
+    assert_request_has(0, "Content-Type: multipart/form-data; boundary=skiff\r\n");
+    const char *body = strstr(server.requests[0], "\r\n\r\n");
+    TEST_ASSERT_NOT_NULL(body);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, body + 4, "every byte, in order, nothing after");
+    TEST_ASSERT_NULL_MESSAGE(strstr(server.requests[0], "Expect:"), "no 100-continue round trip");
+    TEST_ASSERT_NULL_MESSAGE(strstr(server.requests[0], "Transfer-Encoding"), "never chunked");
+    TEST_PRINTF("then the body sent whole:\n%s", server.requests[1]);
+    assert_request_has(1, "\r\n\r\n{\"operations_completed\":1}");
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[2], "GET /api/heartbeat ", 19));
+    TEST_ASSERT_NULL(strstr(server.requests[2], "Content-Length"));
+    TEST_ASSERT_EQUAL_INT(1, server.connections);
+}
+
+static void test_a_reader_error_stops_the_upload_and_the_transport_survives(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve(REPLIES, 1, "http");
+    create(&TEST_CONFIG);
+    stream_post(UPLOAD_BYTES, UPLOAD_BYTES);
+    reader.fail_at = UPLOAD_BYTES / 2;
+    reader.fail_with = SKIFF_ERR_STORAGE_IO;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_IO, perform(), "the reader's error, unchanged");
+    TEST_ASSERT_EQUAL_INT64(0, response.status);
+    TEST_PRINTF("the cut request never completed on the server; the next one is answered");
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    request.on_body = collect_body;
+    request.body_ctx = &sink;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_STRING("ok", sink.bytes);
+    stop_server();
+    TEST_ASSERT_EQUAL_size_t(1, server.request_count);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[0], "GET ", 4));
+}
+
+static void test_a_body_shorter_or_longer_than_announced_is_never_completed(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve(REPLIES, 1, "http");
+    create(&TEST_CONFIG);
+    TEST_PRINTF("the file shrank since its size was taken");
+    stream_post(UPLOAD_BYTES - 1, UPLOAD_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, perform());
+    TEST_PRINTF("the file grew");
+    stream_post(UPLOAD_BYTES + 1, UPLOAD_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, perform());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(UPLOAD_BYTES + 1, reader.given, "it was asked for the end");
+    stop_server();
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, server.request_count, "no request reached its end");
+}
+
+static void test_stop_hook_ends_a_slow_upload(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve(REPLIES, 1, "http");
+    create(&TEST_CONFIG);
+    stream_post(UPLOAD_BYTES, UPLOAD_BYTES);
+    reader.per_call = SLOW_UPLOAD_PER_CALL;
+    reader.delay_ms = SLOW_UPLOAD_DELAY_MS;
+    use_stop_hook(SLOW_UPLOAD_STOP_AFTER_MS, SKIFF_ERR_NET_UNAVAILABLE);
+    const skiff_err err = perform();
+    const long elapsed_ms = milliseconds_now() - hook.started_ms;
+    TEST_PRINTF("stopped after %ld ms, %zu of %u bytes read, %d polls", elapsed_ms, reader.given,
+                UPLOAD_BYTES, hook.polls);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_NET_UNAVAILABLE, err, "the hook's error, unchanged");
+    TEST_ASSERT_TRUE_MESSAGE(reader.given < UPLOAD_BYTES, "stopped while uploading");
+}
+
+static void test_a_streamed_body_on_a_connection_that_died_is_a_lost_connection(void) {
+    /* The second reply reads the whole POST and closes without answering: a kept-alive connection
+     * the server dropped. curl would retry on a new connection, but cannot send the body again. */
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {"", 0, LOCAL_HTTP_CLOSE, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    serve(REPLIES, 3, "http");
+    create(&TEST_CONFIG);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    stream_post(UPLOAD_BYTES, UPLOAD_BYTES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECTION_LOST, perform());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(UPLOAD_BYTES, reader.given, "read once, never rewound");
+    stop_server();
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(2, server.request_count,
+                                     "no second copy of the body was sent");
+}
+
 static void test_http_error_status_is_a_response_not_a_failure(void) {
     static const local_http_reply REPLIES[] = {
         {STR_AND_SIZE("HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"),
@@ -555,6 +749,11 @@ int main(void) {
     RUN_TEST(test_range_offset_above_4_gib);
     RUN_TEST(test_keep_alive_reuses_the_connection);
     RUN_TEST(test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_none);
+    RUN_TEST(test_a_streamed_body_goes_out_exactly_with_content_length);
+    RUN_TEST(test_a_reader_error_stops_the_upload_and_the_transport_survives);
+    RUN_TEST(test_a_body_shorter_or_longer_than_announced_is_never_completed);
+    RUN_TEST(test_stop_hook_ends_a_slow_upload);
+    RUN_TEST(test_a_streamed_body_on_a_connection_that_died_is_a_lost_connection);
     RUN_TEST(test_http_error_status_is_a_response_not_a_failure);
     RUN_TEST(test_connection_refused);
     RUN_TEST(test_stall_before_the_response_times_out);

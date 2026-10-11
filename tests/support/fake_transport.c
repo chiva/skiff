@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 
 #define LINE_END "\r\n"
 #define SCHEME_SEPARATOR "://"
@@ -88,22 +89,36 @@ static fake_route *find_route(fake_transport *fake, const skiff_http_request *re
     return NULL;
 }
 
-static void log_request(fake_transport *fake, const skiff_http_request *request) {
+/* Adds size body bytes that arrived to the entry (NULL once the log is full): the first ones kept,
+ * all of them counted and hashed. */
+static void record_body(fake_request *entry, const unsigned char *data, size_t size) {
+    if (entry == NULL) {
+        return;
+    }
+    /* The entry was cleared, so what is kept stays NUL-terminated. */
+    if (entry->body_received < sizeof entry->body - 1) {
+        const size_t room = sizeof entry->body - 1 - entry->body_received;
+        memcpy(entry->body + entry->body_received, data, size < room ? size : room);
+    }
+    entry->body_received += size;
+    entry->body_crc32 = (uint32_t)crc32(entry->body_crc32, data, (uInt)size);
+}
+
+/* The entry the request is logged in, or NULL once the log is full. */
+static fake_request *log_request(fake_transport *fake, const skiff_http_request *request) {
     fake->request_count++;
     if (fake->log_count == FAKE_TRANSPORT_MAX_LOG) {
-        return;
+        return NULL;
     }
     fake_request *entry = &fake->log[fake->log_count++];
     memset(entry, 0, sizeof *entry);
     entry->method = request->method;
     snprintf(entry->url, sizeof entry->url, "%s", request->url);
     if (request->body != NULL) {
-        const size_t kept = request->body_size < sizeof entry->body - 1 ? request->body_size
-                                                                        : sizeof entry->body - 1;
-        memcpy(entry->body, request->body, kept);
-        entry->body[kept] = '\0';
+        record_body(entry, (const unsigned char *)request->body, request->body_size);
     }
     entry->body_size = request->body_size;
+    entry->body_streamed = request->read_body != NULL;
     if (request->content_type != NULL) {
         snprintf(entry->content_type, sizeof entry->content_type, "%s", request->content_type);
     }
@@ -119,6 +134,7 @@ static void log_request(fake_transport *fake, const skiff_http_request *request)
                      request->headers[i].name, request->headers[i].value);
         used += written > 0 ? (size_t)written : 0;
     }
+    return entry;
 }
 
 /* Feeds each header line of raw to the parser; returns the body's offset, or raw_size when the
@@ -214,19 +230,61 @@ static skiff_err deliver_body(fake_transport *fake, const fake_route *route,
     return SKIFF_OK;
 }
 
+/* Reads a streamed request body as curl does, asking the stop hook before each chunk; with a
+ * mid-upload failure (route may be NULL: no route), stops once fail_after_upload_bytes are read. */
+static skiff_err read_body(const fake_route *route, const skiff_http_request *request,
+                           fake_request *entry) {
+    if (request->read_body == NULL) {
+        return SKIFF_OK;
+    }
+    unsigned char chunk[FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES];
+    const int fails = route != NULL && route->fail_mid_upload != SKIFF_OK;
+    size_t sent = 0;
+    for (;;) {
+        if (fails && sent >= route->fail_after_upload_bytes) {
+            return route->fail_mid_upload;
+        }
+        const skiff_err stop = stop_requested(request);
+        if (stop != SKIFF_OK) {
+            return stop;
+        }
+        size_t capacity = sizeof chunk;
+        if (fails && route->fail_after_upload_bytes - sent < capacity) {
+            capacity = (size_t)(route->fail_after_upload_bytes - sent);
+        }
+        size_t got = 0;
+        const skiff_err err = skiff_http_read_body(request, &sent, chunk, capacity, &got);
+        if (err != SKIFF_OK) {
+            return err;
+        }
+        if (got == 0) {
+            return SKIFF_OK;
+        }
+        record_body(entry, chunk, got);
+    }
+}
+
 static skiff_err fake_perform(skiff_transport *base, const skiff_http_request *request,
                               skiff_http_response *response) {
     fake_transport *fake = (fake_transport *)base;
-    log_request(fake, request);
+    fake_request *entry = log_request(fake, request);
     response->new_connections = fake->connected ? 0 : 1;
     fake->connected = 1;
     const fake_route *route = find_route(fake, request);
+    if (route != NULL && route->fail_before_response != SKIFF_OK) {
+        fake->connected = 0;
+        return route->fail_before_response;
+    }
+    const skiff_err sent = read_body(route, request, entry);
+    if (sent != SKIFF_OK) {
+        fake->connected = 0;
+        return sent;
+    }
     if (route == NULL) {
         response->status = HTTP_STATUS_NOT_FOUND;
         return SKIFF_OK;
     }
-    const skiff_err before = route->fail_before_response != SKIFF_OK ? route->fail_before_response
-                                                                     : stop_requested(request);
+    const skiff_err before = stop_requested(request);
     if (before != SKIFF_OK) {
         fake->connected = 0;
         return before;

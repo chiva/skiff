@@ -411,6 +411,31 @@ static cJSON *parse_json(const char *json, size_t length) {
     return parse_json_tree(json, length, 0);
 }
 
+/* ---- Shared with src/romm/saves.c (romm_internal.h) ---- */
+
+cJSON *skiff_romm_parse_json(const char *json, size_t length) { return parse_json(json, length); }
+
+int skiff_romm_read_count(const cJSON *object, const char *name, uint64_t *out) {
+    return read_count(object, name, out);
+}
+
+int skiff_romm_read_text(const cJSON *object, const char *name, char *out, size_t out_size) {
+    return read_text(object, name, out, out_size);
+}
+
+int skiff_romm_read_optional_text(const cJSON *object, const char *name, char *out,
+                                  size_t out_size) {
+    return read_optional_text(object, name, out, out_size);
+}
+
+int skiff_romm_read_display_name(const cJSON *object, const char *name, char *out,
+                                 size_t out_size) {
+    skiff_romm_name_status status = SKIFF_ROMM_NAME_OK;
+    return read_name(object, name, 0, out, out_size, &status);
+}
+
+int skiff_romm_is_printable_text(const char *text) { return is_printable_text(text); }
+
 static int fill_rom_page(const cJSON *root, skiff_romm_rom_page *out) {
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "items");
     if (!cJSON_IsObject(root) || !cJSON_IsArray(items) || !read_count(root, "total", &out->total) ||
@@ -628,18 +653,18 @@ static skiff_err collect_body(void *ctx, const unsigned char *data, size_t size)
     return SKIFF_OK;
 }
 
-/* Sends one request to base + path, with json_body (NULL for none) as a POST's body, and parses the
+/* Sends one request to base + path, with body (NULL for none) as a POST's body, and parses the
  * response body as JSON into *out (NULL when it is not JSON; free it with cJSON_Delete()). Bodies
  * of error statuses are read only with keep_errors. Returns the transport's error; the HTTP status
  * is left to the caller in *status. */
 static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, const char *path,
-                           const char *json_body, int with_token, int keep_errors, long *status,
-                           cJSON **out) {
+                           const skiff_romm_body *body, int with_token, int keep_errors,
+                           long *status, cJSON **out) {
     /* Only pairing reads error bodies, and only pairing's bodies hold credentials. */
     const int secret = keep_errors;
     *out = NULL;
     *status = 0;
-    char url[SKIFF_ROMM_URL_MAX];
+    char url[SKIFF_ROMM_REQUEST_URL_MAX];
     const int written = snprintf(url, sizeof url, "%s%s", client->base_url, path);
     if (written < 0 || (size_t)written >= sizeof url) {
         return SKIFF_ERR_INVALID_ARG;
@@ -654,10 +679,15 @@ static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, 
     request.url = url;
     request.headers = send_token ? &authorization : NULL;
     request.header_count = send_token ? 1 : 0;
-    if (json_body != NULL) {
-        request.body = json_body;
-        request.body_size = strlen(json_body);
+    if (body != NULL && body->json != NULL) {
+        request.body = body->json;
+        request.body_size = strlen(body->json);
         request.content_type = CONTENT_TYPE_JSON;
+    } else if (body != NULL) {
+        request.read_body = body->read;
+        request.read_ctx = body->read_ctx;
+        request.body_size = body->size;
+        request.content_type = body->content_type;
     }
     request.on_body = collect_body;
     request.body_ctx = &sink;
@@ -703,7 +733,25 @@ skiff_err skiff_romm_post_json(skiff_romm_client *client, const char *path, cons
         path == NULL || json_body == NULL || status == NULL || out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    return send_json(client, SKIFF_HTTP_POST, path, json_body, 0, 1, status, out);
+    const skiff_romm_body body = {.json = json_body};
+    return send_json(client, SKIFF_HTTP_POST, path, &body, 0, 1, status, out);
+}
+
+skiff_err skiff_romm_request_json(skiff_romm_client *client, skiff_http_method method,
+                                  const char *path, const skiff_romm_body *body, long *status,
+                                  cJSON **out) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (status != NULL) {
+        *status = 0;
+    }
+    if (client == NULL || client->transport == NULL || client->base_url[0] == '\0' ||
+        path == NULL || strlen(path) > SKIFF_ROMM_REQUEST_PATH_MAX || status == NULL ||
+        out == NULL) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    return send_json(client, method, path, body, 1, 0, status, out);
 }
 
 /* ---- The client ---- */
@@ -896,17 +944,11 @@ static int is_unreserved(char c) {
 }
 
 /*
- * Writes prefix into out, then text with every byte that is neither unreserved nor in kept
- * percent-encoded. SKIFF_ERR_BUFFER_TOO_SMALL (out emptied) when the result does not fit.
+ * Appends text to the string in out (out_size > 0) with every byte that is neither unreserved nor
+ * in kept percent-encoded. SKIFF_ERR_BUFFER_TOO_SMALL (out emptied) when the result does not fit.
  */
-static skiff_err write_encoded(char *out, size_t out_size, const char *prefix, const char *text,
-                               const char *kept) {
-    size_t used = strlen(prefix);
-    if (used >= out_size) {
-        out[0] = '\0';
-        return SKIFF_ERR_BUFFER_TOO_SMALL;
-    }
-    memcpy(out, prefix, used);
+static skiff_err append_encoded(char *out, size_t out_size, const char *text, const char *kept) {
+    size_t used = strlen(out);
     for (const char *c = text; *c != '\0'; c++) {
         const int plain = is_unreserved(*c) || strchr(kept, *c) != NULL;
         const size_t needed = plain ? 1 : 3;
@@ -925,6 +967,25 @@ static skiff_err write_encoded(char *out, size_t out_size, const char *prefix, c
     }
     out[used] = '\0';
     return SKIFF_OK;
+}
+
+/* Writes prefix into out, then text encoded as append_encoded() does. */
+static skiff_err write_encoded(char *out, size_t out_size, const char *prefix, const char *text,
+                               const char *kept) {
+    const size_t used = strlen(prefix);
+    if (used >= out_size) {
+        out[0] = '\0';
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    memcpy(out, prefix, used + 1);
+    return append_encoded(out, out_size, text, kept);
+}
+
+skiff_err skiff_romm_append_encoded(char *out, size_t out_size, const char *text) {
+    if (out == NULL || out_size == 0 || text == NULL || strlen(out) >= out_size) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    return append_encoded(out, out_size, text, "");
 }
 
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,

@@ -1,0 +1,8 @@
+HTTP/1.1 409 Conflict
+Content-Length: 55
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"detail":"Slot has a newer save since your last sync"}

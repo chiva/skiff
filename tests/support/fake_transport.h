@@ -36,7 +36,7 @@
 #define FAKE_TRANSPORT_HEADERS_MAX 512
 /* Request body bytes kept in the log (more are counted and hashed only). */
 #define FAKE_TRANSPORT_BODY_MAX 512
-#define FAKE_TRANSPORT_CONTENT_TYPE_MAX 64
+#define FAKE_TRANSPORT_CONTENT_TYPE_MAX 96
 /* Body bytes per call to the body callback, so a test sees more than one chunk. */
 #define FAKE_TRANSPORT_CHUNK_BYTES 1024
 /* What the fake asks a body reader for at a time: not a power of two, so a reader's own buffer

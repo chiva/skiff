@@ -4,12 +4,65 @@
 /*
  * What src/romm/ files share beyond skiff/romm.h: requests whose JSON body is read whatever the
  * status, for the pairing calls (src/romm/pairing.c), whose answers come as 400s with a JSON
- * "detail".
+ * "detail"; requests with the token and any body, for the save sync calls (src/romm/saves.c); and
+ * the checks every response and field gets.
  */
 
 #include <cjson/cJSON.h>
 
 #include "skiff/romm.h"
+#include "skiff/transport.h"
+
+/* The longest path and query a request sends: a save's upload names its emulator, slot and device,
+ * any byte of which may be percent-encoded. */
+#define SKIFF_ROMM_REQUEST_PATH_MAX 1536
+#define SKIFF_ROMM_REQUEST_URL_MAX (SKIFF_CONFIG_URL_MAX + SKIFF_ROMM_REQUEST_PATH_MAX)
+
+/* What a request sends after its headers: JSON text (labelled application/json), or size bytes
+ * streamed from read (skiff_http_read_fn) under content_type. */
+typedef struct skiff_romm_body {
+    const char *json;
+    skiff_http_read_fn read;
+    void *read_ctx;
+    size_t size;
+    const char *content_type;
+} skiff_romm_body;
+
+/*
+ * Sends method to the client's base URL + path with the token and body (NULL for none), and parses
+ * a successful (2xx) response's body as JSON into *out: NULL when it is empty or not JSON (free it
+ * with cJSON_Delete()); any other status's body is not kept. *status is the HTTP status, 0 when
+ * none arrived: the caller judges it. Returns the transport's error (a body reader's included),
+ * SKIFF_ERR_ROMM_BAD_RESPONSE for a body over SKIFF_ROMM_BODY_MAX, SKIFF_ERR_NO_MEMORY, or
+ * SKIFF_ERR_INVALID_ARG for a NULL argument or a path longer than SKIFF_ROMM_REQUEST_PATH_MAX.
+ */
+skiff_err skiff_romm_request_json(skiff_romm_client *client, skiff_http_method method,
+                                  const char *path, const skiff_romm_body *body, long *status,
+                                  cJSON **out);
+
+/* A body that passes the checks every response gets (skiff/romm.h) as a tree, NULL otherwise; free
+ * it with cJSON_Delete(). */
+cJSON *skiff_romm_parse_json(const char *json, size_t length);
+
+/* Field readers under skiff/romm.h's rules; each returns 0 for a field that breaks them. A whole,
+ * non-negative number below 2^53: */
+int skiff_romm_read_count(const cJSON *object, const char *name, uint64_t *out);
+/* A string copied whole: 0 when absent, not a string, too long for out or holding a control
+ * character. */
+int skiff_romm_read_text(const cJSON *object, const char *name, char *out, size_t out_size);
+/* The same, but null or absent leaves out empty. */
+int skiff_romm_read_optional_text(const cJSON *object, const char *name, char *out,
+                                  size_t out_size);
+/* A name that is only shown, in display form (skiff_romm_name_status: control characters replaced,
+ * a long one cut); null or absent leaves out empty, and only a value that is not a string is 0. */
+int skiff_romm_read_display_name(const cJSON *object, const char *name, char *out, size_t out_size);
+
+/* 1 if text holds no control character (C0, DEL or C1). */
+int skiff_romm_is_printable_text(const char *text);
+
+/* Appends text to the string in out with every byte but letters, digits and "-._~"
+ * percent-encoded. SKIFF_ERR_BUFFER_TOO_SMALL (out emptied) when it does not fit. */
+skiff_err skiff_romm_append_encoded(char *out, size_t out_size, const char *text);
 
 /*
  * POSTs json_body (sent as application/json, without the token: RomM's pairing endpoints are open)

@@ -43,6 +43,8 @@
       "Pairing was approved without the permissions Skiff needs; pair again and allow them")       \
     X(SKIFF_ERR_ROMM_COVER_FORMAT, 210, "RomM sent a cover in a format Skiff cannot show")         \
     X(SKIFF_ERR_ROMM_COVER_DAMAGED, 211, "RomM sent a cover Skiff could not read")                 \
+    X(SKIFF_ERR_ROMM_SAVE_CONFLICT, 212, "RomM has a newer save since this PSP last synced")       \
+    X(SKIFF_ERR_ROMM_SAVE_TOO_LARGE, 213, "The save is too large for the RomM server to accept")   \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

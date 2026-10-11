@@ -597,6 +597,17 @@ static void test_a_tree_no_unit_may_hold_is_unknown(void) {
     TEST_ASSERT_TRUE(skiff_saves_tree_changed(&summary, &summary));
 }
 
+/* A file the device holds no date for could be rewritten at the same size unseen. */
+static void test_undated_files_make_the_tree_unknown(void) {
+    put_folder(SAVES "/" DATA00);
+    put_file(SAVES "/" DATA00 "/DATA.BIN", "slot zero");
+    storage.hide_mtimes = 1;
+    skiff_saves_tree_summary summary;
+    summarize(&summary);
+    TEST_ASSERT_EQUAL_UINT32(SKIFF_SAVES_TREE_UNKNOWN, summary.file_count);
+    TEST_ASSERT_TRUE(skiff_saves_tree_changed(&summary, &summary));
+}
+
 static void test_summarize_reports_storage_errors_and_bad_arguments(void) {
     put_folder(SAVES "/" DATA00);
     storage.list_error = SKIFF_ERR_STORAGE_IO;
@@ -631,6 +642,7 @@ int main(void) {
     RUN_TEST(test_a_rewritten_file_changes_the_tree);
     RUN_TEST(test_a_missing_save_root_summarizes_as_no_files);
     RUN_TEST(test_a_tree_no_unit_may_hold_is_unknown);
+    RUN_TEST(test_undated_files_make_the_tree_unknown);
     RUN_TEST(test_summarize_reports_storage_errors_and_bad_arguments);
     return UNITY_END();
 }

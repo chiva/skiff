@@ -33,8 +33,9 @@
 /* ---- What a game's save folders look like, without reading them ---- */
 
 /* skiff_saves_tree_summary.file_count when the folders hold what no unit may (a folder inside a
- * save folder, a name too long, more than SKIFF_SAVES_FILES_MAX files): such a tree always counts
- * as changed, so the caller collects it and gets skiff_saves_collect()'s refusal. */
+ * save folder, a name too long, more than SKIFF_SAVES_FILES_MAX files), or a file the device holds
+ * no date for (it could be rewritten at the same size unseen): such a tree always counts as
+ * changed, so the caller collects and hashes it (and gets skiff_saves_collect()'s refusal). */
 #define SKIFF_SAVES_TREE_UNKNOWN UINT32_MAX
 
 /* The files of every folder in a save root starting with a game's save_target (installs included:

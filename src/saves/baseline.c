@@ -356,7 +356,9 @@ static skiff_storage_list_step note_tree_file(void *ctx, const skiff_storage_ent
     skiff_saves_unit *unit = s->unit;
     char name[SKIFF_SAVES_ENTRY_SIZE];
     const int written = snprintf(name, sizeof name, "%s/%s", s->folder, entry->name);
-    if (entry->info.is_dir || unit->file_count == SKIFF_SAVES_FILES_MAX || written < 0 ||
+    /* A file without a date could be rewritten at the same size unseen. */
+    if (entry->info.is_dir || entry->info.mtime == SKIFF_STORAGE_MTIME_UNKNOWN ||
+        unit->file_count == SKIFF_SAVES_FILES_MAX || written < 0 ||
         (size_t)written >= sizeof name) {
         s->unknown = 1;
         return SKIFF_STORAGE_LIST_STOP;

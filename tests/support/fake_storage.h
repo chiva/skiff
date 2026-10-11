@@ -56,6 +56,9 @@ typedef struct fake_storage {
      * SKIFF_OK for none. */
     skiff_err list_error;
     int list_error_after;
+    /* Listings report every entry without a date (SKIFF_STORAGE_MTIME_UNKNOWN), as a device that
+     * holds none for it. */
+    int hide_mtimes;
     /* Every stat of a matching path fails with this; SKIFF_OK for none. */
     skiff_err stat_error;
     /* Every folder removal of a matching path fails with this, leaving the folder; SKIFF_OK for

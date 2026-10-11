@@ -217,6 +217,7 @@ static skiff_err fake_stat(skiff_storage *base, const char *path, skiff_storage_
 }
 
 typedef struct fake_listing {
+    int hide_mtimes;
     skiff_storage_visit_fn visit;
     void *ctx;
     /* Entries left to pass on before the listing fails; negative for no failure. */
@@ -236,6 +237,11 @@ static skiff_storage_list_step relay_entry(void *ctx, const char *name, size_t l
     if (!dot && listing->left > 0) {
         listing->left--;
     }
+    if (listing->hide_mtimes) {
+        skiff_storage_info undated = *info;
+        undated.mtime = SKIFF_STORAGE_MTIME_UNKNOWN;
+        return listing->visit(listing->ctx, name, length, &undated);
+    }
     return listing->visit(listing->ctx, name, length, info);
 }
 
@@ -251,7 +257,7 @@ static skiff_err fake_list(skiff_storage *base, const char *path, skiff_storage_
     if (fails && fake->list_error_after == 0) {
         return fake->list_error;
     }
-    fake_listing listing = {visit, ctx, fails ? fake->list_error_after : -1, 0};
+    fake_listing listing = {fake->hide_mtimes, visit, ctx, fails ? fake->list_error_after : -1, 0};
     const skiff_err err = fake->inner->ops->list(fake->inner, path, relay_entry, &listing);
     return listing.failed ? fake->list_error : err;
 }

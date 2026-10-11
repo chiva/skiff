@@ -647,10 +647,6 @@ static skiff_err recover(restorer *r, skiff_saves_recovery *out) {
         out->outcome = SKIFF_SAVES_RECOVERY_FINISHED;
         err = finish(r);
     }
-    /* The cut restore never reached its pruning; its own backup is kept. */
-    if (err == SKIFF_OK && out->backup != 0) {
-        saves_backups_prune(r->storage, r->roots, out->backup);
-    }
     return err == SKIFF_OK ? SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED : err;
 }
 
@@ -848,6 +844,11 @@ static skiff_err restore(restorer *r, const char *unit_path, const char *save_ta
     if (r->live->file_count > 0) {
         err = saves_backup_write(r->storage, r->roots, r->live, &r->journal.backup);
     }
+    /* Right after the backup, so no later cut skips it; the unit is extracted already, so even a
+     * backup being restored from may go. */
+    if (err == SKIFF_OK && r->journal.backup != 0) {
+        saves_backups_prune(r->storage, r->roots, r->journal.backup);
+    }
     if (err == SKIFF_OK) {
         err = write_journal(r);
         if (err != SKIFF_OK && clear_journal(r) != SKIFF_OK) {
@@ -867,11 +868,7 @@ static skiff_err restore(restorer *r, const char *unit_path, const char *save_ta
     report->backup = r->journal.backup;
     report->folders_replaced = r->journal.replace_count;
     report->folders_removed = r->journal.remove_count;
-    err = finish(r);
-    if (err == SKIFF_OK && report->backup != 0) {
-        saves_backups_prune(r->storage, r->roots, report->backup);
-    }
-    return err;
+    return finish(r);
 }
 
 static skiff_err restorer_create(skiff_storage *storage, const skiff_storage_roots *roots,

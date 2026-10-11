@@ -10,7 +10,8 @@
  *      folders, the backup and the journal, counted in whole 32 KiB clusters, with
  *      SKIFF_STORAGE_FREE_MARGIN_BYTES to spare: nothing is written before these pass;
  *   2. the unit is extracted into SKIFF_SAVES_STAGE_FOLDER, each file synced;
- *   3. the live folders are backed up as a unit (SKIFF_SAVES_BACKUP_FOLDER), synced;
+ *   3. the live folders are backed up as a unit (SKIFF_SAVES_BACKUP_FOLDER), synced, and the
+ *      backups pruned to their caps;
  *   4. SKIFF_SAVES_JOURNAL_PATH is written crash-safely (skiff_storage_replace_whole()), naming the
  *      game, the folders to replace (the unit's), the folders to remove (live ones the unit lacks)
  *      and every staged file with its size;
@@ -91,9 +92,10 @@ skiff_err skiff_saves_work_unit_path(const char *save_target, char *out, size_t 
 
 /*
  * Restores the unit at the logical path unit_path as save_target's saves in "saves:", in the steps
- * above, then prunes the backups (see skiff_saves_backups_list()). A restore cut short earlier is
- * finished first (skiff_saves_recover(), its result in report->recovered); when that fails, so does
- * this restore, with its error, before anything else. The unit file itself is left in place.
+ * above, pruning the backups after its own (see skiff_saves_backups_list()). A restore cut short
+ * earlier is finished first (skiff_saves_recover(), its result in report->recovered); when that
+ * fails, so does this restore, with its error, before anything else. The unit file itself is left
+ * in place.
  *
  * Refused before anything is written: SKIFF_ERR_STORAGE_SAVE_DAMAGED for a unit that is not a safe
  * unit of save_target (skiff_saves_read_unit()), SKIFF_ERR_STORAGE_SAVE_UNSYNCABLE when the live

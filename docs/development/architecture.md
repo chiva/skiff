@@ -407,7 +407,8 @@ Favourites are the same list with `favorite=true`: RomM keeps a player's favouri
 collections marked `is_favorite` (a user may have several, which RomM merges), created by its web UI
 on the first favourite, and the filter needs no scope beyond `roms.read`, so Skiff's token reads
 them. A player without favourites gets an empty list. RomM's collection endpoints need
-`collections.read`, which Skiff does not ask for (see [Pairing](#pairing)). RomM records CRC32, MD5 and SHA-1 for every file, so the
+`collections.read`, which pairing asks for as an optional scope the player may decline (see
+[Pairing](#pairing)). RomM records CRC32, MD5 and SHA-1 for every file, so the
 integrity check can use any of them; its `crc_hash` is hexadecimal, read with or without leading
 zeros.
 

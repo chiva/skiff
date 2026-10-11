@@ -712,13 +712,21 @@ static skiff_err fetch(skiff_romm_client *client, const skiff_romm_download *dow
     return err;
 }
 
-/* Puts the whole .part in place of path, replacing a file there (FAT renames onto nothing). */
-static skiff_err place(skiff_storage *storage, const char *part, const char *path) {
+/* Puts the whole .part in place of path, replacing a file there (FAT renames onto nothing). Sets
+ * *only_copy when the old file is gone but the rename failed: the .part is then the one copy left
+ * of the save. */
+static skiff_err place(skiff_storage *storage, const char *part, const char *path, int *only_copy) {
+    *only_copy = 0;
     const skiff_err removed = skiff_storage_remove(storage, path);
-    if (removed != SKIFF_OK && removed != SKIFF_ERR_STORAGE_NOT_FOUND) {
+    uint64_t size = 0;
+    /* A device may report an error after the file is gone: then the rename can still go ahead. */
+    if (removed != SKIFF_OK && removed != SKIFF_ERR_STORAGE_NOT_FOUND &&
+        skiff_storage_size(storage, path, &size) != SKIFF_ERR_STORAGE_NOT_FOUND) {
         return removed;
     }
-    return skiff_storage_rename(storage, part, path);
+    const skiff_err err = skiff_storage_rename(storage, part, path);
+    *only_copy = err != SKIFF_OK && removed != SKIFF_ERR_STORAGE_NOT_FOUND;
+    return err;
 }
 
 skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_download *download,
@@ -746,12 +754,16 @@ skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_
         const skiff_err closed = skiff_file_close(sink.file);
         err = err != SKIFF_OK ? err : closed;
     }
+    int only_copy = 0;
     if (err == SKIFF_OK) {
-        err = place(download->storage, part, download->path);
+        err = place(download->storage, part, download->path, &only_copy);
     }
     if (err != SKIFF_OK) {
-        /* Never leave a part file behind: the next attempt starts over. */
-        skiff_storage_remove(download->storage, part);
+        /* No part file is left behind, so the next attempt starts over, unless it is all that is
+         * left of the save. */
+        if (!only_copy) {
+            skiff_storage_remove(download->storage, part);
+        }
         return err;
     }
     *size = sink.written;

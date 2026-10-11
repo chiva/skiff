@@ -173,7 +173,8 @@ typedef struct skiff_romm_download {
     uint64_t save_id;
     const char *device_id;
     /* Written as "<path>.part", renamed to path once whole (a file already at path is replaced);
-     * the .part is removed on any failure. */
+     * the .part is removed on any failure, except when the old file was already removed and the
+     * rename failed: the complete .part is then the one copy left, and stays for the caller. */
     skiff_storage *storage;
     const char *path;
     /* The most bytes accepted: a larger save is refused before anything is written when RomM

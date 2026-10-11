@@ -827,15 +827,36 @@ static void test_memory_stick_failures_during_a_download_leave_no_part_file(void
     expect_nothing_left(&spec, SKIFF_ERR_STORAGE_IO);
 }
 
-static void test_a_file_that_cannot_be_replaced_keeps_the_error(void) {
+static void test_a_file_reported_lost_while_removed_is_still_replaced(void) {
     const skiff_romm_download spec = unit_download(UNIT_MAX);
     serve(PATH_CONTENT, "romm/saves-content.http");
     copy_unit(target);
-    storage.fail_suffix = ".zip";
+    TEST_PRINTF("the old file goes, but the device reports an error: the rename goes ahead");
+    storage.fail_suffix = FILE_NAME;
     storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    uint64_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, download(&spec, &size));
+    TEST_ASSERT_EQUAL_UINT64(UNIT_BYTES, size);
+    TEST_ASSERT_TRUE(exists(target));
+    TEST_ASSERT_FALSE(exists(part));
+}
+
+static void test_a_failed_replacement_keeps_the_only_copy_left(void) {
+    const skiff_romm_download spec = unit_download(UNIT_MAX);
+    serve(PATH_CONTENT, "romm/saves-content.http");
+    copy_unit(target);
+    TEST_PRINTF("the old file is removed, then the rename fails: the whole .part stays");
+    storage.fail_suffix = SKIFF_ROMM_DOWNLOAD_PART_SUFFIX;
+    storage.rename_error = SKIFF_ERR_STORAGE_IO;
     uint64_t size = 1;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, download(&spec, &size));
-    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_EQUAL_UINT64(0, size);
+    TEST_ASSERT_FALSE(exists(target));
+    static unsigned char got[UNIT_MAX];
+    static unsigned char unit[UNIT_MAX];
+    TEST_ASSERT_EQUAL_size_t(UNIT_BYTES, read_file(part, got, sizeof got));
+    TEST_ASSERT_EQUAL_size_t(UNIT_BYTES, read_file(UNIT_1, unit, sizeof unit));
+    TEST_ASSERT_EQUAL_MEMORY(unit, got, UNIT_BYTES);
 }
 
 static void test_download_refuses_bad_arguments(void) {
@@ -935,7 +956,8 @@ int main(void) {
     RUN_TEST(test_a_save_over_the_cap_is_refused);
     RUN_TEST(test_download_failures_leave_no_part_file);
     RUN_TEST(test_memory_stick_failures_during_a_download_leave_no_part_file);
-    RUN_TEST(test_a_file_that_cannot_be_replaced_keeps_the_error);
+    RUN_TEST(test_a_file_reported_lost_while_removed_is_still_replaced);
+    RUN_TEST(test_a_failed_replacement_keeps_the_only_copy_left);
     RUN_TEST(test_download_refuses_bad_arguments);
     RUN_TEST(test_downloaded_tells_romm_the_hash_this_psp_holds);
     RUN_TEST(test_complete_closes_the_session_with_its_counts);

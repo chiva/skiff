@@ -51,6 +51,7 @@
 #define OTHER_FOLDERS 300
 /* Game folders one scan of the backups keeps (src/saves/backups.c). */
 #define BACKUP_GAMES_SCANNED 1024
+#define BACKUPS_SCANNED 2048
 
 static char dir[TEMP_DIR_PATH_MAX];
 static skiff_storage *posix;
@@ -788,6 +789,9 @@ static void test_journals_skiff_did_not_write_are_given_up(void) {
         "\"files\":[{\"name\":\"nofolder\",\"size\":1}]}",
         "{\"version\":1,\"save_target\":\"" GAME "\"} trailing",
         "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
+        "\",\"live\":\"" DATA00 "\"}],\"remove\":[\"" GAME "data00\"],\"files\":[]}",
+        "",
+        "{\"version\":1,\"save_target\":\"" GAME "\",\"backup\":0,\"replace\":[{\"stage\":\"" DATA00
         "\",\"live\":\"" INSTALL "\"}],\"remove\":[],\"files\":[]}",
     };
     for (size_t i = 0; i < sizeof JOURNALS / sizeof JOURNALS[0]; i++) {
@@ -804,6 +808,21 @@ static void test_journals_skiff_did_not_write_are_given_up(void) {
         assert_text(OLD_DATA01, SAVES "/" DATA01 "/DATA.BIN");
         assert_work_clean();
     }
+}
+
+/* More backup files in a game's folder than a scan keeps: the newest are unknown, so the list is
+ * refused rather than shown incomplete. */
+static void test_a_backup_list_past_the_scan_is_refused(void) {
+    put_folder(SKIFF_SAVES_BACKUP_FOLDER "/" GAME);
+    for (int i = 1; i <= BACKUPS_SCANNED + 1; i++) {
+        char name[SKIFF_STORAGE_PATH_MAX];
+        snprintf(name, sizeof name, "%s/%s/%d.zip", SKIFF_SAVES_BACKUP_FOLDER, GAME, i);
+        put_text(name, "x");
+    }
+    skiff_saves_backup_list list;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
+                          skiff_saves_backups_list(&storage.base, &roots, GAME, &list));
+    TEST_ASSERT_EQUAL_size_t(0, list.count);
 }
 
 /* A journal larger than any Skiff writes is damaged too. */
@@ -1071,6 +1090,7 @@ int main(void) {
     RUN_TEST(test_a_journal_left_before_step_5_is_finished);
     RUN_TEST(test_journals_skiff_did_not_write_are_given_up);
     RUN_TEST(test_an_oversized_journal_is_given_up);
+    RUN_TEST(test_a_backup_list_past_the_scan_is_refused);
     RUN_TEST(test_a_done_journal_only_cleans_up);
     RUN_TEST(test_a_journal_that_cannot_be_read_stays);
     RUN_TEST(test_a_game_keeps_its_three_newest_backups);

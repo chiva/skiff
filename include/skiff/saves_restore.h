@@ -168,8 +168,9 @@ skiff_err skiff_saves_backup_path(const char *save_target, uint32_t number, char
  * Lists save_target's backups, newest first. After each backup a restore makes, the game keeps its
  * newest SKIFF_SAVES_BACKUPS_PER_GAME, and the oldest of every game are dropped while all of them
  * add up to more than SKIFF_SAVES_BACKUPS_BYTES_MAX (never the one just made). A game without
- * backups lists none (SKIFF_OK). SKIFF_ERR_INVALID_ARG for a NULL argument or an invalid
- * save_target, otherwise the storage's error; out is empty on any error.
+ * backups lists none (SKIFF_OK). SKIFF_ERR_BUFFER_TOO_SMALL when the game folder holds more backup
+ * files than a scan keeps (2048), so the newest are unknown. SKIFF_ERR_INVALID_ARG for a NULL
+ * argument or an invalid save_target, otherwise the storage's error; out is empty on any error.
  */
 skiff_err skiff_saves_backups_list(skiff_storage *storage, const skiff_storage_roots *roots,
                                    const char *save_target, skiff_saves_backup_list *out);

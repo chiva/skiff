@@ -302,6 +302,12 @@ static int read_remove(journal *j, const cJSON *item) {
     if (!game_folder(j, name)) {
         return 0;
     }
+    /* A folder replaced and removed would lose the save just restored. */
+    for (size_t i = 0; i < j->replace_count; i++) {
+        if (saves_same_name(j->replace[i].live, strlen(j->replace[i].live), name, strlen(name))) {
+            return 0;
+        }
+    }
     j->remove_count++;
     return 1;
 }
@@ -404,7 +410,14 @@ static skiff_err read_journal(restorer *r, journal_state *state) {
         *state = JOURNAL_DAMAGED;
         return SKIFF_OK;
     }
-    if (err != SKIFF_OK || length == 0) {
+    if (err == SKIFF_OK && length == 0) {
+        /* No journal, or an empty one: a cut that emptied it still left a restore unfinished. */
+        skiff_storage_info info;
+        err = skiff_storage_stat(r->storage, path, &info);
+        *state = err == SKIFF_OK ? JOURNAL_DAMAGED : JOURNAL_NONE;
+        return err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
+    }
+    if (err != SKIFF_OK) {
         return err;
     }
     err = parse_journal(&r->journal, r->text, length);

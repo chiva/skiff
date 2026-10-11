@@ -340,6 +340,9 @@ skiff_err skiff_saves_backups_list(skiff_storage *storage, const skiff_storage_r
         return err;
     }
     err = scan_backups(scan);
+    if (err == SKIFF_OK && scan->overflow) {
+        err = SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
     /* The newest SKIFF_SAVES_BACKUPS_PER_GAME, found one place at a time. */
     skiff_saves_backup kept[SKIFF_SAVES_BACKUPS_PER_GAME + 1];
     size_t count = 0;

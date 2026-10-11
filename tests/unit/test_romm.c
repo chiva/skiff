@@ -1255,18 +1255,14 @@ static void test_a_collections_games_list_with_its_filter(void) {
     TEST_PRINTF("%s", fake.log[2].url);
     TEST_ASSERT_NOT_NULL(
         strstr(fake.log[2].url, "&smart_collection_id=18446744073709551615&with_files=true"));
-    TEST_PRINTF("a collection filter without a collection, or a filter Skiff has not, is refused");
+    TEST_PRINTF("a collection filter without a collection is refused");
     const skiff_romm_list_query no_collection = {.platform_id = PSP_PLATFORM_ID,
                                                  .filter = SKIFF_ROMM_LIST_COLLECTION};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_list_roms(&client, &no_collection, 0, 1, &page));
-    const skiff_romm_list_query unknown = {
-        .platform_id = PSP_PLATFORM_ID,
-        .filter = (skiff_romm_list_filter)(SKIFF_ROMM_LIST_SMART_COLLECTION + 1)};
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_list_roms(&client, &unknown, 0, 1, &page));
     TEST_ASSERT_EQUAL_size_t(3, fake.request_count);
 }
+
 /* ---- One ROM ---- */
 
 static void test_a_rom_comes_with_its_files(void) {

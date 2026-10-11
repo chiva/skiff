@@ -45,9 +45,18 @@ static int range_is_valid(const skiff_http_request *request) {
            !has_line_break(request->if_range);
 }
 
+/* A body comes from memory or from a reader, never both, and is as long as body_size says: a
+ * reader's body is never empty, since curl would not ask it for the end it must confirm. */
+static int body_is_valid(const skiff_http_request *request) {
+    if (request->read_body != NULL) {
+        return request->body == NULL && request->body_size > 0;
+    }
+    return request->body != NULL || request->body_size == 0;
+}
+
 /* A body belongs to a POST and a range to a GET; a content type is one header line. */
 static int method_is_valid(const skiff_http_request *request) {
-    if (request->body == NULL && request->body_size > 0) {
+    if (!body_is_valid(request)) {
         return 0;
     }
     if (request->content_type != NULL &&
@@ -56,7 +65,7 @@ static int method_is_valid(const skiff_http_request *request) {
     }
     switch (request->method) {
     case SKIFF_HTTP_GET:
-        return request->body == NULL && request->content_type == NULL;
+        return request->body == NULL && request->read_body == NULL && request->content_type == NULL;
     case SKIFF_HTTP_POST:
         return !request->has_range && request->if_range == NULL;
     }
@@ -104,6 +113,47 @@ skiff_err skiff_transport_perform(skiff_transport *transport, const skiff_http_r
         return SKIFF_ERR_CONFIG_INVALID_VALUE;
     }
     return transport->ops->perform(transport, request, response);
+}
+
+skiff_err skiff_http_read_body(const skiff_http_request *request, size_t *sent,
+                               unsigned char *buffer, size_t capacity, size_t *out_size) {
+    if (out_size != NULL) {
+        *out_size = 0;
+    }
+    if (request == NULL || request->read_body == NULL || sent == NULL || buffer == NULL ||
+        capacity == 0 || out_size == NULL || *sent > request->body_size) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const size_t left = request->body_size - *sent;
+    if (left == 0) {
+        return SKIFF_OK;
+    }
+    const size_t asked = left < capacity ? left : capacity;
+    size_t got = 0;
+    skiff_err err = request->read_body(request->read_ctx, buffer, asked, &got);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    /* Ending early would leave the server waiting for bytes that never come. */
+    if (got == 0 || got > asked) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    if (got == left) {
+        /* The last bytes: the reader must have nothing more, or the server stores a cut copy of a
+         * body that grew. */
+        unsigned char extra = 0;
+        size_t more = 0;
+        err = request->read_body(request->read_ctx, &extra, sizeof extra, &more);
+        if (err != SKIFF_OK) {
+            return err;
+        }
+        if (more != 0) {
+            return SKIFF_ERR_INVALID_ARG;
+        }
+    }
+    *sent += got;
+    *out_size = got;
+    return SKIFF_OK;
 }
 
 void skiff_transport_destroy(skiff_transport *transport) {

@@ -4,6 +4,7 @@
  * contract tests (romm/, jobs/) can rely on it acting like the real server.
  */
 #include <string.h>
+#include <zlib.h>
 
 #include "skiff/transport.h"
 
@@ -353,6 +354,154 @@ static void test_routes_answer_by_method_and_in_turn(void) {
     TEST_ASSERT_EQUAL_INT64(404, response.status);
 }
 
+/* A streamed body of size pattern bytes; fails with fail_with once fail_at bytes are given
+ * (SKIFF_OK for never). */
+typedef struct pattern_reader {
+    size_t size;
+    size_t given;
+    size_t fail_at;
+    skiff_err fail_with;
+    int calls;
+} pattern_reader;
+
+#define UPLOAD_PATH "/api/saves"
+#define UPLOAD_URL "https://romm.test" UPLOAD_PATH
+#define UPLOAD_REPLY "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+/* Two and a half of the fake's reads. */
+#define UPLOAD_BYTES                                                                               \
+    ((size_t)2 * FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES + FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES / 2)
+
+static unsigned char pattern_byte(size_t index) {
+    enum { PATTERN_STEP = 7, PATTERN_OFFSET = 3, BYTE_MASK = 0xFF };
+    return (unsigned char)((index * PATTERN_STEP + PATTERN_OFFSET) & BYTE_MASK);
+}
+
+static skiff_err read_pattern(void *ctx, unsigned char *buffer, size_t capacity, size_t *out_size) {
+    pattern_reader *reader = ctx;
+    reader->calls++;
+    if (reader->fail_with != SKIFF_OK && reader->given >= reader->fail_at) {
+        return reader->fail_with;
+    }
+    size_t count = reader->size - reader->given;
+    count = count < capacity ? count : capacity;
+    for (size_t i = 0; i < count; i++) {
+        buffer[i] = pattern_byte(reader->given + i);
+    }
+    reader->given += count;
+    *out_size = count;
+    return SKIFF_OK;
+}
+
+static uint32_t pattern_crc32(size_t size) {
+    uLong crc = crc32(0L, Z_NULL, 0);
+    for (size_t i = 0; i < size; i++) {
+        const unsigned char byte = pattern_byte(i);
+        crc = crc32(crc, &byte, 1);
+    }
+    return (uint32_t)crc;
+}
+
+static pattern_reader upload_reader;
+
+static skiff_err upload(size_t declared) {
+    memset(&upload_reader, 0, sizeof upload_reader);
+    upload_reader.size = UPLOAD_BYTES;
+    request.method = SKIFF_HTTP_POST;
+    request.read_body = read_pattern;
+    request.read_ctx = &upload_reader;
+    request.body_size = declared;
+    request.content_type = "multipart/form-data; boundary=skiff";
+    return get(UPLOAD_URL);
+}
+
+static void test_a_streamed_body_is_read_whole_and_recorded(void) {
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&fake, UPLOAD_PATH, UPLOAD_REPLY, sizeof UPLOAD_REPLY - 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, upload(UPLOAD_BYTES));
+    TEST_ASSERT_EQUAL_INT64(200, response.status);
+    const fake_request *sent = &fake.log[0];
+    TEST_PRINTF("received %zu of %zu bytes, CRC-32 %08x, in %d reader calls", sent->body_received,
+                sent->body_size, (unsigned)sent->body_crc32, upload_reader.calls);
+    TEST_ASSERT_TRUE(sent->body_streamed);
+    TEST_ASSERT_EQUAL_size_t(UPLOAD_BYTES, sent->body_size);
+    TEST_ASSERT_EQUAL_size_t(UPLOAD_BYTES, sent->body_received);
+    TEST_ASSERT_EQUAL_HEX32(pattern_crc32(UPLOAD_BYTES), sent->body_crc32);
+    for (size_t i = 0; i < FAKE_TRANSPORT_BODY_MAX - 1; i++) {
+        TEST_ASSERT_EQUAL_HEX8(pattern_byte(i), (unsigned char)sent->body[i]);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sent->body[FAKE_TRANSPORT_BODY_MAX - 1], "kept bytes end");
+    TEST_PRINTF("three reads of at most %d bytes, then the one that confirms the end",
+                FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES);
+    TEST_ASSERT_EQUAL_INT(4, upload_reader.calls);
+    TEST_ASSERT_EQUAL_STRING("multipart/form-data; boundary=skiff", sent->content_type);
+}
+
+static void test_a_body_sent_whole_is_hashed_too(void) {
+    static const char BODY[] = "{\"operations_completed\":1}";
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&fake, UPLOAD_PATH, UPLOAD_REPLY, sizeof UPLOAD_REPLY - 1));
+    request.method = SKIFF_HTTP_POST;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, get(UPLOAD_URL));
+    TEST_ASSERT_FALSE(fake.log[0].body_streamed);
+    TEST_ASSERT_EQUAL_size_t(sizeof BODY - 1, fake.log[0].body_received);
+    TEST_ASSERT_EQUAL_HEX32((uint32_t)crc32(0L, (const Bytef *)BODY, sizeof BODY - 1),
+                            fake.log[0].body_crc32);
+}
+
+static void test_an_upload_cut_part_way_gets_no_response(void) {
+    fake_route *route =
+        fake_transport_add_raw(&fake, UPLOAD_PATH, UPLOAD_REPLY, sizeof UPLOAD_REPLY - 1);
+    TEST_ASSERT_NOT_NULL(route);
+    route->fail_after_upload_bytes = FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES + 1;
+    route->fail_mid_upload = SKIFF_ERR_NET_CONNECTION_LOST;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_CONNECTION_LOST, upload(UPLOAD_BYTES));
+    TEST_ASSERT_EQUAL_INT64(0, response.status);
+    TEST_ASSERT_EQUAL_size_t(FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES + 1, fake.log[0].body_received);
+    TEST_PRINTF("a threshold past the body never fires");
+    route->fail_after_upload_bytes = UPLOAD_BYTES + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, upload(UPLOAD_BYTES));
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(1, response.new_connections, "the cut dropped the connection");
+}
+
+static void test_stop_hook_during_an_upload(void) {
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&fake, UPLOAD_PATH, UPLOAD_REPLY, sizeof UPLOAD_REPLY - 1));
+    /* Asked before each read: the third read is stopped. */
+    stop_hook hook = {0, 2};
+    request.should_stop = stop_after_polls;
+    request.stop_ctx = &hook;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_UNAVAILABLE, upload(UPLOAD_BYTES));
+    TEST_ASSERT_EQUAL_size_t(2 * FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES, fake.log[0].body_received);
+    TEST_ASSERT_EQUAL_INT64(0, response.status);
+}
+
+static void test_a_reader_that_fails_or_lies_stops_the_upload(void) {
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&fake, UPLOAD_PATH, UPLOAD_REPLY, sizeof UPLOAD_REPLY - 1));
+    memset(&upload_reader, 0, sizeof upload_reader);
+    upload_reader.size = UPLOAD_BYTES;
+    upload_reader.fail_at = FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES;
+    upload_reader.fail_with = SKIFF_ERR_STORAGE_IO;
+    request.method = SKIFF_HTTP_POST;
+    request.read_body = read_pattern;
+    request.read_ctx = &upload_reader;
+    request.body_size = UPLOAD_BYTES;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, get(UPLOAD_URL));
+    TEST_ASSERT_EQUAL_size_t(FAKE_TRANSPORT_UPLOAD_CHUNK_BYTES, fake.log[0].body_received);
+    TEST_PRINTF("a body shorter or longer than announced fails as curl's would");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, upload(UPLOAD_BYTES + 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, upload(UPLOAD_BYTES - 1));
+    TEST_ASSERT_EQUAL_INT64(0, response.status);
+}
+
+static void test_an_unknown_path_still_reads_the_body(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, upload(UPLOAD_BYTES));
+    TEST_ASSERT_EQUAL_INT64(404, response.status);
+    TEST_ASSERT_EQUAL_size_t(UPLOAD_BYTES, fake.log[0].body_received);
+}
+
 static void test_route_errors(void) {
     TEST_ASSERT_NULL(fake_transport_add_fixture(&fake, "/x", "romm/missing.http"));
     for (int i = 0; i < FAKE_TRANSPORT_MAX_ROUTES; i++) {
@@ -386,6 +535,12 @@ int main(void) {
     RUN_TEST(test_log_keeps_counting_when_full);
     RUN_TEST(test_raw_response_without_a_blank_line_has_no_body);
     RUN_TEST(test_routes_answer_by_method_and_in_turn);
+    RUN_TEST(test_a_streamed_body_is_read_whole_and_recorded);
+    RUN_TEST(test_a_body_sent_whole_is_hashed_too);
+    RUN_TEST(test_an_upload_cut_part_way_gets_no_response);
+    RUN_TEST(test_stop_hook_during_an_upload);
+    RUN_TEST(test_a_reader_that_fails_or_lies_stops_the_upload);
+    RUN_TEST(test_an_unknown_path_still_reads_the_body);
     RUN_TEST(test_route_errors);
     return UNITY_END();
 }

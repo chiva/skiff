@@ -1,4 +1,5 @@
-/* The checks skiff_transport_perform() makes before any transport sees a request. */
+/* The checks skiff_transport_perform() makes before any transport sees a request, and the rules
+ * skiff_http_read_body() holds a streamed body's reader to for every transport. */
 #include <string.h>
 
 #include "skiff/transport.h"
@@ -210,6 +211,205 @@ static void test_bodies_belong_to_posts_and_ranges_to_gets(void) {
     expect_refused("an unknown method");
 }
 
+/* A body reader over data: gives at most per_call bytes a call (0 for whatever is asked), fails
+ * with fail_with once fail_at bytes are given (SKIFF_OK for never), and with overflow gives one
+ * byte more than asked. Counts its calls and records the largest capacity it was offered. */
+typedef struct scripted_reader {
+    const unsigned char *data;
+    size_t size;
+    size_t given;
+    size_t per_call;
+    size_t fail_at;
+    skiff_err fail_with;
+    int overflow;
+    int calls;
+    size_t largest_capacity;
+} scripted_reader;
+
+static skiff_err read_script(void *ctx, unsigned char *buffer, size_t capacity, size_t *out_size) {
+    scripted_reader *script = ctx;
+    script->calls++;
+    script->largest_capacity =
+        capacity > script->largest_capacity ? capacity : script->largest_capacity;
+    if (script->fail_with != SKIFF_OK && script->given >= script->fail_at) {
+        TEST_PRINTF("reader fails at byte %zu with %s", script->given,
+                    skiff_err_name(script->fail_with));
+        return script->fail_with;
+    }
+    size_t count = script->size - script->given;
+    count = count < capacity ? count : capacity;
+    if (script->per_call > 0 && count > script->per_call) {
+        count = script->per_call;
+    }
+    memcpy(buffer, script->data + script->given, count);
+    script->given += count;
+    *out_size = script->overflow ? capacity + 1 : count;
+    return SKIFF_OK;
+}
+
+static const unsigned char STREAM[] =
+    "--skiff\r\nContent-Disposition: form-data; name=\"saveFile\"; "
+    "filename=\"SKIF00001.zip\"\r\n\r\nPK\x03\x04 body\r\n--skiff--\r\n";
+#define STREAM_SIZE (sizeof STREAM - 1)
+/* An odd capacity, so the body ends part way into a call. */
+#define READ_CAPACITY ((size_t)7)
+
+static scripted_reader reader;
+
+static void stream_request(size_t declared_size) {
+    memset(&reader, 0, sizeof reader);
+    reader.data = STREAM;
+    reader.size = STREAM_SIZE;
+    request.method = SKIFF_HTTP_POST;
+    request.read_body = read_script;
+    request.read_ctx = &reader;
+    request.body_size = declared_size;
+}
+
+/* Reads the whole body the way a transport does; returns the first error, and what was read. */
+static skiff_err drain(unsigned char *out, size_t out_size, size_t *total) {
+    size_t sent = 0;
+    *total = 0;
+    for (;;) {
+        unsigned char chunk[READ_CAPACITY];
+        size_t got = 0;
+        const skiff_err err = skiff_http_read_body(&request, &sent, chunk, sizeof chunk, &got);
+        if (err != SKIFF_OK) {
+            TEST_PRINTF("read stops after %zu bytes with %s", *total, skiff_err_name(err));
+            TEST_ASSERT_EQUAL_size_t_MESSAGE(0, got, "nothing is handed out with an error");
+            return err;
+        }
+        if (got == 0) {
+            TEST_PRINTF("read %zu bytes of %zu in %d reader calls", *total, request.body_size,
+                        reader.calls);
+            return SKIFF_OK;
+        }
+        TEST_ASSERT_LESS_OR_EQUAL_size_t(out_size - *total, got);
+        memcpy(out + *total, chunk, got);
+        *total += got;
+        TEST_ASSERT_EQUAL_size_t(*total, sent);
+    }
+}
+
+static void test_a_post_streams_its_body_from_a_reader(void) {
+    stream_request(STREAM_SIZE);
+    request.content_type = "multipart/form-data; boundary=skiff";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
+    TEST_ASSERT_EQUAL_PTR(read_script, transport.last_request->read_body);
+    TEST_ASSERT_EQUAL_PTR(&reader, transport.last_request->read_ctx);
+    TEST_ASSERT_EQUAL_size_t(STREAM_SIZE, transport.last_request->body_size);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reader.calls, "the transport reads it, not the check");
+}
+
+static void test_a_reader_needs_a_post_a_size_and_no_body(void) {
+    stream_request(STREAM_SIZE);
+    request.method = SKIFF_HTTP_GET;
+    expect_refused("a GET with a body reader");
+    request.method = SKIFF_HTTP_POST;
+    request.body = "{}";
+    expect_refused("both a body and a body reader");
+    request.body = NULL;
+    request.body_size = 0;
+    expect_refused("a body reader with no size: curl would never ask it for the end");
+    TEST_ASSERT_EQUAL_INT(0, reader.calls);
+}
+
+static void test_reading_hands_out_exactly_body_size_bytes(void) {
+    stream_request(STREAM_SIZE);
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_size_t(STREAM_SIZE, total);
+    TEST_ASSERT_EQUAL_MEMORY(STREAM, out, STREAM_SIZE);
+    TEST_ASSERT_LESS_OR_EQUAL_size_t_MESSAGE(READ_CAPACITY, reader.largest_capacity,
+                                             "never asked for more than the buffer holds");
+    TEST_PRINTF("one call per chunk, plus the one that confirms the end");
+    TEST_ASSERT_EQUAL_INT((int)((STREAM_SIZE + READ_CAPACITY - 1) / READ_CAPACITY) + 1,
+                          reader.calls);
+}
+
+static void test_a_reader_giving_less_per_call_is_asked_again(void) {
+    stream_request(STREAM_SIZE);
+    reader.per_call = 3;
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_MEMORY(STREAM, out, STREAM_SIZE);
+}
+
+static void test_a_reader_is_never_asked_past_the_size(void) {
+    TEST_PRINTF("the body is declared one byte short: the last byte is never asked for, but the "
+                "reader still has it, so the body grew");
+    const size_t declared = STREAM_SIZE - 1;
+    const size_t last_chunk =
+        declared % READ_CAPACITY == 0 ? READ_CAPACITY : declared % READ_CAPACITY;
+    stream_request(declared);
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(declared - last_chunk, total,
+                                     "the chunk that ends the declared size is withheld");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(STREAM_SIZE, reader.given, "the check read the extra byte");
+}
+
+static void test_a_body_shorter_than_its_size_fails(void) {
+    stream_request(STREAM_SIZE + 10);
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(STREAM_SIZE, total, "every byte the reader had went out");
+}
+
+static void test_a_reader_error_is_returned_unchanged(void) {
+    stream_request(STREAM_SIZE);
+    reader.fail_at = 2 * READ_CAPACITY;
+    reader.fail_with = SKIFF_ERR_STORAGE_IO;
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_IO, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_size_t(2 * READ_CAPACITY, total);
+    TEST_PRINTF("an error from the call that confirms the end is returned too");
+    stream_request(STREAM_SIZE);
+    reader.fail_at = STREAM_SIZE;
+    reader.fail_with = SKIFF_ERR_STORAGE_NO_MEDIA;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_MEDIA, drain(out, sizeof out, &total));
+}
+
+static void test_a_reader_overrunning_its_buffer_fails(void) {
+    stream_request(STREAM_SIZE);
+    reader.overflow = 1;
+    unsigned char out[sizeof STREAM];
+    size_t total = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, drain(out, sizeof out, &total));
+    TEST_ASSERT_EQUAL_size_t(0, total);
+}
+
+static void test_reading_refuses_bad_arguments(void) {
+    stream_request(STREAM_SIZE);
+    unsigned char chunk[READ_CAPACITY];
+    size_t sent = 0;
+    size_t got = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(NULL, &sent, chunk, sizeof chunk, &got));
+    TEST_ASSERT_EQUAL_size_t(0, got);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, NULL, chunk, sizeof chunk, &got));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, &sent, NULL, sizeof chunk, &got));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, &sent, chunk, 0, &got));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, &sent, chunk, sizeof chunk, NULL));
+    sent = STREAM_SIZE + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, &sent, chunk, sizeof chunk, &got));
+    sent = 0;
+    request.read_body = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_http_read_body(&request, &sent, chunk, sizeof chunk, &got));
+    TEST_ASSERT_EQUAL_INT(0, reader.calls);
+}
+
 static void test_destroy(void) {
     skiff_transport_destroy(&transport.base);
     TEST_ASSERT_EQUAL_INT(1, transport.destroys);
@@ -230,6 +430,15 @@ int main(void) {
     RUN_TEST(test_if_range_needs_a_range_and_no_line_break);
     RUN_TEST(test_a_post_carries_its_body_and_content_type);
     RUN_TEST(test_bodies_belong_to_posts_and_ranges_to_gets);
+    RUN_TEST(test_a_post_streams_its_body_from_a_reader);
+    RUN_TEST(test_a_reader_needs_a_post_a_size_and_no_body);
+    RUN_TEST(test_reading_hands_out_exactly_body_size_bytes);
+    RUN_TEST(test_a_reader_giving_less_per_call_is_asked_again);
+    RUN_TEST(test_a_reader_is_never_asked_past_the_size);
+    RUN_TEST(test_a_body_shorter_than_its_size_fails);
+    RUN_TEST(test_a_reader_error_is_returned_unchanged);
+    RUN_TEST(test_a_reader_overrunning_its_buffer_fails);
+    RUN_TEST(test_reading_refuses_bad_arguments);
     RUN_TEST(test_destroy);
     return UNITY_END();
 }

@@ -106,6 +106,8 @@ static const mapping_row ROWS[] = {
      FAILURE(CURLE_GOT_NOTHING, CLOCK_CORRECT, PLAIN, HANDSHAKE_PENDING, NO_RESPONSE, NO_CERT,
              SKIFF_OK),
      SKIFF_ERR_NET_CONNECTION_LOST},
+    {"kept connection died under a streamed body, which curl cannot rewind",
+     CODE_ONLY(CURLE_SEND_FAIL_REWIND), SKIFF_ERR_NET_CONNECTION_LOST},
     {"body callback stopped (Memory Stick full)",
      FAILURE(CURLE_WRITE_ERROR, CLOCK_CORRECT, TLS, HANDSHAKE_DONE, RESPONSE, NO_CERT,
              SKIFF_ERR_STORAGE_NO_SPACE),

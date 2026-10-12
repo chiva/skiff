@@ -118,7 +118,7 @@ changed installed copy, or no room. A Settings switch (on by default) tells RomM
 the PSP. See [Architecture](architecture.md#the-app) and the
 [guide](../guide/04-connect-to-romm.md#games-sent-from-romm).
 
-I1 checks on a PSP-1000 that the PSP shows online, sends land within one interval, also those made while
+I1 checks on a PSP-1000 that the PSP shows online, sends land on the next claim (about one interval), also those made while
 Skiff was closed and while it sits on Downloads after the Wi-Fi came back, refusals reach RomM
 with their reason, and the claims cost no download speed or frames
 ([Testing](testing.md#the-app-on-a-psp)).

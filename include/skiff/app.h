@@ -123,8 +123,9 @@
 #define SKIFF_APP_NOTE_MS 3000
 /* While connected, Skiff asks RomM this often for games sent to it from RomM's web UI (Install on
  * device): RomM's dialog shows a device online for 90 s after its last claim, and a send lands
- * within this time, also while the PSP sits on Downloads. 10 s after I1 on a PSP-1000: an empty
- * claim took about 150 ms (3% took 0.7-7 s), and 20 s felt slow to wait for. */
+ * on the next claim, also while the PSP sits on Downloads. The interval runs from the end of the
+ * last claim, so a send can wait this long plus one claim's time. 10 s after I1 on a PSP-1000: an
+ * empty claim took about 150 ms (3% took 0.7-7 s), and 20 s felt slow to wait for. */
 #define SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS 10000
 /* The view is rebuilt at most this often for progress alone. */
 #define SKIFF_APP_PROGRESS_REFRESH_MS 250

@@ -16,19 +16,19 @@ LICENSE_LAST_LINE=21
 
 readonly PREFIX="${1:?usage: build-qrcodegen.sh <prefix> [extra cmake arguments...]}"
 shift
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+readonly SCRIPT_DIR
 WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
 
-# pspdev's image has wget, the host image curl; either is fine because the checksum decides.
-if command -v wget >/dev/null 2>&1; then
-  wget -q -O "$WORK/qrcodegen.tar.gz" \
-    "https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v${QRCODEGEN_VERSION}.tar.gz"
-else
-  curl -fsSL --retry 3 -o "$WORK/qrcodegen.tar.gz" \
-    "https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v${QRCODEGEN_VERSION}.tar.gz"
-fi
-echo "${QRCODEGEN_SHA256}  $WORK/qrcodegen.tar.gz" | sha256sum -c -
+# fetch_verified: the archive gets a few attempts; the SHA256 above decides.
+# shellcheck source=../fetch/fetch-verified.sh
+. "$SCRIPT_DIR/../fetch/fetch-verified.sh"
+
+fetch_verified \
+  "https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v${QRCODEGEN_VERSION}.tar.gz" \
+  "$QRCODEGEN_SHA256" "$WORK/qrcodegen.tar.gz"
 tar -xzf "$WORK/qrcodegen.tar.gz" -C "$WORK"
 readonly SRC="$WORK/QR-Code-generator-${QRCODEGEN_VERSION}/c"
 

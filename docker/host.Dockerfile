@@ -19,16 +19,21 @@ RUN apt-get update \
 # built by the toolchain image's script, so host tests exercise the PSP's TLS code and error codes
 # rather than the distribution's libcurl. find_package() finds it through CMAKE_PREFIX_PATH.
 ENV CMAKE_PREFIX_PATH=/opt/skiff-tls
-COPY toolchain/ /opt/skiff-build/
-RUN /opt/skiff-build/build-tls.sh /opt/skiff-tls
+# The image scripts keep the repository's docker/ layout, so each finds the shared download helper
+# (fetch/fetch-verified.sh: retries, SHA256 check) at ../fetch/ here as in a checkout. The cJSON and
+# libpng downloads below use it too.
+COPY fetch/ /opt/skiff-docker/fetch/
+COPY toolchain/ /opt/skiff-docker/toolchain/
+RUN /opt/skiff-docker/toolchain/build-tls.sh /opt/skiff-tls
 
 # cJSON for RomM's responses (src/romm/), the version pspdev packages for the PSP (1.7.16), so host
 # tests parse with the same code the EBOOTs link. Static only; pinned by SHA256.
 ARG CJSON_VERSION=1.7.16
 ARG CJSON_SHA256=451131a92c55efc5457276807fc0c4c2c2707c9ee96ef90c47d68852d5384c6c
-RUN curl -fsSL --retry 3 -o /tmp/cjson.tar.gz \
+RUN . /opt/skiff-docker/fetch/fetch-verified.sh \
+ && fetch_verified \
       "https://github.com/DaveGamble/cJSON/archive/refs/tags/v${CJSON_VERSION}.tar.gz" \
- && echo "${CJSON_SHA256}  /tmp/cjson.tar.gz" | sha256sum -c - \
+      "${CJSON_SHA256}" /tmp/cjson.tar.gz \
  && mkdir /tmp/cjson && tar -xzf /tmp/cjson.tar.gz -C /tmp/cjson --strip-components=1 \
  && cmake -S /tmp/cjson -B /tmp/cjson/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
       -DENABLE_CJSON_TEST=OFF -DENABLE_CJSON_UTILS=OFF -DENABLE_CUSTOM_COMPILER_FLAGS=OFF \
@@ -42,9 +47,10 @@ ENV CMAKE_PREFIX_PATH=/opt/skiff-tls:/opt/skiff-cjson
 # pinned by SHA256.
 ARG LIBPNG_VERSION=1.6.53
 ARG LIBPNG_SHA256=b20cee717e11416d2f96ccc7d184f63730ca8cb2f03bfd0c4ed77fbc909c0bff
-RUN curl -fsSL --retry 3 -o /tmp/libpng.tar.gz \
+RUN . /opt/skiff-docker/fetch/fetch-verified.sh \
+ && fetch_verified \
       "https://github.com/pnggroup/libpng/archive/refs/tags/v${LIBPNG_VERSION}.tar.gz" \
- && echo "${LIBPNG_SHA256}  /tmp/libpng.tar.gz" | sha256sum -c - \
+      "${LIBPNG_SHA256}" /tmp/libpng.tar.gz \
  && mkdir /tmp/libpng && tar -xzf /tmp/libpng.tar.gz -C /tmp/libpng --strip-components=1 \
  && cmake -S /tmp/libpng -B /tmp/libpng/build -DCMAKE_BUILD_TYPE=Release -DPNG_SHARED=OFF \
       -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_FRAMEWORK=OFF \
@@ -54,8 +60,8 @@ RUN curl -fsSL --retry 3 -o /tmp/libpng.tar.gz \
 ENV CMAKE_PREFIX_PATH=/opt/skiff-tls:/opt/skiff-cjson:/opt/skiff-png
 
 # The QR Code generator the PSP links (src/ui/qr.c), from the same pinned script.
-COPY qrcodegen/ /opt/skiff-qrcodegen-build/
-RUN /opt/skiff-qrcodegen-build/build-qrcodegen.sh /opt/skiff-qrcodegen
+COPY qrcodegen/ /opt/skiff-docker/qrcodegen/
+RUN /opt/skiff-docker/qrcodegen/build-qrcodegen.sh /opt/skiff-qrcodegen
 ENV CMAKE_PREFIX_PATH=/opt/skiff-tls:/opt/skiff-cjson:/opt/skiff-png:/opt/skiff-qrcodegen
 
 # genisoimage writes the launch check's UMD disc image (tests/hardware/make_launch_disc.py, for the

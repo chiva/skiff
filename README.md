@@ -14,8 +14,7 @@
 
 > [!WARNING]
 > **Early development.** Skiff browses and downloads your RomM library on a real PSP, but expect
-> rough edges, and copy `PSP/SAVEDATA/` to your computer before you try save sync. Games sent from
-> RomM's web UI have not been tested on a real PSP yet. Follow the
+> rough edges, and copy `PSP/SAVEDATA/` to your computer before you try save sync. Follow the
 > [roadmap](docs/development/roadmap.md) or watch releases.
 
 Today, getting a game onto a PSP means downloading it on a computer, plugging in a USB cable,

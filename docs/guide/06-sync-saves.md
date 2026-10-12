@@ -115,10 +115,11 @@ When the Wi-Fi, sleep mode or a flat battery cuts a sync short, an upload leaves
 RomM (one RomM had already received whole is found the same on both sides at the next check), and a
 download changes nothing on the PSP until it has arrived whole and matches RomM's checksum (error
 217 otherwise). A restore cut while it was replacing the game's folders is finished the next time
-Skiff starts, which says "A save restore was cut short; Skiff has now finished it" (308). Only if
-Skiff's copy of the save it was restoring is gone, cut short or unreadable does it stop with error
-309 and leave the folders as they are; the backup it made first holds the save as it was.
-[Troubleshooting](troubleshooting.md) explains errors 212 to 217 and 306 to 309.
+Skiff starts, which says "A save restore was cut short; Skiff has now finished it" (308). If Skiff's
+copy of the save it was restoring, or its note of the restore, is gone, cut short or unreadable, it
+stops with error 309 and leaves the folders as they are; the backup it made first holds the save as
+it was. If the Memory Stick cannot be read or written meanwhile, save sync waits until a later start
+finishes the restore. [Troubleshooting](troubleshooting.md) explains errors 212 to 217 and 306 to 309.
 
 ## Saves you delete in RomM
 
@@ -132,9 +133,8 @@ sync, it downloads it, keeping a backup of this PSP's first; otherwise it asks.
 A game that cannot sync shows **Can't sync**, with the reason under the list:
 
 - **"Can't sync: RomM has no save ID for this game. With RomM 5.4 or newer, rescan the
-  platform."** RomM 5.3,
-  a game scanned before RomM 5.4, a game stored as a `.pbp`, or a file RomM cannot read as a disc.
-  The game's details say "Save: no save ID in RomM".
+  platform."** A game scanned before RomM 5.4, a game stored as a `.pbp`, or a file RomM cannot
+  read as a disc. The game's details say "Save: no save ID in RomM".
 - **"Can't sync: Skiff does not know which game in RomM uses this save. Open the game in the
   library and choose Sync save."** Save folders on this PSP for a game Skiff did not install and
   RomM holds no save for yet; the row shows the game's ID, such as `ULUS10064`. A game that is not

@@ -691,6 +691,7 @@ uses:
 
 ```bash
 export SKIFF_TOKEN="$(jq -r .token build/integration/romm.json)"
+rm -f /tmp/ppsspp-save.zip  # zip -r would add to an older archive
 (cd <ppsspp>/memstick/PSP/SAVEDATA && zip -r /tmp/ppsspp-save.zip <game ID>* -x '*.DS_Store')
 curl -sS --cacert build/integration/certs/ca.crt -H "Authorization: Bearer $SKIFF_TOKEN" \
   -F "saveFile=@/tmp/ppsspp-save.zip;filename=<game ID>.zip;type=application/zip" \

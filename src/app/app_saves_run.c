@@ -315,6 +315,15 @@ static skiff_err check_one(app_call *call, check_scratch *s) {
 
 /* ---- Every game ---- */
 
+static const server_rom *server_rom_of(const check_scratch *s, uint64_t rom_id) {
+    for (size_t i = 0; i < s->rom_count; i++) {
+        if (s->roms[i].id == rom_id) {
+            return &s->roms[i];
+        }
+    }
+    return NULL;
+}
+
 /* The PSP ROMs RomM holds saves for, a page at a time. */
 static skiff_err read_server_roms(app_call *call, check_scratch *s) {
     if (!call->saves.has_platform) {
@@ -330,6 +339,10 @@ static skiff_err read_server_roms(app_call *call, check_scratch *s) {
         }
         for (size_t i = 0; i < s->page.count && s->rom_count < APP_SAVES_SERVER_ROMS_MAX; i++) {
             const skiff_romm_rom_summary *item = &s->page.items[i];
+            /* A save uploaded meanwhile shifts the pages: a ROM read twice is still one game. */
+            if (server_rom_of(s, item->id) != NULL) {
+                continue;
+            }
             server_rom *rom = &s->roms[s->rom_count++];
             rom->id = item->id;
             syncable_target(item, rom->save_target, sizeof rom->save_target);
@@ -516,15 +529,6 @@ static uint64_t choose_rom(app_call *call, const check_scratch *s, const char *s
     }
     *several = found > 1;
     return found == 1 ? chosen : 0;
-}
-
-static const server_rom *server_rom_of(const check_scratch *s, uint64_t rom_id) {
-    for (size_t i = 0; i < s->rom_count; i++) {
-        if (s->roms[i].id == rom_id) {
-            return &s->roms[i];
-        }
-    }
-    return NULL;
 }
 
 /* A game for a save ID some ROM has, when there is anything to sync: local folders, saves in

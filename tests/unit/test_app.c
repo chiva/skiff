@@ -4550,6 +4550,22 @@ static void test_another_rom_with_the_same_save_id_starts_as_a_first_sync(void) 
     TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
 }
 
+#define SHIFTED_FIRST_ID 500U
+
+static void test_a_rom_read_twice_across_shifted_pages_is_one_game(void) {
+    TEST_PRINTF("a save uploaded while the list is read shifts ROM 524 onto the next page too");
+    serve_saves_page(0, SHIFTED_FIRST_ID, SKIFF_ROMM_PAGE_SIZE, SKIFF_ROMM_PAGE_SIZE + 2);
+    serve_saves_page(SKIFF_ROMM_PAGE_SIZE, SHIFTED_FIRST_ID + SKIFF_ROMM_PAGE_SIZE - 1, 2,
+                     SKIFF_ROMM_PAGE_SIZE + 2);
+    serve_negotiate("");
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    TEST_ASSERT_FALSE_MESSAGE(shows("Can't sync"), "not taken for two games with one save ID");
+    TEST_ASSERT_TRUE(shows("No saves on this PSP or in RomM yet."));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4677,5 +4693,6 @@ int main(void) {
     RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
     RUN_TEST(test_installed_games_past_the_lookup_budget_are_reached_next_time);
     RUN_TEST(test_another_rom_with_the_same_save_id_starts_as_a_first_sync);
+    RUN_TEST(test_a_rom_read_twice_across_shifted_pages_is_one_game);
     return UNITY_END();
 }

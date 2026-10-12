@@ -785,10 +785,10 @@ which changes the save's hash.
    after the join ends (seconds after `joining connection 1`, never tens of ms). After the sleep
    in step 5: the restore is finished from its journal (308), either at once (`restore settled`
    right after the wake), or by `saves: settle 1 of 3` (more if the Memory Stick was slow to come
-   back), or by the next launch, which says so; the downloaded unit is gone from
-   `PSP/GAME/Skiff/saves-work/`, the transfer run again finds the save in sync, and all 64 files
-   match RomM's unit (download it from RomM's web UI, unzip it and `diff -r` it against the
-   folder). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it
+   back), or by the next launch, which says so. Finished within the session, the downloaded unit
+   is gone from `PSP/GAME/Skiff/saves-work/` and the transfer run again finds the save in sync.
+   Either way all 64 files match RomM's unit (download it from RomM's web UI, unzip it and
+   `diff -r` it against the folder). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it
    joins the Wi-Fi first, with no 102.
 8. S1.8: read back. Pass: `save:` lines with hash, upload, download and restore times (from the
    release app); `stats:` with no frame over 33 ms while saves sync, the browsing thread's lowest

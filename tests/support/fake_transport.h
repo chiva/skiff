@@ -30,8 +30,8 @@
 
 #include "skiff/transport.h"
 
-#define FAKE_TRANSPORT_MAX_ROUTES 16
-#define FAKE_TRANSPORT_MAX_LOG 64
+#define FAKE_TRANSPORT_MAX_ROUTES 32
+#define FAKE_TRANSPORT_MAX_LOG 96
 #define FAKE_TRANSPORT_URL_MAX 256
 #define FAKE_TRANSPORT_HEADERS_MAX 512
 /* Request body bytes kept in the log (more are counted and hashed only). */

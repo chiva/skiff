@@ -3,7 +3,8 @@
  * thread's calls, and the Saves, Backups and choice screens' buttons. The launch check runs once
  * per connection, after the library's first page, and is followed by every transfer that needs no
  * choice (with a backup before every download); conflicts and deletions wait for the player on the
- * Saves screen or the game's details. Library pages and "Download all" always go first.
+ * Saves screen or the game's details. Library pages, "Download all" and games sent from RomM always
+ * go first.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -397,11 +398,12 @@ static void start_complete(skiff_app *app) {
 
 /* ---- What runs next ---- */
 
-/* Save calls wait for the library's requests and "Download all", and never run while Skiff
- * connects, pairs or shows a system dialog. */
+/* Save calls wait for the library's requests, "Download all" and games sent from RomM, and never
+ * run while Skiff connects, pairs or shows a system dialog. */
 static int may_run(const skiff_app *app) {
     if (app_call_busy(app) || app->connect != CONNECT_DONE || app->request != REQUEST_NONE ||
-        app->batch.step != BATCH_NONE || app->dialog != SKIFF_APP_DIALOG_NONE) {
+        app->batch.step != BATCH_NONE || app_sends_busy(app) ||
+        app->dialog != SKIFF_APP_DIALOG_NONE) {
         return 0;
     }
     /* A new server forgets the baselines a call would read and write. */

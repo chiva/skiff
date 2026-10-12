@@ -307,6 +307,27 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_BACKUP_RESTORED, 0, "Backup restored", "Copia restaurada")                        \
     X(SKIFF_TEXT_SAVE_SYNCED_NOTE, 1, "Synced: {1}", "Sincronizada: {1}")                          \
     X(SKIFF_TEXT_SAVE_IN_SYNC_NOTE, 1, "Already in sync: {1}", "Ya sincronizada: {1}")             \
+    /* Games sent from RomM's web UI (Install on device): Settings' row and its states. */         \
+    X(SKIFF_TEXT_SENDS_ROW, 1, "Games from RomM: {1}", "Juegos desde RomM: {1}")                   \
+    X(SKIFF_TEXT_SENDS_ON, 0, "On", "Activado")                                                    \
+    X(SKIFF_TEXT_SENDS_OFF, 0, "Off", "Desactivado")                                               \
+    X(SKIFF_TEXT_SENDS_PAIR_AGAIN, 0, "Pair again to allow it",                                    \
+      "Vincula de nuevo para permitirlo")                                                          \
+    X(SKIFF_TEXT_SENDS_NEEDS_UPDATE, 0, "Needs RomM 5.4", "Requiere RomM 5.4")                     \
+    X(SKIFF_TEXT_SENDS_TURNED_OFF, 0, "Turned off in RomM", "Desactivado en RomM")                 \
+    /* The header after games sent from RomM were added, or some refused. */                       \
+    X(SKIFF_TEXT_SENDS_ADDED, 1, "From RomM: {1} added to Downloads",                              \
+      "Desde RomM: {1} añadidos a Descargas")                                                      \
+    X(SKIFF_TEXT_SENDS_ADDED_SOME, 2, "From RomM: {1} added, {2} not added (see RomM)",            \
+      "Desde RomM: {1} añadidos, {2} no añadidos (mira RomM)")                                     \
+    /* Why a game sent from RomM was not added, as RomM shows it to the player. */                 \
+    X(SKIFF_TEXT_SEND_CHANGED, 0,                                                                  \
+      "A different copy is installed on this PSP: open the game in Skiff to replace it",           \
+      "Hay otra copia instalada en esta PSP: abre el juego en Skiff para sustituirla")             \
+    X(SKIFF_TEXT_SEND_FAILED_DOWNLOAD, 0, "It is in Downloads with an error: retry it there",      \
+      "Está en Descargas con un error: reinténtalo allí")                                          \
+    X(SKIFF_TEXT_INSTALL_EMPTY_FILE, 0, "Skiff can't install this file: it is empty",              \
+      "Skiff no puede instalar este archivo: está vacío")                                          \
     /* Short month names, in order, separated by blanks. */                                        \
     X(SKIFF_TEXT_MONTHS, 0, "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",                     \
       "ene feb mar abr may jun jul ago sep oct nov dic")                                           \

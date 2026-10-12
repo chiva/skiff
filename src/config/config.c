@@ -10,6 +10,7 @@
 #define SECTION_SKIFF SKIFF_CONFIG_SECTION_SKIFF
 #define SECTION_SERVER SKIFF_CONFIG_SECTION_SERVER
 #define SECTION_NETWORK SKIFF_CONFIG_SECTION_NETWORK
+#define SECTION_DOWNLOADS SKIFF_CONFIG_SECTION_DOWNLOADS
 #define SECTION_AUTH SKIFF_CONFIG_SECTION_AUTH
 #define SECTION_MTLS "mtls"
 #define SECTION_HEADERS "headers"
@@ -18,6 +19,7 @@
 #define KEY_URL SKIFF_CONFIG_KEY_URL
 #define KEY_PROFILE SKIFF_CONFIG_KEY_PROFILE
 #define KEY_ROMM_NOTICE SKIFF_CONFIG_KEY_ROMM_NOTICE
+#define KEY_FROM_ROMM SKIFF_CONFIG_KEY_FROM_ROMM
 #define KEY_CA_FILE "ca_file"
 #define KEY_TOKEN SKIFF_CONFIG_KEY_TOKEN
 #define KEY_DEVICE_IDENTIFIER SKIFF_CONFIG_KEY_DEVICE_IDENTIFIER
@@ -49,6 +51,8 @@ typedef enum value_kind {
     VALUE_TOKEN,
     VALUE_LOG_LEVEL,
     VALUE_PROFILE,
+    /* on or off. */
+    VALUE_SWITCH,
 } value_kind;
 
 #define FIELD(name) offsetof(skiff_config, name), sizeof(((skiff_config *)NULL)->name)
@@ -57,8 +61,8 @@ typedef struct known_key {
     const char *section;
     const char *key;
     value_kind kind;
-    /* Where the value goes in skiff_config; unused for the version, the log level and the
-     * profile. */
+    /* Where the value goes in skiff_config; unused for the version, the log level, the profile
+     * and the from_romm switch. */
     size_t offset;
     size_t size;
 } known_key;
@@ -77,6 +81,7 @@ static const known_key KNOWN_KEYS[] = {
     {SECTION_MTLS, KEY_KEY_FILE, VALUE_FILE_NAME, FIELD(key_file)},
     {SECTION_LOG, KEY_LEVEL, VALUE_LOG_LEVEL, 0, 0},
     {SECTION_NETWORK, KEY_PROFILE, VALUE_PROFILE, 0, 0},
+    {SECTION_DOWNLOADS, KEY_FROM_ROMM, VALUE_SWITCH, 0, 0},
 };
 // clang-format on
 
@@ -270,7 +275,23 @@ static int parse_profile(span value, int *out) {
     return 1;
 }
 
+/* on or off, in any case; empty leaves the default (on). */
+static int parse_switch(span value, int *out) {
+    if (value.length == 0 || equals_ignoring_case(value, SKIFF_CONFIG_ON)) {
+        *out = 1;
+        return 1;
+    }
+    if (equals_ignoring_case(value, SKIFF_CONFIG_OFF)) {
+        *out = 0;
+        return 1;
+    }
+    return 0;
+}
+
 static int store_value(const known_key *known, span value, skiff_config *config) {
+    if (known->kind == VALUE_SWITCH) {
+        return parse_switch(value, &config->from_romm);
+    }
     if (known->kind == VALUE_VERSION) {
         return parse_version(value);
     }
@@ -297,6 +318,7 @@ static int store_value(const known_key *known, span value, skiff_config *config)
     case VALUE_VERSION:
     case VALUE_LOG_LEVEL:
     case VALUE_PROFILE:
+    case VALUE_SWITCH:
         break;
     }
     return 0;
@@ -409,10 +431,11 @@ static skiff_err check_mtls_pair(parser *p) {
     return fail(p, SKIFF_ERR_CONFIG_MISSING_KEY, span_of(has_cert ? KEY_KEY_FILE : KEY_CERT_FILE));
 }
 
-/* An empty config: every setting unset, the log at its default level. */
+/* An empty config: every setting unset, the log at its default level, switches on. */
 static void reset(skiff_config *config) {
     memset(config, 0, sizeof *config);
     config->log_level = SKIFF_CONFIG_DEFAULT_LOG_LEVEL;
+    config->from_romm = 1;
 }
 
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,

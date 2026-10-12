@@ -4,7 +4,7 @@
 #include "app_internal.h"
 
 /* The rows of the settings screen, in order. */
-enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_SAVES, SETTINGS_ROWS };
+enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_SAVES, SETTINGS_SENDS, SETTINGS_ROWS };
 _Static_assert(SETTINGS_ROWS == APP_SETTINGS_ROW_COUNT, "the view draws every settings row");
 
 static void open_keyboard(skiff_app *app, skiff_app_screen from) {
@@ -33,6 +33,12 @@ void app_settings_update(skiff_app *app, unsigned actions) {
     if (app->settings_list.selected == SETTINGS_SAVES) {
         if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->connect == CONNECT_DONE) {
             app_saves_open(app);
+        }
+        return;
+    }
+    if (app->settings_list.selected == SETTINGS_SENDS) {
+        if (actions & SKIFF_UI_ACTION_CONFIRM) {
+            app_sends_choose(app);
         }
         return;
     }

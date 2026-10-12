@@ -121,6 +121,10 @@
 #define SKIFF_APP_CACHED_PAGES 3
 /* How long a short message ("Added to downloads") stays in the header. */
 #define SKIFF_APP_NOTE_MS 3000
+/* While connected, Skiff asks RomM this often for games sent to it from RomM's web UI (Install on
+ * device): RomM's dialog shows a device online for 90 s after its last claim, and a send lands
+ * within this time, also while the PSP sits on Downloads. */
+#define SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS 20000
 /* The view is rebuilt at most this often for progress alone. */
 #define SKIFF_APP_PROGRESS_REFRESH_MS 250
 
@@ -280,6 +284,10 @@ typedef struct skiff_app_env {
      * join's error (SKIFF_ERR_NET_UNAVAILABLE, SKIFF_ERR_NET_WIFI_JOIN). */
     skiff_err (*net_start)(void *ctx, int profile);
     skiff_err (*net_poll)(void *ctx, int *joined);
+    /* 1 when the Wi-Fi is joined now by a join made after the last suspend, whoever made it (the
+     * download worker rejoins on its own); 0 otherwise, or while the network is busy (a join under
+     * way). Never joins, never waits. */
+    int (*net_online)(void *ctx);
     /* After the network picker connected: the connection it joined, for config.ini. */
     skiff_err (*net_profile)(void *ctx, int *profile);
     /* The name the player gave a Network Settings connection, shown while joining it. */

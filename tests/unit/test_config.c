@@ -238,6 +238,37 @@ static void test_the_romm_notice_keeps_the_release_line_told(void) {
     TEST_ASSERT_EQUAL_STRING("5.4", config.romm_notice);
 }
 
+static void test_games_from_romm_are_on_unless_switched_off(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[server]\nurl = https://romm.test\n"));
+    TEST_PRINTF("absent: on");
+    TEST_ASSERT_EQUAL_INT(1, config.from_romm);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[downloads]\nfrom_romm = off\n"));
+    TEST_ASSERT_EQUAL_INT(0, config.from_romm);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[Downloads]\nFrom_RomM = OFF\n"));
+    TEST_ASSERT_EQUAL_INT(0, config.from_romm);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[downloads]\nfrom_romm = on\n"));
+    TEST_ASSERT_EQUAL_INT(1, config.from_romm);
+    TEST_PRINTF("empty: on, as unset");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[downloads]\nfrom_romm =\n"));
+    TEST_ASSERT_EQUAL_INT(1, config.from_romm);
+    const char *refused[] = {"[downloads]\nfrom_romm = no\n", "[downloads]\nfrom_romm = 0\n",
+                             "[downloads]\nfrom_romm = of\n", "[downloads]\nfrom_romm = on off\n"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        assert_refused(refused[i], SKIFF_ERR_CONFIG_INVALID_VALUE, 2, "downloads", "from_romm");
+        TEST_PRINTF("a refused file leaves the default: on");
+        TEST_ASSERT_EQUAL_INT(1, config.from_romm);
+    }
+    assert_refused("[downloads]\nfrom_romm = off\nfrom_romm = on\n", SKIFF_ERR_CONFIG_INVALID_VALUE,
+                   3, "downloads", "from_romm");
+    TEST_PRINTF("the app writes it through the line-preserving edit");
+    set("[server]\nurl = https://romm.test\n", SKIFF_CONFIG_SECTION_DOWNLOADS,
+        SKIFF_CONFIG_KEY_FROM_ROMM, SKIFF_CONFIG_OFF);
+    TEST_ASSERT_EQUAL_STRING("[server]\nurl = https://romm.test\n\n[downloads]\nfrom_romm = off\n",
+                             edited);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse(edited));
+    TEST_ASSERT_EQUAL_INT(0, config.from_romm);
+}
+
 static void test_version_1_and_no_version_are_accepted(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 1\n"));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, parse("[skiff]\nversion = 01\n"));
@@ -874,6 +905,7 @@ int main(void) {
     RUN_TEST(test_an_unknown_log_level_is_refused);
     RUN_TEST(test_the_network_profile_is_a_number_from_1_to_10);
     RUN_TEST(test_the_romm_notice_keeps_the_release_line_told);
+    RUN_TEST(test_games_from_romm_are_on_unless_switched_off);
     RUN_TEST(test_version_1_and_no_version_are_accepted);
     RUN_TEST(test_unknown_keys_are_ignored_and_the_first_is_kept);
     RUN_TEST(test_a_key_before_any_section_is_unknown);

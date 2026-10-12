@@ -4980,6 +4980,33 @@ static void test_a_settle_that_keeps_failing_stops_save_sync_until_one_works(voi
     TEST_ASSERT_FALSE(work_file_exists("saves-work/" GAME_UP ".zip"));
 }
 
+static void test_leaving_while_a_cut_restore_settles_drops_the_automatic_retry(void) {
+    open_download_again();
+    stage_opens = 0;
+    storage.on_call = sleep_at_first_stage_file;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until_settles(1);
+    TEST_PRINTF(
+        "Back while the restore waits to be settled: the settle goes on, the retry does not");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    memory_stick_back();
+    const int joins = env_state.net_starts;
+    for (int i = 0; i < 4 * FRAMES_MAX && (app->saves->settle_pending || app_call_busy(app)); i++) {
+        frame(0);
+    }
+    run_saves();
+    storage.on_call = NULL;
+    TEST_ASSERT_FALSE(app->saves->settle_pending);
+    TEST_ASSERT_EQUAL_INT(SAVES_OK, app_saves_blocked(app));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    char content[64];
+    snprintf(content, sizeof content, "/api/saves/%u/content", SAVE_UP);
+    TEST_ASSERT_EQUAL_size_t(1, count_requests(content));
+    TEST_ASSERT_FALSE(work_file_exists("saves-work/stage"));
+}
+
 static void test_a_suspend_on_the_pair_screen_joins_again_and_keeps_the_code(void) {
     write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
     serve_heartbeat("5.3.1");
@@ -5736,6 +5763,7 @@ int main(void) {
     RUN_TEST(test_a_restore_cut_by_a_suspend_is_settled_once_the_stick_is_back);
     RUN_TEST(test_a_settle_that_keeps_failing_stops_save_sync_until_one_works);
     RUN_TEST(test_a_suspend_on_the_pair_screen_joins_again_and_keeps_the_code);
+    RUN_TEST(test_leaving_while_a_cut_restore_settles_drops_the_automatic_retry);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);

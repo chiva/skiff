@@ -480,6 +480,15 @@ void app_saves_resume(skiff_app *app) {
     app_set_screen(app, details ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES);
 }
 
+/* The player is still where they started the sync: its game's details, or the Saves screens. */
+static int still_there(const skiff_app *app, app_saves_origin origin, const app_save_game *game) {
+    if (origin == SAVES_FROM_DETAILS) {
+        return app->screen == SKIFF_APP_SCREEN_DETAILS && app->rom.summary.id == game->rom_id;
+    }
+    return origin == SAVES_FROM_LIST &&
+           (app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS);
+}
+
 /* The Wi-Fi went with a lost request: what the player asked for joins it again first (and goes on
  * after), what runs on its own waits for the next check. */
 static int wait_for_network(skiff_app *app) {
@@ -537,6 +546,16 @@ void app_saves_update(skiff_app *app) {
         saves->activity.text[0] = '\0';
         return;
     }
+    /* An automatic retry is for the player who is still there (a settle may have taken a while):
+     * one who left is not brought back to it. */
+    if (saves->want_apply && saves->apply_retry_pending &&
+        !still_there(app, saves->apply_origin, &saves->apply_game)) {
+        skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                        "saves: %s not run again, the player left", saves->apply_game.save_target);
+        saves->want_apply = 0;
+        saves->apply_retry_pending = 0;
+        saves->apply_origin = SAVES_FROM_NONE;
+    }
     if (wait_for_network(app)) {
         return;
     }
@@ -588,15 +607,6 @@ static void refused(skiff_app *app) {
 /* Where a player's sync goes back to. */
 static skiff_app_screen origin_screen(app_saves_origin origin) {
     return origin == SAVES_FROM_DETAILS ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES;
-}
-
-/* The player is still where they started the sync: its game's details, or the Saves screens. */
-static int still_there(const skiff_app *app, app_saves_origin origin, const app_save_game *game) {
-    if (origin == SAVES_FROM_DETAILS) {
-        return app->screen == SKIFF_APP_SCREEN_DETAILS && app->rom.summary.id == game->rom_id;
-    }
-    return origin == SAVES_FROM_LIST &&
-           (app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS);
 }
 
 static void show_failure(skiff_app *app, skiff_err err, app_saves_origin origin) {

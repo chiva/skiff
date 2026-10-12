@@ -4167,6 +4167,69 @@ static void test_a_new_server_waits_until_the_old_baselines_are_gone(void) {
     TEST_ASSERT_NOT_NULL(strstr(config, "token = " TOKEN));
 }
 
+static void test_a_transfer_that_ends_after_leaving_keeps_the_players_screen(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    for (int i = 0; i < FRAMES_MAX && app->call.kind != CALL_SAVES_APPLY; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_SAVES_APPLY, app->call.kind);
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_PRINTF("Back while the save uploads: the upload finishes, the library stays on screen");
+    frame(SKIFF_UI_ACTION_BACK);
+    env_state.hold_calls = 0;
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+}
+
+static void test_a_restore_cut_mid_way_is_settled_and_stops_save_sync(void) {
+    char extra[SAVE_PATH_MAX];
+    snprintf(extra, sizeof extra, "%s/" GAME_ASK "EXTRA", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, extra));
+    char file[SAVE_PATH_MAX + 16];
+    snprintf(file, sizeof file, "%s/DATA.BIN", extra);
+    write_file(file, "a folder RomM's save lacks", strlen("a folder RomM's save lacks"));
+    open_the_conflict();
+    serve_content_of(SAVE_ASK, scene.ask_unit, scene.ask_size);
+    serve_downloaded(SAVE_ASK, ROM_ASK, scene.ask_server_hash);
+    TEST_PRINTF("Use RomM's: its save lacks a folder, which the Memory Stick will not remove");
+    storage.fail_suffix = GAME_ASK "EXTRA";
+    storage.rmdir_error = SKIFF_ERR_STORAGE_IO;
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(requested_path("/api/saves/203/downloaded"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_PRINTF(
+        "the journal could not be settled either: nothing syncs until a launch finishes it");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    char journal[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/journal", journal, sizeof journal);
+    FILE *kept = fopen(journal, "rb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(kept, "the journal stays for the next launch");
+    fclose(kept);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4283,5 +4346,7 @@ int main(void) {
     RUN_TEST(test_a_lost_connection_stops_the_batch_for_the_next_check);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
+    RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);
+    RUN_TEST(test_a_restore_cut_mid_way_is_settled_and_stops_save_sync);
     return UNITY_END();
 }

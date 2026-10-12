@@ -712,6 +712,17 @@ skiff_err app_saves_check_run(app_call *call) {
 
 /* ---- Transfers ---- */
 
+/* A restore that failed may have stopped while replacing live files: its journal is replayed now,
+ * so no check reads a half-restored save as this PSP's. */
+static void settle_restore(app_call *call) {
+    skiff_saves_recovery recovery;
+    call->saves.recovery = skiff_saves_recover(call->storage, &call->roots, &recovery);
+    skiff_log_write(call->saves.log,
+                    call->saves.recovery == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_WARN,
+                    SAVES_LOG_TAG, "restore settled: outcome %d: %s (%d)", (int)recovery.outcome,
+                    skiff_err_name(call->saves.recovery), (int)call->saves.recovery);
+}
+
 /* A transfer's working memory. */
 typedef struct apply_scratch {
     skiff_saves_unit unit;
@@ -847,6 +858,9 @@ static skiff_err download(app_call *call, apply_scratch *a) {
     if (err == SKIFF_OK) {
         err = skiff_saves_restore(call->storage, &call->roots, a->unit_path, game->save_target,
                                   &a->report);
+        if (err != SKIFF_OK) {
+            settle_restore(call);
+        }
     }
     (void)skiff_storage_remove(call->storage, a->real_path);
     skiff_log_write(
@@ -892,6 +906,9 @@ static skiff_err restore_backup(app_call *call, apply_scratch *a) {
     const int64_t started = call->now_ms(call->clock_ctx);
     const skiff_err err = skiff_saves_restore_backup(call->storage, &call->roots, game->save_target,
                                                      call->saves.backup, &a->report);
+    if (err != SKIFF_OK) {
+        settle_restore(call);
+    }
     skiff_log_write(call->saves.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN,
                     SAVES_LOG_TAG, "%s: backup %u restored (backup %u made) in %lld ms: %s (%d)",
                     game->save_target, (unsigned)call->saves.backup, (unsigned)a->report.backup,
@@ -906,6 +923,7 @@ skiff_err app_saves_apply_run(app_call *call) {
     }
     call->saves.stale = 0;
     call->saves.baseline_error = SKIFF_OK;
+    call->saves.recovery = SKIFF_OK;
     skiff_err err = SKIFF_ERR_INVALID_ARG;
     switch (call->saves.op) {
     case SAVES_OP_UPLOAD:

@@ -144,6 +144,9 @@ typedef struct app_saves_call {
     int stale;
     /* The baseline could not be saved (the transfer itself happened). */
     skiff_err baseline_error;
+    /* A restore that failed was settled at once (skiff_saves_recover()): SKIFF_OK, 308, 309, or
+     * the error that left its journal for the next launch. */
+    skiff_err recovery;
 } app_saves_call;
 
 /* Where a player's sync of one game came from, and returns to. */

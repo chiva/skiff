@@ -495,6 +495,15 @@ static skiff_app_screen origin_screen(app_saves_origin origin) {
     return origin == SAVES_FROM_DETAILS ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES;
 }
 
+/* The player is still where they started the sync: its game's details, or the Saves screens. */
+static int still_there(const skiff_app *app, app_saves_origin origin, const app_save_game *game) {
+    if (origin == SAVES_FROM_DETAILS) {
+        return app->screen == SKIFF_APP_SCREEN_DETAILS && app->rom.summary.id == game->rom_id;
+    }
+    return origin == SAVES_FROM_LIST &&
+           (app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS);
+}
+
 static void show_failure(skiff_app *app, skiff_err err, app_saves_origin origin) {
     app_show_error(app, err, NULL, MESSAGE_BACK, MESSAGE_NONE, SKIFF_TEXT_OK,
                    origin_screen(origin));
@@ -648,6 +657,11 @@ void app_saves_applied(skiff_app *app) {
                         "saves.json not saved: %s (%d)", skiff_err_name(call->baseline_error),
                         (int)call->baseline_error);
     }
+    if (recovery_failed(call->recovery)) {
+        saves->recovered = call->recovery;
+    }
+    /* Left meanwhile: the row and a note say how it went, the player's screen stays. */
+    const int there = origin != SAVES_FROM_NONE && still_there(app, origin, &game);
     const int again = err == SKIFF_ERR_ROMM_SAVE_CONFLICT || (err == SKIFF_OK && call->stale);
     if (err == SKIFF_OK && !call->stale) {
         saves->batch_completed++;
@@ -656,7 +670,7 @@ void app_saves_applied(skiff_app *app) {
     }
     if (err == SKIFF_ERR_ROMM_FORBIDDEN) {
         refused(app);
-        if (origin != SAVES_FROM_NONE) {
+        if (there) {
             show_failure(app, SKIFF_ERR_ROMM_SAVES_FORBIDDEN, origin);
         }
         return;
@@ -668,8 +682,10 @@ void app_saves_applied(skiff_app *app) {
         }
         if (err == SKIFF_OK) {
             app_note(app, app_text(app, SKIFF_TEXT_BACKUP_RESTORED));
-            app_set_screen(app, SKIFF_APP_SCREEN_SAVES);
-        } else {
+            if (there) {
+                app_set_screen(app, SKIFF_APP_SCREEN_SAVES);
+            }
+        } else if (there) {
             show_failure(app, err, SAVES_FROM_LIST);
         }
         return;
@@ -689,9 +705,6 @@ void app_saves_applied(skiff_app *app) {
             if (row != NULL) {
                 row->recheck = 1;
             }
-            if (origin != SAVES_FROM_NONE) {
-                app_set_screen(app, origin_screen(origin));
-            }
         }
         return;
     }
@@ -704,7 +717,7 @@ void app_saves_applied(skiff_app *app) {
         if (app_is_network_error(err)) {
             saves->batch_next = saves->shown->count;
         }
-        if (origin != SAVES_FROM_NONE) {
+        if (there) {
             show_failure(app, err, origin);
         }
         return;
@@ -712,7 +725,6 @@ void app_saves_applied(skiff_app *app) {
     put_game(app, &game);
     if (origin != SAVES_FROM_NONE) {
         note_game(app, SKIFF_TEXT_SAVE_SYNCED_NOTE, &game);
-        app_set_screen(app, origin_screen(origin));
     }
 }
 

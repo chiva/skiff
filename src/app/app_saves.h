@@ -220,6 +220,11 @@ typedef struct app_saves {
     app_saves_origin running_origin;
     /* A transfer the player chose (conflict screen, backups), waiting for the browsing thread. */
     int want_apply;
+    /* The player's transfer lost to a suspend runs again once the Wi-Fi is back, once: the one
+     * waiting is that second run (apply_retry_pending), and so is the one running (apply_retried).
+     */
+    int apply_retry_pending;
+    int apply_retried;
     app_saves_op apply_op;
     app_saves_origin apply_origin;
     app_save_game apply_game;

@@ -10,6 +10,25 @@ int app_is_network_error(skiff_err err) {
            err == SKIFF_ERR_NET_WIFI_JOIN || err == SKIFF_ERR_NET_CONNECTION_LOST;
 }
 
+int app_is_suspend_error(skiff_err err) {
+    return app_is_network_error(err) || err == SKIFF_ERR_NET_TLS_HANDSHAKE ||
+           err == SKIFF_ERR_NET_TLS_CLIENT_CERT || err == SKIFF_ERR_STORAGE_IO ||
+           err == SKIFF_ERR_STORAGE_NO_MEDIA || err == SKIFF_ERR_STORAGE_NOT_FOUND ||
+           err == SKIFF_ERR_CONFIG_INVALID_VALUE;
+}
+
+void app_notice_suspend(skiff_app *app) {
+    const uint32_t suspends = app->env.suspends(app->env.ctx);
+    if (suspends == app->suspends_seen) {
+        return;
+    }
+    app->suspends_seen = suspends;
+    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "woke from a suspend: the Wi-Fi joins again before the next request%s",
+                    app->net_joined ? "" : " (not joined)");
+    app_network_failed(app, SKIFF_ERR_NET_CONNECTION_LOST);
+}
+
 void app_network_failed(skiff_app *app, skiff_err err) {
     if (!app_is_network_error(err)) {
         return;

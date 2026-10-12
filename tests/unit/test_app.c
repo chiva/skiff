@@ -84,6 +84,8 @@ typedef struct fake_env {
     int calls_started;
     int cancels;
     skiff_err call_start_error;
+    /* How many times the PSP has suspended (env.suspends()). */
+    uint32_t suspends;
 } fake_env;
 
 static char dir[TEMP_DIR_PATH_MAX];
@@ -217,6 +219,8 @@ static int env_call_done(void *ctx) {
 
 static void env_call_cancel(void *ctx) { ((fake_env *)ctx)->cancels++; }
 
+static uint32_t env_suspends(void *ctx) { return ((fake_env *)ctx)->suspends; }
+
 static skiff_app_env make_env(void) {
     const skiff_app_env env = {
         .ctx = &env_state,
@@ -235,6 +239,7 @@ static skiff_app_env make_env(void) {
         .call_start = env_call_start,
         .call_done = env_call_done,
         .call_cancel = env_call_cancel,
+        .suspends = env_suspends,
     };
     return env;
 }
@@ -3107,6 +3112,9 @@ static void test_bad_arguments_and_locks(void) {
     env.call_cancel = NULL;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
     env = make_env();
+    env.suspends = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
+    env = make_env();
     int mutexes[4];
     config.lock = count_lock;
     config.unlock = no_unlock;
@@ -4273,6 +4281,292 @@ static void test_a_lost_connection_stops_the_batch_for_the_next_check(void) {
     TEST_ASSERT_TRUE(shows("Changed on this PSP"));
 }
 
+/* ---- A suspend under save sync (S1.7) ---- */
+
+/* The PSP sleeps once a save's .part file is open: on waking, its writes fail (the Memory Stick's
+ * handles are gone), as on hardware; the next .part works again. */
+static int part_opens;
+
+static int is_part(const char *path) {
+    const size_t length = strlen(path);
+    const size_t suffix = strlen(SKIFF_ROMM_DOWNLOAD_PART_SUFFIX);
+    return length >= suffix && strcmp(path + length - suffix, SKIFF_ROMM_DOWNLOAD_PART_SUFFIX) == 0;
+}
+
+static void sleep_at_first_part(void *ctx, const char *call, const char *path) {
+    (void)ctx;
+    if (strcmp(call, "open") != 0 || !is_part(path)) {
+        return;
+    }
+    part_opens++;
+    if (part_opens == 1) {
+        TEST_PRINTF("the PSP sleeps with %s open", path);
+        env_state.suspends++;
+        storage.fail_suffix = SKIFF_ROMM_DOWNLOAD_PART_SUFFIX;
+        storage.write_budget = storage.bytes_written;
+        storage.write_error = SKIFF_ERR_STORAGE_IO;
+    } else {
+        storage.write_error = SKIFF_OK;
+    }
+}
+
+/* The requests made since the log held `from`, in order, each matched against path (exact) or
+ * prefix: the index of the first one that is. */
+static size_t first_request_from(size_t from, const char *prefix) {
+    for (size_t i = from; i < transport.log_count; i++) {
+        if (strncmp(transport.log[i].url + strlen(SERVER), prefix, strlen(prefix)) == 0) {
+            return i;
+        }
+    }
+    return transport.log_count;
+}
+
+static size_t count_requests(const char *prefix) {
+    size_t count = 0;
+    for (size_t i = 0; i < transport.log_count; i++) {
+        count += strncmp(transport.log[i].url + strlen(SERVER), prefix, strlen(prefix)) == 0;
+    }
+    return count;
+}
+
+/* Up Game's save deleted on this PSP since it synced, RomM holding it: the launch check asks. */
+static void delete_synced_save(char *hash) {
+    put_save(GAME_UP, UP_LOCAL);
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    char path[SAVE_PATH_MAX];
+    snprintf(path, sizeof path, "%s/" GAME_UP DATA_FOLDER "/DATA.BIN", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, path));
+    snprintf(path, sizeof path, "%s/" GAME_UP DATA_FOLDER, roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(posix, path));
+}
+
+static void test_a_suspend_joins_the_wifi_again_before_the_next_save_call(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    TEST_ASSERT_TRUE(app->net_joined);
+
+    TEST_PRINTF("the PSP sleeps on the Saves screen: the connection is given up at once");
+    env_state.suspends++;
+    frame(0);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_NULL(app->transport);
+    const int joins = env_state.net_starts;
+    const size_t before = transport.log_count;
+    TEST_PRINTF("the player's sync joins the Wi-Fi first, then checks, then asks");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(before, first_request_from(before, "/api/heartbeat"),
+                                     "no save call before the connection is back");
+    TEST_ASSERT_TRUE(first_request_from(before, NEGOTIATE_PATH) < transport.log_count);
+    print_view();
+}
+
+static void test_a_save_download_cut_by_a_suspend_runs_again_after_joining(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    unsigned char unit[UNIT_BYTES_MAX];
+    char server_hash[HASH_TEXT_MAX];
+    const size_t unit_size = server_unit(GAME_UP, UP_LOCAL, unit, sizeof unit, server_hash);
+    TEST_ASSERT_EQUAL_STRING(hash, server_hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    serve_content_of(SAVE_UP, unit, unit_size);
+    serve_downloaded(SAVE_UP, ROM_UP, hash);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+
+    TEST_PRINTF("Download again; the PSP sleeps under it and its .part write fails on waking");
+    part_opens = 0;
+    storage.on_call = sleep_at_first_part;
+    const int joins = env_state.net_starts;
+    const size_t completes = count_requests(COMPLETE_PATH);
+    const size_t before = transport.log_count;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVES);
+    run_saves();
+    storage.on_call = NULL;
+
+    TEST_PRINTF("no Memory Stick error: the Wi-Fi was joined again and the download ran again");
+    TEST_ASSERT_FALSE(shows("[302]"));
+    TEST_ASSERT_FALSE(shows("[402]"));
+    TEST_ASSERT_EQUAL_INT(2, part_opens);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    char content[160];
+    snprintf(content, sizeof content, "/api/saves/%u/content", SAVE_UP);
+    const size_t cut = first_request_from(before, content);
+    TEST_ASSERT_TRUE(cut < transport.log_count);
+    TEST_PRINTF("after the cut transfer, the next request is the rejoin's heartbeat (S1.7 sent the "
+                "session's close first and failed with 402)");
+    TEST_ASSERT_EQUAL_size_t(cut + 1, first_request_from(cut + 1, "/api"));
+    TEST_ASSERT_EQUAL_size_t(cut + 1, first_request_from(cut + 1, "/api/heartbeat"));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(completes, count_requests(COMPLETE_PATH),
+                                     "the session the suspend cut is left for RomM to expire");
+    TEST_ASSERT_TRUE(first_request_from(cut + 1, content) < transport.log_count);
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(UP_LOCAL, data);
+    TEST_ASSERT_TRUE(requested_path("/api/saves/201/downloaded"));
+    TEST_ASSERT_TRUE(shows("Synced"));
+
+    static char log_text[64 * 1024];
+    skiff_log_flush(app->log);
+    read_app_file(SKIFF_APP_LOG_FILE_NAME, log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(
+        strstr(log_text, "across a suspend, taken as SKIFF_ERR_NET_CONNECTION_LOST"));
+    TEST_ASSERT_NOT_NULL(strstr(log_text, GAME_UP " lost to a suspend, again after joining"));
+}
+
+/* The PSP sleeps whenever a file whose path ends in sleep_suffix is opened. */
+static const char *sleep_suffix;
+static int sleeps;
+
+static void sleep_at_suffix(void *ctx, const char *call, const char *path) {
+    (void)ctx;
+    const size_t length = strlen(path);
+    const size_t suffix = strlen(sleep_suffix);
+    if (strcmp(call, "open") == 0 && length >= suffix &&
+        strcmp(path + length - suffix, sleep_suffix) == 0) {
+        sleeps++;
+        env_state.suspends++;
+    }
+}
+
+static void test_a_save_download_cut_by_a_second_suspend_says_the_connection_was_lost(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    char content[160];
+    snprintf(content, sizeof content,
+             "/api/saves/%u/content?device_id=" SAVE_DEVICE "&optimistic=false", SAVE_UP);
+    fake_route *cut = serve_raw(content, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nPK\x03\x04");
+    cut->fail_mid_body = SKIFF_ERR_STORAGE_IO;
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+    TEST_PRINTF("every try is cut by a suspend: one more after joining, then the player is told");
+    const int joins = env_state.net_starts;
+    sleeps = 0;
+    sleep_suffix = SKIFF_ROMM_DOWNLOAD_PART_SUFFIX;
+    storage.on_call = sleep_at_suffix;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    storage.on_call = NULL;
+    TEST_ASSERT_EQUAL_INT(2, sleeps);
+    TEST_ASSERT_EQUAL_INT(2, cut->uses);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_TRUE_MESSAGE(shows("[111]"), "a lost connection, not a Memory Stick fault");
+    TEST_ASSERT_FALSE(shows("[302]"));
+    TEST_PRINTF("OK goes back to the Saves screen, where the game says so too");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("[111]"));
+}
+
+static void test_without_a_suspend_a_memory_stick_fault_stays_one(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    char content[160];
+    snprintf(content, sizeof content,
+             "/api/saves/%u/content?device_id=" SAVE_DEVICE "&optimistic=false", SAVE_UP);
+    fake_route *cut = serve_raw(content, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nPK\x03\x04");
+    cut->fail_mid_body = SKIFF_ERR_STORAGE_IO;
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_EQUAL_INT(1, cut->uses);
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    TEST_ASSERT_TRUE(app->net_joined);
+}
+
+static void test_a_batch_upload_cut_by_a_suspend_counts_as_a_lost_connection(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char up[HASH_TEXT_MAX];
+    local_hash(GAME_UP, up);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Alpha", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    fake_route *upload = serve_upload(ROM_UP, up, "false", SAVE_UP);
+    TEST_PRINTF(
+        "the PSP sleeps under the launch check's upload; the unit cannot be read on waking");
+    upload->fail_mid_upload = SKIFF_ERR_STORAGE_IO;
+    upload->fail_after_upload_bytes = 1;
+    serve_complete();
+    sleeps = 0;
+    sleep_suffix = SKIFF_SAVES_UNIT_EXTENSION;
+    storage.on_call = sleep_at_suffix;
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    storage.on_call = NULL;
+    TEST_ASSERT_TRUE(sleeps > 0);
+    TEST_ASSERT_EQUAL_INT(1, upload->uses);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_FALSE_MESSAGE(requested_path(COMPLETE_PATH),
+                              "no request before the Wi-Fi is joined again");
+    TEST_PRINTF("the batch never runs it again on its own: the row says the connection was lost");
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[111]"));
+    TEST_ASSERT_FALSE(shows("[302]"));
+}
+
+static void test_a_table_added_to_the_view_starts_empty(void) {
+    open_paired_library(1);
+    app->view.table_count = 0;
+    skiff_app_table *stale = &app->view.tables[0];
+    stale->row_count = 2;
+    stale->column_x[1] = 99.0f;
+    snprintf(stale->rows[0].cells[0], sizeof stale->rows[0].cells[0], "old");
+    skiff_app_table *table = app_view_add_table(app, 1);
+    TEST_ASSERT_EQUAL_PTR(stale, table);
+    TEST_ASSERT_EQUAL_size_t(0, table->row_count);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, table->column_x[1]);
+    TEST_ASSERT_EQUAL_STRING("", table->rows[0].cells[0]);
+    TEST_ASSERT_EQUAL_size_t(1, table->dim_from);
+}
+
 static void test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync(void) {
     char work[TEMP_DIR_PATH_MAX];
     app_file("saves-work", work, sizeof work);
@@ -5071,6 +5365,12 @@ int main(void) {
     RUN_TEST(test_a_game_without_a_save_id_says_so_on_its_details);
     RUN_TEST(test_a_save_that_fails_romms_checksum_is_never_restored);
     RUN_TEST(test_a_lost_connection_stops_the_batch_for_the_next_check);
+    RUN_TEST(test_a_suspend_joins_the_wifi_again_before_the_next_save_call);
+    RUN_TEST(test_a_save_download_cut_by_a_suspend_runs_again_after_joining);
+    RUN_TEST(test_a_save_download_cut_by_a_second_suspend_says_the_connection_was_lost);
+    RUN_TEST(test_without_a_suspend_a_memory_stick_fault_stays_one);
+    RUN_TEST(test_a_batch_upload_cut_by_a_suspend_counts_as_a_lost_connection);
+    RUN_TEST(test_a_table_added_to_the_view_starts_empty);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);

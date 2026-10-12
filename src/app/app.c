@@ -467,7 +467,8 @@ static int env_valid(const skiff_app_env *env) {
            env->net_start != NULL && env->net_poll != NULL && env->net_profile != NULL &&
            env->net_profile_name != NULL && env->tls_start != NULL && env->open_transport != NULL &&
            env->random != NULL && env->start_worker != NULL && env->stop_worker != NULL &&
-           env->call_start != NULL && env->call_done != NULL && env->call_cancel != NULL;
+           env->call_start != NULL && env->call_done != NULL && env->call_cancel != NULL &&
+           env->suspends != NULL;
 }
 
 static int locks_valid(const skiff_app_config *config) {
@@ -522,6 +523,7 @@ skiff_err skiff_app_create(const skiff_app_config *config, const skiff_app_env *
     }
     app->config = *config;
     app->env = *env;
+    app->suspends_seen = env->suspends(env->ctx);
     app->installer = skiff_install_find_installer(SKIFF_APP_PLATFORM_SLUG);
     app->dirty = 1;
     app->screen = SKIFF_APP_SCREEN_STARTING;
@@ -695,6 +697,7 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
         actions = 0;
     }
     take_events(app);
+    app_notice_suspend(app);
     app_call_update(app);
     app_batch_update(app);
     app_saves_update(app);

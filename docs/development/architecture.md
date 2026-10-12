@@ -221,7 +221,12 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   to its end, and while the network picker is open, taking it without waiting (while the worker
   rejoins, up to 30 s, the screen keeps drawing); the worker takes it to rejoin or reload. Each
   request to RomM from the UI holds it too, so the worker never tears the network down under one;
-  one made while the worker recovers fails as a lost connection, and Retry joins again. Quitting
+  one made while the worker recovers fails as a lost connection, and Retry joins again. A suspend
+  (the power callback's count, `env.suspends()`) is a lost connection too: the app joins again
+  before its next request, a call that failed across one is taken as a lost connection whatever
+  error it saw (on waking, writes to files opened before fail and the Memory Stick may not be back
+  yet: S1.7 saw 302, then 402 from a CA file curl could not read), and a save transfer the player
+  started runs once more after the join. Quitting
   stops the worker (5 s); only when it stopped are the app, the network (after a disconnect that
   succeeded), TLS and the mutexes released, otherwise the process exit does it. A system dialog
   that will not close ends the app the same way.

@@ -729,9 +729,15 @@ client that does not register itself.
    error (111 or 103) and no save in RomM for the disc; switch on, □ Sync save again: it uploads,
    and the disc is now on the Saves screen.
 7. S1.7: delete `SKIF00002DATA00` (XMB, or USB), launch Skiff: "Deleted on this PSP"; ✕ Sync, then
-   ✕ Download again, and put the PSP to sleep while "Syncing" shows; wake it. Pass: the folder is
-   whole again, either at once (the restore's copy is redone after the wake) or after the next
-   launch, which finishes the cut restore first and says so (308).
+   ✕ Download again, and put the PSP to sleep while "Syncing" shows; wake it. Pass: no error
+   (no 302, 402 or 102): "Connecting" shows, the Wi-Fi is joined again and the download runs again
+   by itself, back on the Saves screen with "Synced"; skiff.log has "woke from a suspend", "taken as
+   SKIFF_ERR_NET_CONNECTION_LOST" and "lost to a suspend, again after joining the Wi-Fi", and no
+   "session ... closed" line between the cut download and the rejoin's heartbeat. If the sleep came
+   during the restore instead, the folder is whole again, either at once (the restore's copy is
+   redone after the wake) or after the next launch, which finishes the cut restore first and says
+   so (308). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it joins the Wi-Fi
+   first, with no 102.
 8. S1.8: read back. Pass: `save:` lines with hash, upload, download and restore times; `stats:`
    with no frame over 33 ms while saves sync, the browsing thread's lowest free stack at least
    8 KB and system memory free unchanged (84 KB); no token or header value in any file but

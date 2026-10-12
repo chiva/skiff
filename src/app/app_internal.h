@@ -246,6 +246,10 @@ typedef struct app_call {
     int abandoned;
     /* The browse client is replaced once it is done (a lost connection, a new server). */
     int drop_client;
+    /* env.suspends() when it started, and whether it failed across a suspend: err is then
+     * SKIFF_ERR_NET_CONNECTION_LOST whatever the request saw (app_call_update()). */
+    uint32_t suspends_at_start;
+    int suspended;
 } app_call;
 
 typedef struct app_message {
@@ -364,6 +368,8 @@ struct skiff_app {
     int quit;
     int has_server;
     int net_joined;
+    /* env.suspends() when last looked at (app_notice_suspend()). */
+    uint32_t suspends_seen;
     int tls_started;
     int profile;
     /* Waiting for the Wi-Fi switch before joining. */
@@ -452,6 +458,12 @@ void app_network_picked(skiff_app *app, skiff_app_dialog_result result);
 void app_network_failed(skiff_app *app, skiff_err err);
 /* An error of the Wi-Fi or the connection, not of RomM. */
 int app_is_network_error(skiff_err err);
+/* Errors a suspend causes in a call that spans it: the connection gone, and the Memory Stick's
+ * files lost to it or not back yet (a CA file that cannot be read fails as a setting). */
+int app_is_suspend_error(skiff_err err);
+/* Once a frame: a suspend since the last look leaves the Wi-Fi to join again before the next
+ * request, as a lost connection does. */
+void app_notice_suspend(skiff_app *app);
 /* Connected again: the library, or the details request that failed before. */
 void app_resume_after_connect(skiff_app *app);
 /* The browse transport and RomM client, made when missing; SKIFF_OK or why not. */

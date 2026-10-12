@@ -95,6 +95,34 @@ static void run(void *arg) {
 
 /* ---- On the screen's thread ---- */
 
+/* Whether the call's work needs the Wi-Fi: leaving a save deleted, restoring a backup, listing
+ * backups, the free space and queueing "Download all" only touch the Memory Stick. */
+static int uses_network(const app_call *call) {
+    if (call->kind == CALL_BATCH_SPACE || call->kind == CALL_BATCH_QUEUE ||
+        call->kind == CALL_SAVES_BACKUPS) {
+        return 0;
+    }
+    return call->kind != CALL_SAVES_APPLY ||
+           (call->saves.op != SAVES_OP_LEAVE_DELETED && call->saves.op != SAVES_OP_RESTORE_BACKUP);
+}
+
+/* A request that failed across a suspend failed because of it (S1.7: a save's .part write, then a
+ * CA file read while the Memory Stick came back), whatever error it saw: it is a lost connection,
+ * which joins the Wi-Fi again before the next request. */
+static void blame_suspend(skiff_app *app, app_call *call) {
+    if (call->failed_to_start || !uses_network(call) || !app_is_suspend_error(call->err) ||
+        app->env.suspends(app->env.ctx) == call->suspends_at_start) {
+        return;
+    }
+    skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+                    "call %d: %s (%d) across a suspend, taken as %s (%d)", (int)call->kind,
+                    skiff_err_name(call->err), (int)call->err,
+                    skiff_err_name(SKIFF_ERR_NET_CONNECTION_LOST),
+                    (int)SKIFF_ERR_NET_CONNECTION_LOST);
+    call->err = SKIFF_ERR_NET_CONNECTION_LOST;
+    call->suspended = 1;
+}
+
 int app_call_busy(const skiff_app *app) { return app->call.kind != CALL_NONE; }
 
 void app_call_start(skiff_app *app, app_call_kind kind) {
@@ -102,6 +130,8 @@ void app_call_start(skiff_app *app, app_call_kind kind) {
     call->kind = kind;
     call->abandoned = 0;
     call->failed_to_start = 0;
+    call->suspended = 0;
+    call->suspends_at_start = app->env.suspends(app->env.ctx);
     call->err = SKIFF_OK;
     call->romm = &app->romm;
     /* Kept apart from call->err: once started, the thread may write that before call_start()
@@ -188,6 +218,7 @@ void app_call_update(skiff_app *app) {
     if (!app_call_busy(app) || (!call->failed_to_start && !app->env.call_done(app->env.ctx))) {
         return;
     }
+    blame_suspend(app, call);
     const app_call_kind kind = call->kind;
     /* Idle before the result is applied: applying may start the next call. */
     call->kind = CALL_NONE;

@@ -521,6 +521,8 @@ void app_saves_update(skiff_app *app) {
         saves->want_apply = 0;
         start_apply(app, &saves->apply_game, saves->apply_op, saves->backups_pick,
                     saves->apply_origin);
+        saves->apply_retried = saves->apply_retry_pending;
+        saves->apply_retry_pending = 0;
         saves->apply_origin = SAVES_FROM_NONE;
         return;
     }
@@ -742,9 +744,11 @@ void app_saves_applied(skiff_app *app) {
     /* Left meanwhile: the row and a note say how it went, the player's screen stays. */
     const int there = origin != SAVES_FROM_NONE && still_there(app, origin, &game);
     const int again = err == SKIFF_ERR_ROMM_SAVE_CONFLICT || (err == SKIFF_OK && call->stale);
+    const int retry = err != SKIFF_OK && app->call.suspended && origin != SAVES_FROM_NONE &&
+                      !saves->apply_retried;
     if (err == SKIFF_OK && !call->stale) {
         saves->batch_completed++;
-    } else if (!again) {
+    } else if (!again && !retry) {
         saves->batch_failed++;
     }
     if (err == SKIFF_ERR_ROMM_FORBIDDEN) {
@@ -785,6 +789,20 @@ void app_saves_applied(skiff_app *app) {
                 row->recheck = 1;
             }
         }
+        return;
+    }
+    if (retry) {
+        /* The PSP slept under the player's transfer. Live saves change only in the restore, whose
+         * journal settled any cut (settle_restore()), so it runs again once the Wi-Fi is joined
+         * (wait_for_network()), back on the screen it started from. */
+        skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                        "saves: %s lost to a suspend, again after joining the Wi-Fi",
+                        game.save_target);
+        app_network_failed(app, err);
+        saves->apply_op = call->op;
+        saves->apply_origin = origin;
+        saves->apply_retry_pending = 1;
+        saves->want_apply = 1;
         return;
     }
     if (err != SKIFF_OK) {

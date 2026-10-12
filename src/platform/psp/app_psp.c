@@ -371,6 +371,11 @@ static void call_cancel(void *ctx) {
     skiff_psp_caller_cancel(&platform->caller);
 }
 
+static uint32_t suspends(void *ctx) {
+    (void)ctx;
+    return (uint32_t)skiff_psp_power_events_now().suspends;
+}
+
 static skiff_err random_bytes(void *ctx, unsigned char *out, size_t size) {
     (void)ctx;
     /* TLS's generator, seeded from KIRK (kirk_entropy.c); started by tls_start. */
@@ -418,6 +423,7 @@ skiff_app_env skiff_psp_app_env(skiff_psp_app *platform) {
         .call_start = call_start,
         .call_done = call_done,
         .call_cancel = call_cancel,
+        .suspends = suspends,
     };
     return env;
 }

@@ -51,6 +51,14 @@ and certificate verify flags. The host's link-time contracts live in
 `src/platform/host/tls_hooks.c` (entropy from the operating system's `getrandom()`, a monotonic
 clock); they are never linked into an EBOOT.
 
+**Downloads.** Every download in the toolchain and host image builds (Mbed TLS, curl, the CA
+bundle, the QR Code generator, and the host image's cJSON and libpng) goes through
+`docker/fetch/fetch-verified.sh`: three attempts, five seconds apart, retrying a download error or a
+SHA256 mismatch, then failing with the URL and the last reason. pspdev's BusyBox `wget` has no retry
+option and curl's `--retry` skips DNS errors (a CI build once failed on `wget: bad address
+'curl.se'`), so the helper retries for both. Both images copy `docker/fetch/` and the scripts
+beside each other under `/opt/skiff-docker/`, as in the repository.
+
 **Mbed TLS profile.** `docker/toolchain/configure-mbedtls.sh` edits Mbed TLS's default config
 headers in place with `sed`, so the installed headers carry the profile and Skiff, curl and mbedtls
 agree on struct layouts. It removes the server side, DTLS, renegotiation, certificate writing,

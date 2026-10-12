@@ -1,0 +1,4 @@
+# The image scripts source docker/fetch/fetch-verified.sh. pre-commit passes files in batches, so
+# shellcheck follows a `# shellcheck source=` path (relative to the script) only with these.
+external-sources=true
+source-path=SCRIPTDIR

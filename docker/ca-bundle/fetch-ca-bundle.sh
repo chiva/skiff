@@ -22,13 +22,12 @@ WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
 
-# pspdev's image has wget; the checksum decides either way.
-if command -v wget >/dev/null 2>&1; then
-  wget -q -O "$WORK/$BUNDLE_NAME" "https://curl.se/ca/cacert-${CA_BUNDLE_DATE}.pem"
-else
-  curl -fsSL -o "$WORK/$BUNDLE_NAME" "https://curl.se/ca/cacert-${CA_BUNDLE_DATE}.pem"
-fi
-echo "$CA_BUNDLE_SHA256  $WORK/$BUNDLE_NAME" | sha256sum -c -
+# fetch_verified: the bundle gets a few attempts; the SHA256 above decides.
+# shellcheck source=../fetch/fetch-verified.sh
+. "$SCRIPT_DIR/../fetch/fetch-verified.sh"
+
+fetch_verified "https://curl.se/ca/cacert-${CA_BUNDLE_DATE}.pem" "$CA_BUNDLE_SHA256" \
+  "$WORK/$BUNDLE_NAME"
 
 install -D -m 644 "$WORK/$BUNDLE_NAME" "$DEST/$BUNDLE_NAME"
 install -D -m 644 "$SCRIPT_DIR/MPL-2.0.txt" "$DEST/LICENSE"

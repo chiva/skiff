@@ -15,21 +15,25 @@ FROM pspdev/pspdev:v20261001@sha256:54895e6f5afb71b8f4f6915ee6d5023e1e087ca7afdf
 RUN psp-gcc -dumpversion | grep -q '^15\.' \
  && psp-pacman -R --noconfirm curl libzip mbedtls
 
-COPY toolchain/ /opt/skiff-build/
-RUN /opt/skiff-build/build-tls.sh "${PSPDEV}/psp" -DCMAKE_TOOLCHAIN_FILE="${PSPDEV}/psp/share/pspdev.cmake"
+# The image scripts keep the repository's docker/ layout, so each finds the shared download helper
+# (fetch/fetch-verified.sh: retries, SHA256 check) at ../fetch/ here as in a checkout.
+COPY fetch/ /opt/skiff-docker/fetch/
+COPY toolchain/ /opt/skiff-docker/toolchain/
+RUN /opt/skiff-docker/toolchain/build-tls.sh "${PSPDEV}/psp" \
+      -DCMAKE_TOOLCHAIN_FILE="${PSPDEV}/psp/share/pspdev.cmake"
 
 # The CA bundle the app trusts by default (Mozilla's roots, SHA256-pinned in fetch-ca-bundle.sh) and
 # its licence. scripts/dev.sh puts it next to the app's EBOOT and scripts/collect-licenses.sh ships
 # the licence. A layer of its own, after the TLS build, so a bundle bump does not recompile mbedtls
 # and curl.
 ENV SKIFF_CA_BUNDLE_DIR="${PSPDEV}/psp/share/skiff-ca-bundle"
-COPY ca-bundle/ /opt/skiff-ca-bundle-build/
-RUN /opt/skiff-ca-bundle-build/fetch-ca-bundle.sh "${SKIFF_CA_BUNDLE_DIR}"
+COPY ca-bundle/ /opt/skiff-docker/ca-bundle/
+RUN /opt/skiff-docker/ca-bundle/fetch-ca-bundle.sh "${SKIFF_CA_BUNDLE_DIR}"
 
 # Nayuki's QR Code generator (MIT, pinned by SHA256 in qrcodegen/build-qrcodegen.sh), which draws
 # the pairing address as a QR code. A layer of its own, so a bump rebuilds nothing above.
-COPY qrcodegen/ /opt/skiff-qrcodegen-build/
-RUN /opt/skiff-qrcodegen-build/build-qrcodegen.sh "${PSPDEV}/psp" \
+COPY qrcodegen/ /opt/skiff-docker/qrcodegen/
+RUN /opt/skiff-docker/qrcodegen/build-qrcodegen.sh "${PSPDEV}/psp" \
       -DCMAKE_TOOLCHAIN_FILE="${PSPDEV}/psp/share/pspdev.cmake"
 
 WORKDIR /src

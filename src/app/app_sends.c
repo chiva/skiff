@@ -450,6 +450,10 @@ static void sort_sends(skiff_app *app, app_sends_round *round) {
  * the queue's save. */
 static void settle_queued(const skiff_app *app, app_sends_round *round) {
     const app_batch *batch = round->batch;
+    /* A send is chosen for the queue only into the round's batch. */
+    if (batch == NULL) {
+        return;
+    }
     unsigned char counted[APP_BATCH_MAX] = {0};
     for (size_t i = 0; i < round->claim.count; i++) {
         app_send *send = &round->sends[i];

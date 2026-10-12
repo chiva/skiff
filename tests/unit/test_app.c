@@ -4262,9 +4262,9 @@ static void test_the_saves_row_waits_for_the_connection(void) {
     TEST_ASSERT_EQUAL_size_t(APP_SETTINGS_ROW_COUNT, view()->row_count);
     TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), view()->rows[2].label);
     TEST_ASSERT_TRUE(view()->rows[2].dim);
-    TEST_PRINTF("Games from RomM shows its setting until the server is known");
-    TEST_ASSERT_EQUAL_STRING("Games from RomM: On", view()->rows[3].label);
-    TEST_ASSERT_FALSE(view()->rows[3].dim);
+    TEST_PRINTF("Games from RomM: this RomM's heartbeat holds no DEVICE_INSTALL");
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: Turned off in RomM", view()->rows[3].label);
+    TEST_ASSERT_TRUE(view()->rows[3].dim);
     frame(SKIFF_UI_ACTION_DOWN);
     frame(SKIFF_UI_ACTION_DOWN);
     frame(SKIFF_UI_ACTION_CONFIRM);
@@ -5861,7 +5861,7 @@ static void test_a_rom_read_twice_across_shifted_pages_is_one_game(void) {
 #define OTHER_PLATFORM 2U
 #define TOO_LARGE_BYTES 4294967296ULL
 #define LIBRARY_PAGE_PATH "/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY
-#define CLAIM_INTERVAL SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS
+#define CLAIM_INTERVAL ((int64_t)SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS)
 
 static void send_id(unsigned n, char *out) { snprintf(out, SEND_ID_MAX, SEND_ID_FORMAT, n); }
 

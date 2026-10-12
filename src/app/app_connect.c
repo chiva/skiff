@@ -112,7 +112,9 @@ skiff_err app_ensure_client(skiff_app *app) {
 /* ---- Joining the Wi-Fi ---- */
 
 static void start_join(skiff_app *app) {
-    if (app_now(app) < app->join_retry_ms) {
+    /* A round of games sent from RomM ends first: the network picker may lead to a new queue
+     * (app_network_picked()), which must not replace the one the round queues into. */
+    if (app_now(app) < app->join_retry_ms || app->sends.round != NULL) {
         return;
     }
     if (!app->env.switch_on(app->env.ctx)) {
@@ -240,6 +242,7 @@ void app_heartbeat_done(skiff_app *app) {
     }
     app->has_server = 1;
     app->connect = CONNECT_PAIRING;
+    app_sends_connected(app);
     if (notice_needed(app)) {
         char tested[16];
         snprintf(tested, sizeof tested, "%d.%d", SKIFF_ROMM_TESTED_MAJOR, SKIFF_ROMM_TESTED_MINOR);

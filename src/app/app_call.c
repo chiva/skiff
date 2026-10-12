@@ -93,6 +93,12 @@ static void run(void *arg) {
     case CALL_SAVES_BACKUPS:
         call->err = app_saves_backups_run(call);
         break;
+    case CALL_SENDS_CLAIM:
+        call->err = app_sends_claim_run(call);
+        break;
+    case CALL_SENDS_QUEUE:
+        call->err = app_sends_queue_run(call);
+        break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
         break;
@@ -220,6 +226,12 @@ static void apply(skiff_app *app, app_call_kind kind) {
     case CALL_SAVES_BACKUPS:
         app_saves_backups_listed(app);
         break;
+    case CALL_SENDS_CLAIM:
+        app_sends_claimed(app);
+        break;
+    case CALL_SENDS_QUEUE:
+        app_sends_queued(app);
+        break;
     case CALL_FREE_SPACE:
         app_free_space_done(app);
         break;
@@ -249,6 +261,9 @@ void app_call_update(skiff_app *app) {
                         "call %d: dropped after %s (%d)", (int)kind, skiff_err_name(call->err),
                         (int)call->err);
         app_network_failed(app, call->err);
+        if (kind == CALL_SENDS_CLAIM || kind == CALL_SENDS_QUEUE) {
+            app_sends_dropped(app);
+        }
     } else {
         apply(app, kind);
     }

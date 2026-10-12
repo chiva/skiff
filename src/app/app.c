@@ -493,6 +493,7 @@ skiff_err app_reset_server(skiff_app *app) {
     /* Another server or token may see other collections, or be allowed to list them. */
     app_collections_forget(app);
     app->batch.step = BATCH_NONE;
+    app_sends_reset(app);
     const skiff_err err = start_queue(app);
     app_queue_refresh(app);
     return err;
@@ -578,6 +579,7 @@ void skiff_app_destroy(skiff_app *app) {
     }
     skiff_romm_pairing_clear(&app->pairing.pairing, NULL);
     skiff_romm_pairing_clear(&app->call.pairing, &app->call.pairing_result);
+    app_sends_dropped(app);
     skiff_romm_client_clear(&app->romm);
     skiff_romm_client_clear(&app->worker_romm);
     skiff_transport_destroy(app->transport);
@@ -697,7 +699,10 @@ static void confirm_update(skiff_app *app, unsigned actions) {
                                                                      : app->keyboard_from);
         return;
     }
-    if (!(actions & SKIFF_UI_ACTION_CONFIRM)) {
+    /* What would change the queue or the server waits while games sent from RomM are queued (well
+     * under a second): OK does nothing until then. */
+    if (!(actions & SKIFF_UI_ACTION_CONFIRM) ||
+        (app_sends_queueing(app) && app->confirm != CONFIRM_RESTORE_BACKUP)) {
         return;
     }
     switch (app->confirm) {
@@ -738,6 +743,7 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     app_notice_suspend(app);
     app_call_update(app);
     app_batch_update(app);
+    app_sends_update(app);
     app_saves_update(app);
     if (app->note.text[0] != '\0' && app_now(app) >= app->note_until_ms) {
         app->note.text[0] = '\0';

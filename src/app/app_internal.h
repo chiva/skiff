@@ -5,6 +5,7 @@
 
 #include "skiff/app.h"
 #include "skiff/install.h"
+#include "skiff/romm_installs.h"
 #include "skiff/romm_pairing.h"
 
 /* A text for the header: plain, or the text a game's name fills ({1}), whose name is shortened when
@@ -34,8 +35,8 @@ typedef struct app_header_text {
 #define APP_QUEUE_ROWS SKIFF_APP_ROWS_FIT(APP_QUEUE_DETAIL_LINES, 1)
 #define APP_SETTINGS_LINES 3
 #define APP_SETTINGS_ROWS SKIFF_APP_ROWS_FIT(APP_SETTINGS_LINES, 0)
-/* Settings' rows: the server, Pair again, Saves. */
-#define APP_SETTINGS_ROW_COUNT 3
+/* Settings' rows: the server, Pair again, Saves, Games from RomM. */
+#define APP_SETTINGS_ROW_COUNT 4
 /* Lines a game's title and its file name each take at most on the details screen, beside the
  * cover: the size, the download state and the free space always fit under them. */
 #define APP_DETAILS_NAME_LINES 3
@@ -134,6 +135,11 @@ typedef enum app_call_kind {
     CALL_SAVES_APPLY,
     CALL_SAVES_COMPLETE,
     CALL_SAVES_BACKUPS,
+    /* Games sent from RomM (app_sends.c): remote_install registered when needed, the claim, each
+     * claimed game's details and the free space; then the chosen games queued with one save, and
+     * every send reported after it. */
+    CALL_SENDS_CLAIM,
+    CALL_SENDS_QUEUE,
     /* The Memory Stick's free space at startup: its first count reads the whole FAT (3 s on a
      * PSP-1000, S1), so it runs off the screen while the Wi-Fi joins. */
     CALL_FREE_SPACE,
@@ -202,9 +208,10 @@ typedef struct app_batch {
     int free_known;
     app_batch_step step;
     skiff_romm_rom_summary games[APP_BATCH_MAX];
-    /* Out of the queue call: each game's plan (planned[i] when it has one), the requests made of
-     * them, the queue as it was, and what was queued. */
+    /* Out of the queue call: each game's plan (planned[i] when it has one, else why not in
+     * plan_errors[i]), the requests made of them, the queue as it was, and what was queued. */
     int planned[APP_BATCH_MAX];
+    skiff_err plan_errors[APP_BATCH_MAX];
     skiff_install_plan plans[APP_BATCH_MAX];
     skiff_job_request requests[APP_BATCH_MAX];
     uint32_t ids[APP_BATCH_MAX];
@@ -216,6 +223,42 @@ typedef struct app_batch {
     size_t plan_failures;
     skiff_err plan_error;
 } app_batch;
+
+/* A round of games sent from RomM, from its claim to its reports (app_sends.c), on the heap. */
+typedef struct app_sends_round app_sends_round;
+
+/* Why Settings' "Games from RomM" cannot be switched, in the order the row says it. */
+typedef enum app_sends_block {
+    SENDS_OK,
+    /* Nothing is known about the server yet: the row shows the setting. */
+    SENDS_NOT_CONNECTED,
+    /* RomM before 5.4 (no sends at all). */
+    SENDS_NEEDS_UPDATE,
+    /* RomM 5.4 with DEVICE_INSTALL turned off (its heartbeat's ENABLED is not true). */
+    SENDS_TURNED_OFF,
+    /* The token lacks devices.write, there is no device id, or RomM refused it (218). */
+    SENDS_NEEDS_PAIRING,
+} app_sends_block;
+
+/* Games sent from RomM (app_sends.c): what this run told RomM and when it next asks. */
+typedef struct app_sends {
+    /* When the next claim may run (app_now()); 0 right after connecting. */
+    int64_t next_claim_ms;
+    /* The round under way, from its claim to its reports; NULL between rounds. */
+    app_sends_round *round;
+    /* The last failed claim's error, logged once until another result. */
+    skiff_err last_error;
+    /* remote_install true was sent on this connection. */
+    int registered;
+    /* The player switched the setting off: remote_install false is sent at the next chance in this
+     * run. */
+    int unregister_pending;
+    /* RomM refused the token (218): Settings offers Pair again until a new pairing or server. */
+    int forbidden;
+    /* RomM answered 404 (the device deleted, or sends turned off since the heartbeat): no claim
+     * until the next connection. */
+    int gone;
+} app_sends;
 
 typedef struct app_call {
     skiff_romm_client *romm;
@@ -351,6 +394,7 @@ struct skiff_app {
     app_message message;
     app_pairing pairing;
     app_batch batch;
+    app_sends sends;
     /* Save sync (app_saves.c), on the heap. */
     app_saves *saves;
 
@@ -534,6 +578,8 @@ void app_cover_done(skiff_app *app);
 int app_cover_shown(const skiff_app *app);
 /* Why the ROM on the details screen cannot be downloaded, or SKIFF_TEXT_COUNT when it can. */
 skiff_text_id app_details_refusal(const skiff_app *app);
+/* Why Skiff cannot install a file skiff_install_check() refused, as the details screen says it. */
+skiff_text_id app_install_support_text(skiff_install_support support);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */
 int app_rom_downloadable(const skiff_app *app, const skiff_romm_rom_summary *rom);
 /* installed.json can still record rom_id's file_name, counting the records queued downloads will
@@ -627,6 +673,34 @@ int app_job_unfinished(const skiff_job *job);
 void app_settings_update(skiff_app *app, unsigned actions);
 void app_server_entered(skiff_app *app, const char *url);
 void app_server_change_confirmed(skiff_app *app);
+
+/* ---- app_sends.c ---- */
+
+/* Once a frame, after app_batch_update() and before app_saves_update(): registers and claims when a
+ * claim is due (right after connecting, then every SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS) and nothing
+ * else runs or waits, and tells RomM remote_install false after the player switched it off. */
+void app_sends_update(skiff_app *app);
+/* The heartbeat came back: a new connection registers again and claims at once. */
+void app_sends_connected(skiff_app *app);
+/* A new server or token: what RomM refused and a false still to send go with the old one. */
+void app_sends_reset(skiff_app *app);
+/* Frees the round of a call that was abandoned, or of an app that quits. */
+void app_sends_dropped(skiff_app *app);
+/* A round is under way or a claim is due: save sync waits for it (sends go first). */
+int app_sends_busy(const skiff_app *app);
+/* The queue call runs: a single download, "Download all", a cancel, a server change and a new
+ * pairing wait for it. */
+int app_sends_queueing(const skiff_app *app);
+app_sends_block app_sends_blocked(const skiff_app *app);
+/* Settings' row: its label (SKIFF_APP_LABEL_MAX), whether it is dimmed, and its button. */
+void app_sends_row(const skiff_app *app, char *label, size_t size, int *dim);
+void app_sends_choose(skiff_app *app);
+/* On the browsing thread (call->app's round). */
+skiff_err app_sends_claim_run(app_call *call);
+skiff_err app_sends_queue_run(app_call *call);
+/* Back on the screen's thread. */
+void app_sends_claimed(skiff_app *app);
+void app_sends_queued(skiff_app *app);
 
 /* ---- app_saves.c ---- */
 

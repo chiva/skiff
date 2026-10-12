@@ -4259,9 +4259,12 @@ static void test_the_saves_row_waits_for_the_connection(void) {
     TEST_PRINTF("pairing, from which Settings opens before Skiff ever reached the library");
     frame(SKIFF_UI_ACTION_MENU);
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
-    TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
+    TEST_ASSERT_EQUAL_size_t(APP_SETTINGS_ROW_COUNT, view()->row_count);
     TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), view()->rows[2].label);
     TEST_ASSERT_TRUE(view()->rows[2].dim);
+    TEST_PRINTF("Games from RomM shows its setting until the server is known");
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: On", view()->rows[3].label);
+    TEST_ASSERT_FALSE(view()->rows[3].dim);
     frame(SKIFF_UI_ACTION_DOWN);
     frame(SKIFF_UI_ACTION_DOWN);
     frame(SKIFF_UI_ACTION_CONFIRM);
@@ -5843,6 +5846,825 @@ static void test_a_rom_read_twice_across_shifted_pages_is_one_game(void) {
     TEST_ASSERT_TRUE(shows("No saves on this PSP or in RomM yet."));
 }
 
+/* ---- Games sent from RomM ---- */
+
+/* A token paired with the device scopes but not the save ones (save sync stays out of the way). */
+#define SENDS_SCOPES "platforms.read,roms.read,devices.read,devices.write"
+#define DEVICE_PATH "/api/devices/" SAVE_DEVICE
+#define CLAIM_PATH DEVICE_PATH "/installs/claim"
+#define REPORT_PATH_MAX 128
+#define SEND_ID_FORMAT "5e4d0000-0000-4000-8000-%012u"
+#define SEND_ID_MAX 40
+#define SENDS_JSON_MAX 8192
+#define SENDS_LOG_MAX (64 * 1024)
+/* RomM's other platform, and a file past what FAT holds. */
+#define OTHER_PLATFORM 2U
+#define TOO_LARGE_BYTES 4294967296ULL
+#define LIBRARY_PAGE_PATH "/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY
+#define CLAIM_INTERVAL SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS
+
+static void send_id(unsigned n, char *out) { snprintf(out, SEND_ID_MAX, SEND_ID_FORMAT, n); }
+
+static void report_path(unsigned n, char *out) {
+    char id[SEND_ID_MAX];
+    send_id(n, id);
+    snprintf(out, REPORT_PATH_MAX, DEVICE_PATH "/installs/%s", id);
+}
+
+/* RomM 5.4's heartbeat with DEVICE_INSTALL.ENABLED as enabled ("true", "false"). */
+static void serve_sends_heartbeat(const char *version, const char *enabled) {
+    char raw[512];
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"SYSTEM\":{\"VERSION\":\"%s\"},\"DEVICE_INSTALL\":{\"ENABLED\":%s,"
+                     "\"EXCLUDED_PLATFORM_SLUGS\":[\"win\"]}}",
+             version, enabled);
+    serve_raw("/api/heartbeat", raw);
+}
+
+/* RomM's answer to remote_install set to on. */
+static fake_route *serve_register(int on) {
+    char raw[256];
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"id\":\"" SAVE_DEVICE "\",\"name\":\"Skiff on PSP\",\"capabilities\":{"
+                     "\"remote_install\":%s}}",
+             on ? "true" : "false");
+    return serve_raw(DEVICE_PATH, raw);
+}
+
+/* A claim of count sends, send i + 1 for roms[i] with files[i] file ids (1 when files is NULL). */
+static fake_route *serve_claim(const unsigned *roms, const unsigned *files, size_t count) {
+    static char raw[SENDS_JSON_MAX];
+    int used = snprintf(raw, sizeof raw, JSON_OK "[");
+    for (size_t i = 0; i < count; i++) {
+        char id[SEND_ID_MAX];
+        send_id((unsigned)i + 1, id);
+        used += snprintf(raw + used, sizeof raw - (size_t)used,
+                         "%s{\"id\":\"%s\",\"user_id\":1,\"device_id\":\"" SAVE_DEVICE
+                         "\",\"rom_id\":%u,\"file_ids\":[",
+                         i > 0 ? "," : "", id, roms[i]);
+        const unsigned file_count = files != NULL ? files[i] : 1;
+        for (unsigned f = 0; f < file_count; f++) {
+            used += snprintf(raw + used, sizeof raw - (size_t)used, "%s%u", f > 0 ? "," : "",
+                             roms[i] * 10 + f + 1);
+        }
+        used +=
+            snprintf(raw + used, sizeof raw - (size_t)used,
+                     "],\"status\":\"taken\",\"reason\":null,\"created_at\":"
+                     "\"2026-10-12T13:52:53+00:00\",\"updated_at\":\"2026-10-12T13:52:54+00:00\"}");
+    }
+    snprintf(raw + used, sizeof raw - (size_t)used, "]");
+    return serve_raw(CLAIM_PATH, raw);
+}
+
+static fake_route *serve_empty_claim(void) { return serve_raw(CLAIM_PATH, JSON_OK "[]"); }
+
+/* RomM's answer to send n's report of status. */
+static fake_route *serve_report(unsigned n, const char *status) {
+    char id[SEND_ID_MAX];
+    send_id(n, id);
+    char raw[256];
+    snprintf(raw, sizeof raw, JSON_OK "{\"id\":\"%s\",\"status\":\"%s\",\"rom_id\":1}", id, status);
+    char path[REPORT_PATH_MAX];
+    report_path(n, path);
+    return serve_raw(path, raw);
+}
+
+/* A sent game's details: on platform, file_name (JSON text) of size, file_count files. */
+static void serve_sent_rom(unsigned id, unsigned platform, const char *file_name,
+                           unsigned long long size, unsigned file_count) {
+    char raw[4096];
+    int used = snprintf(raw, sizeof raw,
+                        JSON_OK "{\"id\":%u,\"platform_id\":%u,\"name\":\"Sent %u\",\"fs_name\":"
+                                "\"%s\",\"fs_size_bytes\":%llu,\"crc_hash\":\"%08x\","
+                                "\"has_multiple_files\":%s,\"files\":[",
+                        id, platform, id, file_name, size, (unsigned)body_crc,
+                        file_count > 1 ? "true" : "false");
+    for (unsigned f = 0; f < file_count; f++) {
+        used += snprintf(raw + used, sizeof raw - (size_t)used,
+                         "%s{\"rom_id\":%u,\"file_name\":\"%s%s\",\"file_size_bytes\":%llu,"
+                         "\"crc_hash\":\"%08x\"}",
+                         f > 0 ? "," : "", id, f > 0 ? "update " : "", file_name, size,
+                         (unsigned)body_crc);
+    }
+    snprintf(raw + used, sizeof raw - (size_t)used, "]}");
+    char path[64];
+    snprintf(path, sizeof path, "/api/roms/%u", id);
+    serve_raw(path, raw);
+}
+
+static void write_sends_config(const char *scopes, const char *extra) {
+    char config[TEXT_MAX];
+    snprintf(config, sizeof config,
+             "[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN
+             "\ndevice_identifier = 00112233445566778899aabbccddeeff\ndevice_id = " SAVE_DEVICE
+             "\nscopes = %s\n[network]\nprofile = 1\n%s",
+             scopes, extra);
+    write_config(config);
+}
+
+/* A paired library of three games on RomM version, whose heartbeat says enabled (NULL: no
+ * DEVICE_INSTALL at all, as 5.3), the token holding scopes; extra ends config.ini. */
+static void open_sends_library_on(const char *version, const char *enabled, const char *scopes,
+                                  const char *extra) {
+    write_sends_config(scopes, extra);
+    if (enabled != NULL) {
+        serve_sends_heartbeat(version, enabled);
+    } else {
+        serve_heartbeat(version);
+    }
+    serve_platforms();
+    serve_page(0, 3, 3);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
+static void open_sends_library(void) {
+    open_sends_library_on(SAVES_ROMM, "true", SENDS_SCOPES, "");
+}
+
+static size_t requests_to(const char *path) {
+    size_t count = 0;
+    for (size_t i = 0; i < transport.log_count; i++) {
+        count += strcmp(transport.log[i].url + strlen(SERVER), path) == 0;
+    }
+    return count;
+}
+
+/* The first request to path, from the first; -1 for none. */
+static int request_index(const char *path) {
+    for (size_t i = 0; i < transport.log_count; i++) {
+        if (strcmp(transport.log[i].url + strlen(SERVER), path) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static const fake_request *last_request_to(const char *path) {
+    const fake_request *last = NULL;
+    for (size_t i = 0; i < transport.log_count; i++) {
+        if (strcmp(transport.log[i].url + strlen(SERVER), path) == 0) {
+            last = &transport.log[i];
+        }
+    }
+    return last;
+}
+
+/* Send n's last report: its body, or "" when none was made. */
+static const char *report_of(unsigned n) {
+    char path[REPORT_PATH_MAX];
+    report_path(n, path);
+    const fake_request *request = last_request_to(path);
+    if (request == NULL) {
+        return "";
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_PUT, request->method);
+    return request->body;
+}
+
+static void assert_reported(unsigned n, const char *status, const char *reason) {
+    char expected[FAKE_TRANSPORT_BODY_MAX];
+    if (reason != NULL) {
+        snprintf(expected, sizeof expected, "{\"status\":\"%s\",\"reason\":\"%s\"}", status,
+                 reason);
+    } else {
+        snprintf(expected, sizeof expected, "{\"status\":\"%s\"}", status);
+    }
+    TEST_PRINTF("send %u reported %s", n, report_of(n));
+    TEST_ASSERT_EQUAL_STRING(expected, report_of(n));
+}
+
+static void read_log(char *out, size_t size) {
+    skiff_log_flush(app->log);
+    read_app_file(SKIFF_APP_LOG_FILE_NAME, out, size);
+}
+
+/* Settings, its fourth row: Games from RomM. */
+static void open_sends_row(void) {
+    frame(SKIFF_UI_ACTION_MENU);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    for (int i = 0; i < 3; i++) {
+        frame(SKIFF_UI_ACTION_DOWN);
+    }
+    TEST_ASSERT_EQUAL_size_t(3, view()->list.selected);
+    print_view();
+}
+
+static const skiff_app_row *sends_row(void) { return &view()->rows[3]; }
+
+/* Frames until the next claim has been made, then until its round has ended. */
+static void wait_for_claim(void);
+
+/* Frames until the round under way, if any, has ended. */
+static void run_sends(void) {
+    for (int i = 0; i < FRAMES_MAX && (app->sends.round != NULL || app_call_busy(app)); i++) {
+        frame(0);
+    }
+    TEST_ASSERT_NULL(app->sends.round);
+    print_view();
+}
+
+static void wait_for_claim(void) {
+    const size_t claims = requests_to(CLAIM_PATH);
+    for (int i = 0; i < 2 * FRAMES_MAX && requests_to(CLAIM_PATH) == claims; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_size_t(claims + 1, requests_to(CLAIM_PATH));
+    run_sends();
+}
+
+/* queue.json holding jobs (their targets under the games folder). */
+static void write_queue(skiff_job *jobs, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        char name[sizeof "ISO/" + SKIFF_JOBS_FILE_NAME_MAX];
+        snprintf(name, sizeof name, "ISO/%s", jobs[i].file_name);
+        TEST_ASSERT_TRUE(temp_dir_path(dir, name, jobs[i].target, sizeof jobs[i].target));
+    }
+    static char text[SKIFF_JOBS_FILE_MAX];
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_jobs_format(jobs, count, (uint32_t)count + 1, text, sizeof text, &length));
+    char path[TEMP_DIR_PATH_MAX];
+    app_file(SKIFF_JOBS_FILE_NAME, path, sizeof path);
+    write_file(path, text, length);
+}
+
+static skiff_job queued_game(unsigned id, unsigned rom, skiff_job_state state) {
+    skiff_job job;
+    memset(&job, 0, sizeof job);
+    job.id = id;
+    job.rom_id = rom;
+    job.size = BODY_BYTES;
+    job.has_crc32 = 1;
+    job.crc32 = body_crc;
+    job.state = state;
+    job.error = state == SKIFF_JOB_FAILED ? SKIFF_ERR_ROMM_CHECKSUM : SKIFF_OK;
+    snprintf(job.title, sizeof job.title, "Game %u", rom);
+    snprintf(job.file_name, sizeof job.file_name, "Game %u.iso", rom);
+    return job;
+}
+
+static void test_a_game_sent_from_romm_is_added_right_after_connecting(void) {
+    serve_register(1);
+    const unsigned roms[] = {2};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_rom(2);
+    serve_report(1, "done");
+    open_sends_library();
+    TEST_PRINTF("the library's first page, then remote_install, the claim, the game, its report");
+    const int page = request_index(LIBRARY_PAGE_PATH);
+    const int registered = request_index(DEVICE_PATH);
+    const int claimed = request_index(CLAIM_PATH);
+    const int rom = request_index("/api/roms/2");
+    char path[REPORT_PATH_MAX];
+    report_path(1, path);
+    const int reported = request_index(path);
+    TEST_PRINTF("page %d, register %d, claim %d, ROM %d, report %d", page, registered, claimed, rom,
+                reported);
+    TEST_ASSERT_TRUE(page >= 0 && page < registered && registered < claimed && claimed < rom &&
+                     rom < reported);
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_PUT, transport.log[registered].method);
+    TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":true}}",
+                             transport.log[registered].body);
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_POST, transport.log[claimed].method);
+    assert_reported(1, "done", NULL);
+
+    TEST_PRINTF("added without asking, into the games folder, the worker running");
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    assert_job_target(&jobs[0], 2, "ISO/Game 2.iso");
+    TEST_ASSERT_EQUAL_STRING("Game 2", jobs[0].title);
+    TEST_ASSERT_EQUAL_INT(1, env_state.worker_starts);
+    TEST_ASSERT_EQUAL_STRING("From RomM: 1 added to Downloads", view()->status);
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "send 5e4d0000: rom 2 -> done (queued)"));
+    TEST_PRINTF("never the token or the device's headers");
+    TEST_ASSERT_NULL(strstr(log_text, TOKEN));
+}
+
+static void test_claims_repeat_every_interval_and_empty_ones_leave_no_trace(void) {
+    serve_register(1);
+    serve_empty_claim();
+    open_sends_library();
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    wait_ms(CLAIM_INTERVAL - 200);
+    TEST_PRINTF("nothing before the interval");
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    wait_ms(400);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+    wait_ms(CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(CLAIM_PATH));
+    TEST_PRINTF("remote_install once for the connection");
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(DEVICE_PATH));
+    TEST_PRINTF("an empty claim shows nothing and logs nothing");
+    TEST_ASSERT_FALSE(shows("From RomM"));
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "send: RomM may send games to this PSP"));
+    TEST_ASSERT_NULL(strstr(log_text, "claim"));
+}
+
+static void test_sends_wait_for_pages_download_all_dialogs_server_changes_and_pairing(void) {
+    serve_register(1);
+    serve_empty_claim();
+    open_sends_library();
+    size_t claims = requests_to(CLAIM_PATH);
+    TEST_ASSERT_EQUAL_size_t(1, claims);
+
+    TEST_PRINTF("a page on its way: the claim due meanwhile waits for it");
+    serve_favourites(2);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_SELECT);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_EQUAL_INT(CALL_PAGE, (int)app->call.kind);
+    TEST_ASSERT_EQUAL_size_t(claims, requests_to(CLAIM_PATH));
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(++claims, requests_to(CLAIM_PATH));
+
+    TEST_PRINTF("Download all's question: no claim until it is answered");
+    serve_batch_favourites(2);
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_EQUAL_size_t(claims, requests_to(CLAIM_PATH));
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(++claims, requests_to(CLAIM_PATH));
+
+    TEST_PRINTF("the server's keyboard: no claim while it is open");
+    frame(SKIFF_UI_ACTION_MENU);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_DIALOG_KEYBOARD, view()->dialog);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_EQUAL_size_t(claims, requests_to(CLAIM_PATH));
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_CANCELLED, NULL);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    TEST_ASSERT_EQUAL_size_t(++claims, requests_to(CLAIM_PATH));
+
+    TEST_PRINTF("a new server's question (installed games would be forgotten): no claim");
+    record_in_app(1, body_crc);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_EQUAL_size_t(claims, requests_to(CLAIM_PATH));
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    TEST_ASSERT_EQUAL_size_t(++claims, requests_to(CLAIM_PATH));
+
+    TEST_PRINTF("pairing again: no claim while the pair screen shows its code");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_PAIR, view()->screen);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_EQUAL_size_t(claims, requests_to(CLAIM_PATH));
+    frame(SKIFF_UI_ACTION_MENU);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    TEST_ASSERT_EQUAL_size_t(++claims, requests_to(CLAIM_PATH));
+}
+
+static void test_a_lost_connection_pauses_claims_until_the_wifi_is_joined_again(void) {
+    serve_register(1);
+    fake_route *lost = serve_empty_claim();
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECT;
+    lost->max_uses = 1;
+    serve_empty_claim();
+    open_sends_library();
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    TEST_ASSERT_FALSE(app->net_joined);
+    const int joins = env_state.net_starts;
+    TEST_PRINTF("no claim, no join of its own, no error on screen");
+    wait_ms(3 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_PRINTF("the player's next request joins again, and the claim follows the connection");
+    open_details(1);
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+    TEST_PRINTF("a new connection registers again");
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+}
+
+static void test_a_refused_claim_stops_sends_and_settings_offers_pair_again(void) {
+    serve_register(1);
+    serve_raw(CLAIM_PATH, "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n"
+                          "{\"detail\":\"Forbidden\"}");
+    open_sends_library();
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    open_sends_row();
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: Pair again to allow it", sends_row()->label);
+    TEST_ASSERT_FALSE(sends_row()->dim);
+    TEST_PRINTF("X pairs again");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_PAIR, view()->screen);
+}
+
+static void test_a_device_romm_no_longer_knows_gets_no_claim_until_the_next_connection(void) {
+    serve_register(1);
+    open_sends_library();
+    TEST_PRINTF("the claim is 404: the device was deleted in RomM, or sends turned off");
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    TEST_PRINTF("a suspend: the next connection asks again");
+    env_state.suspends++;
+    open_details(1);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+}
+
+/* No request about sends at all, and Settings' row says why. */
+static void assert_no_sends(const char *version, const char *enabled, const char *scopes,
+                            const char *extra, const char *row, int dim) {
+    TEST_PRINTF("RomM %s, DEVICE_INSTALL %s, scopes %s, %s", version,
+                enabled != NULL ? enabled : "absent", scopes, extra);
+    open_sends_library_on(version, enabled, scopes, extra);
+    wait_ms(CLAIM_INTERVAL + 100);
+    TEST_ASSERT_FALSE(requested_prefix("/api/devices"));
+    open_sends_row();
+    TEST_ASSERT_EQUAL_STRING(row, sends_row()->label);
+    TEST_ASSERT_EQUAL_INT(dim, sends_row()->dim);
+    if (dim) {
+        TEST_PRINTF("X does nothing");
+        frame(SKIFF_UI_ACTION_CONFIRM);
+        TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+        TEST_ASSERT_FALSE(requested_prefix("/api/devices"));
+    }
+    skiff_app_destroy(app);
+    app = NULL;
+    skiff_transport_destroy(&transport.base);
+    fake_transport_init(&transport);
+}
+
+static void test_no_request_on_romm_5_3_turned_off_without_devices_write_or_switched_off(void) {
+    assert_no_sends("5.3.1", NULL, SENDS_SCOPES, "", "Games from RomM: Needs RomM 5.4", 1);
+    assert_no_sends(SAVES_ROMM, "false", SENDS_SCOPES, "", "Games from RomM: Turned off in RomM",
+                    1);
+    assert_no_sends(SAVES_ROMM, "true", BROWSE_SCOPES, "",
+                    "Games from RomM: Pair again to allow it", 0);
+    assert_no_sends(SAVES_ROMM, "true", SENDS_SCOPES, "[downloads]\nfrom_romm = off\n",
+                    "Games from RomM: Off", 0);
+}
+
+static void test_sends_romm_cannot_describe_or_skiff_cannot_install_are_refused_with_why(void) {
+    serve_register(1);
+    const unsigned roms[] = {41, 42, 43, 44, 45, 46, 47, 48, 49, 50};
+    const unsigned files[] = {1, 1, 1, 1, 2, 1, 1, 1, 1, 2};
+    serve_claim(roms, files, 10)->max_uses = 1;
+    serve_empty_claim();
+    TEST_PRINTF("41 unknown to RomM; 42 not the user's; 43 an answer Skiff refuses");
+    serve_raw("/api/roms/42", "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n"
+                              "{\"detail\":\"Forbidden\"}");
+    serve_raw("/api/roms/43", JSON_OK "{}");
+    TEST_PRINTF("44 a SNES game named .iso; 45 a folder; 46 a .zip; 47 a control character");
+    serve_sent_rom(44, OTHER_PLATFORM, "Sent 44.iso", BODY_BYTES, 1);
+    serve_sent_rom(45, 1, "Sent 45.iso", BODY_BYTES, 2);
+    serve_sent_rom(46, 1, "Sent 46.zip", BODY_BYTES, 1);
+    serve_sent_rom(47, 1, "Bad\\u0007Name.iso", BODY_BYTES, 1);
+    TEST_PRINTF("48 empty; 49 past 4 GiB; 50 one file in RomM's list, but sent with its update");
+    serve_sent_rom(48, 1, "Sent 48.iso", 0, 1);
+    serve_sent_rom(49, 1, "Sent 49.iso", TOO_LARGE_BYTES, 1);
+    serve_sent_rom(50, 1, "Sent 50.iso", BODY_BYTES, 1);
+    TEST_PRINTF("no report is served: RomM's 404 (the send ended) is only logged");
+    open_sends_library();
+    assert_reported(1, "failed", "RomM could not find that item [202]");
+    assert_reported(2, "failed", "Your RomM user is not allowed to do this [201]");
+    assert_reported(3, "failed", "RomM sent a response Skiff does not understand [204]");
+    assert_reported(4, "failed", "That game is not a PSP game [219]");
+    assert_reported(5, "failed", english(SKIFF_TEXT_INSTALL_MULTIPLE_FILES));
+    assert_reported(6, "failed", english(SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION));
+    assert_reported(7, "failed", english(SKIFF_TEXT_NAME_UNSUPPORTED));
+    assert_reported(8, "failed", english(SKIFF_TEXT_INSTALL_EMPTY_FILE));
+    assert_reported(9, "failed", "File is larger than 4 GB, which the PSP cannot store [304]");
+    assert_reported(10, "failed", english(SKIFF_TEXT_INSTALL_MULTIPLE_FILES));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+    TEST_PRINTF("the player sees how many, RomM says why; no error on screen");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("From RomM: 0 added, 10 not added (see RomM)", view()->status);
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "rom 44 -> failed (not a PSP game: "
+                                          "SKIFF_ERR_ROMM_SEND_NOT_PSP); report: "
+                                          "SKIFF_ERR_ROMM_NOT_FOUND"));
+    TEST_PRINTF("claims go on as before");
+    wait_ms(CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+}
+
+static void test_sends_follow_download_alls_rules_for_what_this_psp_holds(void) {
+    skiff_job held[] = {queued_game(1, 51, SKIFF_JOB_QUEUED), queued_game(2, 52, SKIFF_JOB_FAILED)};
+    write_queue(held, 2);
+    const unsigned installed[] = {53, 54};
+    const uint32_t crcs[] = {body_crc, body_crc ^ 1U};
+    record_installs(installed, crcs, 2);
+    serve_register(1);
+    TEST_PRINTF(
+        "51 in Downloads; 52 failed there; 53 installed; 54 changed in RomM; 55 new, twice");
+    const unsigned roms[] = {51, 52, 53, 54, 55, 55};
+    serve_claim(roms, NULL, 6)->max_uses = 1;
+    serve_empty_claim();
+    for (unsigned id = 51; id <= 55; id++) {
+        serve_rom(id);
+    }
+    open_sends_library();
+    assert_reported(1, "done", NULL);
+    assert_reported(2, "failed", english(SKIFF_TEXT_SEND_FAILED_DOWNLOAD));
+    assert_reported(3, "already_installed", NULL);
+    assert_reported(4, "failed", english(SKIFF_TEXT_SEND_CHANGED));
+    assert_reported(5, "done", NULL);
+    assert_reported(6, "done", NULL);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(3, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(55, jobs[2].rom_id);
+    TEST_PRINTF("the changed copy is left as it is: replacing it stays the player's choice");
+    TEST_ASSERT_EQUAL_INT(0, jobs[2].replace_target);
+    TEST_ASSERT_EQUAL_STRING("From RomM: 1 added, 2 not added (see RomM)", view()->status);
+}
+
+static void test_sends_past_the_free_space_fail_in_claim_order(void) {
+    serve_register(1);
+    const unsigned roms[] = {63, 61, 62};
+    serve_claim(roms, NULL, 3)->max_uses = 1;
+    serve_empty_claim();
+    for (unsigned id = 61; id <= 63; id++) {
+        serve_rom(id);
+    }
+    TEST_PRINTF("room for two games past the 8 MiB margin: the oldest sends first");
+    storage.free_bytes =
+        SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)2 * BODY_BYTES + BODY_BYTES / 2;
+    open_sends_library();
+    assert_reported(1, "done", NULL);
+    assert_reported(2, "done", NULL);
+    assert_reported(3, "failed", "Not enough free space on the Memory Stick [301]");
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_UINT64(63, jobs[0].rom_id);
+    TEST_ASSERT_EQUAL_UINT64(61, jobs[1].rom_id);
+}
+
+static void test_a_send_to_a_full_download_list_says_so(void) {
+    write_full_queue();
+    serve_register(1);
+    const unsigned roms[] = {64};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_rom(64);
+    open_sends_library();
+    assert_reported(1, "failed", english(SKIFF_TEXT_QUEUE_FULL));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX, list_jobs(jobs));
+}
+
+static void test_a_send_past_the_installed_records_says_so(void) {
+    static unsigned ids[SKIFF_INSTALL_RECORDS_MAX];
+    static uint32_t crcs[SKIFF_INSTALL_RECORDS_MAX];
+    for (unsigned i = 0; i < SKIFF_INSTALL_RECORDS_MAX; i++) {
+        ids[i] = 1000 + i;
+        crcs[i] = body_crc;
+    }
+    record_installs(ids, crcs, SKIFF_INSTALL_RECORDS_MAX);
+    serve_register(1);
+    const unsigned roms[] = {65};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_rom(65);
+    open_sends_library();
+    assert_reported(1, "failed", english(SKIFF_TEXT_INSTALLED_FULL));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+}
+
+static void test_a_queue_that_cannot_be_saved_fails_each_send_with_why(void) {
+    serve_register(1);
+    serve_empty_claim()->max_uses = 1;
+    const unsigned roms[] = {66, 67};
+    serve_claim(roms, NULL, 2);
+    serve_rom(66);
+    serve_rom(67);
+    open_sends_library();
+    storage.fail_suffix = SKIFF_JOBS_FILE_NAME SKIFF_STORAGE_DRAFT_SUFFIX;
+    storage.rename_error = SKIFF_ERR_STORAGE_IO;
+    wait_for_claim();
+    storage.rename_error = SKIFF_OK;
+    assert_reported(1, "failed", "Could not read or write the Memory Stick [302]");
+    assert_reported(2, "failed", "Could not read or write the Memory Stick [302]");
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+}
+
+/* What the queue's last save saw: queue.json opened, and the requests made by then. */
+static size_t requests_at_queue_save;
+
+static void note_queue_save(void *ctx, const char *call, const char *path) {
+    count_queue_opens(ctx, call, path);
+    if (strcmp(call, "open") == 0 && strstr(path, SKIFF_JOBS_FILE_NAME) != NULL) {
+        requests_at_queue_save = transport.request_count;
+    }
+}
+
+static void test_a_round_queues_with_one_save_and_reports_only_after_it(void) {
+    serve_register(1);
+    serve_empty_claim()->max_uses = 1;
+    const unsigned roms[] = {71, 72, 73};
+    serve_claim(roms, NULL, 3)->max_uses = 1;
+    serve_empty_claim();
+    for (unsigned id = 71; id <= 73; id++) {
+        serve_rom(id);
+    }
+    open_sends_library();
+    TEST_PRINTF("one game queued from its details: what one save of the queue opens");
+    open_details(1);
+    queue_file_opens = 0;
+    storage.on_call = count_queue_opens;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const int opens_per_save = queue_file_opens;
+    TEST_ASSERT_GREATER_THAN_INT(0, opens_per_save);
+
+    TEST_PRINTF("three sends: one save, every report after it");
+    queue_file_opens = 0;
+    requests_at_queue_save = 0;
+    storage.on_call = note_queue_save;
+    wait_for_claim();
+    storage.on_call = NULL;
+    TEST_PRINTF("queue.json opened %d time(s), %d per save; the save after request %zu",
+                queue_file_opens, opens_per_save, requests_at_queue_save);
+    TEST_ASSERT_EQUAL_INT(opens_per_save, queue_file_opens);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(4, list_jobs(jobs));
+    for (unsigned n = 1; n <= 3; n++) {
+        char path[REPORT_PATH_MAX];
+        report_path(n, path);
+        const int reported = request_index(path);
+        TEST_ASSERT_TRUE(reported >= 0);
+        TEST_ASSERT_TRUE((size_t)reported >= requests_at_queue_save);
+        assert_reported(n, "done", NULL);
+    }
+    TEST_ASSERT_TRUE((size_t)request_index("/api/roms/73") < requests_at_queue_save);
+    TEST_ASSERT_EQUAL_STRING("From RomM: 3 added to Downloads", view()->status);
+}
+
+static void test_a_send_seen_again_finds_its_game_in_downloads(void) {
+    serve_register(1);
+    const unsigned roms[] = {81};
+    serve_claim(roms, NULL, 1);
+    serve_rom(81);
+    char path[REPORT_PATH_MAX];
+    report_path(1, path);
+    fake_route *lost = serve_report(1, "done");
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECT;
+    lost->max_uses = 1;
+    serve_report(1, "done");
+    open_sends_library();
+    TEST_PRINTF("queued, but the report was lost with the connection");
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_FALSE(app->net_joined);
+    char before[TEXT_MAX];
+    read_app_file(SKIFF_JOBS_FILE_NAME, before, sizeof before);
+    wait_ms(SKIFF_APP_NOTE_MS);
+    TEST_PRINTF("joined again: the same send comes back, finds its game in Downloads");
+    queue_file_opens = 0;
+    storage.on_call = count_queue_opens;
+    open_details(1);
+    storage.on_call = NULL;
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(path));
+    assert_reported(1, "done", NULL);
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(0, queue_file_opens);
+    char after[TEXT_MAX];
+    read_app_file(SKIFF_JOBS_FILE_NAME, after, sizeof after);
+    TEST_ASSERT_EQUAL_STRING(before, after);
+    TEST_PRINTF("nothing new to say");
+    TEST_ASSERT_FALSE(shows("From RomM"));
+}
+
+static void test_a_send_whose_game_is_lost_with_the_connection_stays_in_romm(void) {
+    serve_register(1);
+    const unsigned roms[] = {91, 92};
+    serve_claim(roms, NULL, 2);
+    fake_route *lost = serve_raw("/api/roms/91", JSON_OK "{}");
+    lost->fail_before_response = SKIFF_ERR_NET_TIMEOUT;
+    lost->max_uses = 1;
+    serve_rom(91);
+    serve_rom(92);
+    open_sends_library();
+    TEST_PRINTF("91's details lost: no report, 92 not even asked; nothing queued");
+    TEST_ASSERT_EQUAL_STRING("", report_of(1));
+    TEST_ASSERT_EQUAL_STRING("", report_of(2));
+    TEST_ASSERT_EQUAL_size_t(0, requests_to("/api/roms/92"));
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_FALSE(shows("From RomM"));
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "rom 91 -> left taken (details: SKIFF_ERR_NET_TIMEOUT)"));
+    TEST_PRINTF("joined again: both come back and are added");
+    open_details(1);
+    assert_reported(1, "done", NULL);
+    assert_reported(2, "done", NULL);
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+}
+
+static void test_switching_games_from_romm_off_tells_romm_and_stops_claims(void) {
+    serve_register(1)->max_uses = 1;
+    serve_register(0)->max_uses = 1;
+    serve_register(1);
+    serve_empty_claim();
+    open_sends_library();
+    open_sends_row();
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: On", sends_row()->label);
+    TEST_PRINTF("X: off, saved, and RomM told at once");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    run_sends();
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: Off", sends_row()->label);
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "[downloads]\nfrom_romm = off\n"));
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":false}}",
+                             last_request_to(DEVICE_PATH)->body);
+    TEST_PRINTF("no claim, and no more requests about it");
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+    TEST_PRINTF("X again: on, RomM told, and the claim follows at once");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    run_sends();
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: On", sends_row()->label);
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":true}}",
+                             last_request_to(DEVICE_PATH)->body);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "from_romm = on\n"));
+}
+
+static void test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing(void) {
+    serve_register(1);
+    serve_empty_claim()->max_uses = 1;
+    const unsigned roms[] = {2};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_rom(2);
+    open_sends_library();
+    open_details(1);
+    TEST_PRINTF("the next round reaches its queue call");
+    for (int i = 0; i < FRAMES_MAX && app->call.kind != CALL_SENDS_QUEUE; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_SENDS_QUEUE, (int)app->call.kind);
+    env_state.hold_calls = 1;
+    TEST_PRINTF("Download meanwhile does nothing");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+    env_state.hold_calls = 0;
+    run_sends();
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_PRINTF("then it works");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+}
+
+static void test_a_refusal_is_said_in_the_psps_language(void) {
+    serve_register(1);
+    const unsigned roms[] = {44};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_sent_rom(44, OTHER_PLATFORM, "Sent 44.iso", BODY_BYTES, 1);
+    write_sends_config(SENDS_SCOPES, "");
+    serve_sends_heartbeat(SAVES_ROMM, "true");
+    serve_platforms();
+    serve_page(0, 3, 3);
+    const skiff_app_config config = {.storage = &storage.base,
+                                     .roots = roots,
+                                     .clock = fake_utc,
+                                     .language = SKIFF_LANGUAGE_SPANISH};
+    const skiff_app_env env = make_env();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_create(&config, &env, &app));
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    assert_reported(1, "failed", "Ese juego no es de PSP [219]");
+    TEST_ASSERT_EQUAL_STRING("Desde RomM: 0 añadidos, 1 no añadidos (mira RomM)", view()->status);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -5996,5 +6818,24 @@ int main(void) {
     RUN_TEST(test_saves_that_need_the_player_are_flagged_until_chosen);
     RUN_TEST(test_the_choice_fits_in_spanish);
     RUN_TEST(test_a_rom_read_twice_across_shifted_pages_is_one_game);
+    RUN_TEST(test_a_game_sent_from_romm_is_added_right_after_connecting);
+    RUN_TEST(test_claims_repeat_every_interval_and_empty_ones_leave_no_trace);
+    RUN_TEST(test_sends_wait_for_pages_download_all_dialogs_server_changes_and_pairing);
+    RUN_TEST(test_a_lost_connection_pauses_claims_until_the_wifi_is_joined_again);
+    RUN_TEST(test_a_refused_claim_stops_sends_and_settings_offers_pair_again);
+    RUN_TEST(test_a_device_romm_no_longer_knows_gets_no_claim_until_the_next_connection);
+    RUN_TEST(test_no_request_on_romm_5_3_turned_off_without_devices_write_or_switched_off);
+    RUN_TEST(test_sends_romm_cannot_describe_or_skiff_cannot_install_are_refused_with_why);
+    RUN_TEST(test_sends_follow_download_alls_rules_for_what_this_psp_holds);
+    RUN_TEST(test_sends_past_the_free_space_fail_in_claim_order);
+    RUN_TEST(test_a_send_to_a_full_download_list_says_so);
+    RUN_TEST(test_a_send_past_the_installed_records_says_so);
+    RUN_TEST(test_a_queue_that_cannot_be_saved_fails_each_send_with_why);
+    RUN_TEST(test_a_round_queues_with_one_save_and_reports_only_after_it);
+    RUN_TEST(test_a_send_seen_again_finds_its_game_in_downloads);
+    RUN_TEST(test_a_send_whose_game_is_lost_with_the_connection_stays_in_romm);
+    RUN_TEST(test_switching_games_from_romm_off_tells_romm_and_stops_claims);
+    RUN_TEST(test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing);
+    RUN_TEST(test_a_refusal_is_said_in_the_psps_language);
     return UNITY_END();
 }

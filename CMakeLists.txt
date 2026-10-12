@@ -72,6 +72,7 @@ add_library(
   src/app/app_saves.c
   src/app/app_saves_run.c
   src/app/app_saves_view.c
+  src/app/app_sends.c
   src/app/app_settings.c
   src/app/app_view.c
   src/config/config.c

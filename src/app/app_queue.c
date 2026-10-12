@@ -129,6 +129,10 @@ void app_queue_update(skiff_app *app, unsigned actions) {
         app->dirty = 1;
     }
     const skiff_job *job = selected(app);
+    /* Not while games sent from RomM are queued (well under a second): their room is counted. */
+    if (app_sends_queueing(app)) {
+        return;
+    }
     if ((actions & SKIFF_UI_ACTION_MENU) && app->jobs != NULL) {
         player_change(app, "clear finished", 0, skiff_jobs_clear_finished(app->jobs));
         return;

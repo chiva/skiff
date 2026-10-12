@@ -518,7 +518,7 @@ void app_library_update(skiff_app *app, unsigned actions) {
 
 /* ---- Details and downloading ---- */
 
-static skiff_text_id reason_text(skiff_install_support support) {
+skiff_text_id app_install_support_text(skiff_install_support support) {
     switch (support) {
     case SKIFF_INSTALL_MULTIPLE_FILES:
         return SKIFF_TEXT_INSTALL_MULTIPLE_FILES;
@@ -540,7 +540,8 @@ skiff_text_id app_details_refusal(const skiff_app *app) {
         return SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION;
     }
     const skiff_install_support support = support_of(app, &app->rom.summary, file);
-    return support == SKIFF_INSTALL_SUPPORTED ? SKIFF_TEXT_COUNT : reason_text(support);
+    return support == SKIFF_INSTALL_SUPPORTED ? SKIFF_TEXT_COUNT
+                                              : app_install_support_text(support);
 }
 
 /* A logical path a queued download is promised: skiff_install_plan_download()'s taken hook. */
@@ -687,7 +688,8 @@ void app_details_update(skiff_app *app, unsigned actions) {
         app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
         return;
     }
-    if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->has_rom) {
+    /* Not while games sent from RomM are queued (well under a second): their room is counted. */
+    if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->has_rom && !app_sends_queueing(app)) {
         download(app);
         return;
     }

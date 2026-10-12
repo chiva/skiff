@@ -26,7 +26,9 @@ static void end_batch(skiff_app *app) {
 }
 
 void app_batch_start(skiff_app *app) {
-    if (app->batch.step != BATCH_NONE) {
+    /* Not while a round of games sent from RomM runs (a moment): the room the batch counts now
+     * would be theirs too. */
+    if (app->batch.step != BATCH_NONE || app->sends.round != NULL) {
         return;
     }
     /* The batch's calls are the only ones while it runs: a library page still on its way is
@@ -372,6 +374,7 @@ skiff_err app_batch_queue_run(skiff_app *app, app_batch *batch) {
             skiff_install_plan_download(app->installer, rom, &rom->file, &app->config.roots,
                                         snapshot, app->config.storage, promised, &promise, plan);
         batch->planned[i] = planned == SKIFF_OK;
+        batch->plan_errors[i] = planned;
         if (!batch->planned[i]) {
             if (batch->plan_failures++ == 0) {
                 batch->plan_error = planned;

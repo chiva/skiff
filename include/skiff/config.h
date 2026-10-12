@@ -24,6 +24,8 @@
  *   [network]  profile     the Network Settings connection Skiff joins (1-10); Skiff saves the one
  *                          the player picked, so later launches join without asking
  *   [skiff]    romm_notice the newer RomM release line the player was already told about
+ *   [downloads] from_romm  on or off: games sent to this PSP from RomM's web UI (Install on
+ *                          device, RomM 5.4) are added to Downloads; on when unset
  *
  * Lines are "key = value"; '#' or ';' at the start of a line begins a comment. There are no inline
  * comments, because a token or header value may contain '#'. Section and key names ignore case.
@@ -57,6 +59,11 @@
 #define SKIFF_CONFIG_KEY_URL "url"
 #define SKIFF_CONFIG_KEY_PROFILE "profile"
 #define SKIFF_CONFIG_KEY_ROMM_NOTICE "romm_notice"
+#define SKIFF_CONFIG_SECTION_DOWNLOADS "downloads"
+#define SKIFF_CONFIG_KEY_FROM_ROMM "from_romm"
+/* A switch's values (any case when read). */
+#define SKIFF_CONFIG_ON "on"
+#define SKIFF_CONFIG_OFF "off"
 /* The PSP keeps up to 10 connections in Network Settings, numbered from 1. */
 #define SKIFF_CONFIG_PROFILE_MAX 10
 
@@ -104,6 +111,8 @@ typedef struct skiff_config {
     /* 0 when Skiff has not saved one yet. */
     int network_profile;
     char romm_notice[SKIFF_CONFIG_NOTICE_MAX];
+    /* 1 unless [downloads] from_romm is off: games sent from RomM's web UI are added. */
+    int from_romm;
     /* Keys Skiff does not know are ignored (a newer Skiff may have written them), but a typo such
      * as "ca-file" would silently do nothing, so the first is kept for a log warning. */
     int unknown_count;
@@ -124,7 +133,8 @@ typedef struct skiff_config {
  *     control characters, a file name with a path in it, a header Skiff sets itself (Authorization,
  * Host, Range, If-Range), a header name that is not an HTTP token, an empty header value, or more
  *     than SKIFF_CONFIG_HEADERS_MAX headers, a network profile that is not a number from 1 to
- *     SKIFF_CONFIG_PROFILE_MAX, or a romm_notice with blanks or control characters;
+ *     SKIFF_CONFIG_PROFILE_MAX, a romm_notice with blanks or control characters, or a from_romm
+ *     other than on or off;
  *   - SKIFF_ERR_INVALID_ARG: NULL text with a non-zero length, or a NULL out.
  */
 skiff_err skiff_config_parse(const char *text, size_t length, skiff_config *out,

@@ -121,6 +121,10 @@
 #define SKIFF_APP_CACHED_PAGES 3
 /* How long a short message ("Added to downloads") stays in the header. */
 #define SKIFF_APP_NOTE_MS 3000
+/* While connected, Skiff asks RomM this often for games sent to it from RomM's web UI (Install on
+ * device): RomM's dialog shows a device online for 90 s after its last claim, and a send lands
+ * within this time, also while the PSP sits on Downloads. */
+#define SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS 20000
 /* The view is rebuilt at most this often for progress alone. */
 #define SKIFF_APP_PROGRESS_REFRESH_MS 250
 

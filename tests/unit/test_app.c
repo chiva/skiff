@@ -5007,6 +5007,38 @@ static void test_leaving_while_a_cut_restore_settles_drops_the_automatic_retry(v
     TEST_ASSERT_FALSE(work_file_exists("saves-work/stage"));
 }
 
+static void test_a_cut_restore_is_settled_while_the_wifi_is_still_joining(void) {
+    open_download_again();
+    stage_opens = 0;
+    storage.on_call = sleep_at_first_stage_file;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until_settles(1);
+    TEST_ASSERT_TRUE(app->saves->settle_pending);
+    TEST_PRINTF("the rejoin starts before the settle (the access point takes a while), coming "
+                "back to the Saves screen");
+    enum { JOIN_POLLS = 400 };
+    env_state.join_polls = JOIN_POLLS;
+    app->failed_request = REQUEST_SAVES;
+    app_connect_begin(app, CONNECT_NETWORK);
+    memory_stick_back();
+    for (int i = 0; i < 4 * FRAMES_MAX && app->saves->settle_pending; i++) {
+        frame(0);
+        TEST_ASSERT_FALSE_MESSAGE(app->net_joined && app->saves->settle_pending,
+                                  "the join ended before the settle ran");
+    }
+    TEST_PRINTF("settled while joining: no need to wait for the connection");
+    TEST_ASSERT_FALSE(app->saves->settle_pending);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_EQUAL_INT(CONNECT_JOINING, app->connect);
+    TEST_ASSERT_FALSE(work_file_exists("saves-work/stage"));
+    run_until(SKIFF_APP_SCREEN_SAVES);
+    run_saves();
+    storage.on_call = NULL;
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(UP_LOCAL, data);
+}
+
 static void test_a_suspend_on_the_pair_screen_joins_again_and_keeps_the_code(void) {
     write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
     serve_heartbeat("5.3.1");
@@ -5764,6 +5796,7 @@ int main(void) {
     RUN_TEST(test_a_settle_that_keeps_failing_stops_save_sync_until_one_works);
     RUN_TEST(test_a_suspend_on_the_pair_screen_joins_again_and_keeps_the_code);
     RUN_TEST(test_leaving_while_a_cut_restore_settles_drops_the_automatic_retry);
+    RUN_TEST(test_a_cut_restore_is_settled_while_the_wifi_is_still_joining);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);

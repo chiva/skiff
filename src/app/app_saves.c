@@ -522,14 +522,19 @@ void app_saves_update(skiff_app *app) {
             app_note(app, app_text(app, SKIFF_TEXT_SAVES_PAIR_NOTE));
         }
     }
-    if (!may_run(app)) {
-        return;
-    }
-    /* Nothing reads or writes saves before a restore a suspend cut is settled. */
+    /* Nothing reads or writes saves before a restore a suspend cut is settled. It needs only the
+     * Memory Stick, so it runs while Skiff connects too (a rejoin after the wake takes seconds),
+     * but never under another call, a system dialog or a server change. */
     if (saves->settle_pending) {
-        if (app_now(app) >= saves->settle_retry_ms) {
+        const int server_change =
+            app->screen == SKIFF_APP_SCREEN_CONFIRM && app->confirm == CONFIRM_SERVER_CHANGE;
+        if (!app_call_busy(app) && !server_change && app->dialog == SKIFF_APP_DIALOG_NONE &&
+            app_now(app) >= saves->settle_retry_ms) {
             start_settle(app);
         }
+        return;
+    }
+    if (!may_run(app)) {
         return;
     }
     if (app_saves_blocked(app) != SAVES_OK) {

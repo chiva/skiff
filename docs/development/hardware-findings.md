@@ -207,6 +207,26 @@ what a user-mode program can change about that.
 | After HOME → Quit | the XMB's menu showed the player's 5 min |
 | After a power cycle | the player's 300 s: the probe's 60 s did not last |
 
+
+### Suspends during save sync (S1.7, 2026-10-12)
+
+PSP-1000 with ARK, RomM 5.4.0 on the LAN, an 8 MB synthetic save. The first runs (#99's first
+version) showed three things about waking up:
+
+- Files opened before the suspend fail on their next write (302), as for downloads.
+- The Memory Stick does not answer at once: the first CA file read failed (curl's
+  `CURLE_SSL_CACERT_BADFILE`, 402) and so did the first settle of a cut restore (302), within a
+  second of waking.
+- The access point can still read as joined (`GOT_IP`) although the connection is gone: a request
+  50 ms after "joining" failed with 102. A real rejoin took about 8 s, and the first attempt failed
+  once (0x80410106) before the second worked.
+
+With #99 at 23d13fc (#100's release EBOOT), the PSP slept in step 5 of a 64-file restore. The settle
+right after waking failed with 302. The next settle, 16 s later, finished the restore from its
+journal (308), the downloaded unit was removed, Wi-Fi was joined again (one 0x80410106, then joined
+in 7 s), and the follow-up check found both sides the same. All 64 files were byte-identical to
+RomM's, and no 102, 302 or 402 reached the player.
+
 ## Download speed
 
 The resume runs downloaded at 210–275 KB/s, against 462 KB/s for the benchmark's transport, which

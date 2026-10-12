@@ -200,7 +200,7 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   to Downloads without asking. RomM keeps each send until the device reports it, and Skiff holds no
   socket (its curl has no WebSockets), so it claims them: right after connecting (after the
   library's first page, before save sync's check), then every
-  `SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS` (20 s) while connected, also on Downloads. RomM's dialog
+  `SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS` (10 s) while connected, also on Downloads. RomM's dialog
   shows a device online for 90 s after its last claim. A claim runs only when no other call runs
   or waits, the Wi-Fi is joined, and Skiff is not connecting, pairing, in a system dialog,
   "Download all" or a server change; save sync waits for it. A claim that fails on the network

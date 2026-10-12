@@ -839,17 +839,17 @@ For I1.5's and I1.8's timings, copy the release app over the debug one (above).
 | # | Step | Pass criteria |
 |---|---|---|
 | I1.1 | Launch Skiff; in RomM open a PSP game → Install on device | "Skiff on PSP" is listed **online** |
-| I1.2 | Tick it while Skiff shows the library | within 20 s: header "From RomM: 1 added to Downloads", Downloads lists it, RomM says "Added to downloads" and notifies |
+| I1.2 | Tick it while Skiff shows the library | within 10 s: header "From RomM: 1 added to Downloads", Downloads lists it, RomM says "Added to downloads" and notifies |
 | I1.3 | Quit Skiff; send two games; launch | both added right after connecting, before "Checking saves..." |
 | I1.4 | Send the foreign ROM, the `.zip` ROM and an installed game | RomM: two "Failed" with the PSP's reason (Spanish when the PSP is Spanish), one "Already installed" |
 | I1.5 | Send while a 64 MiB download runs | the download's KB/s around the poll (`request:` and `jobs:` lines); no frame > 16 ms beyond today's |
 | I1.6 | Wi-Fi switch off 2 min with nothing downloading, on; then sleep and wake | no error screen; the PSP goes offline in RomM; the next request the player makes rejoins and the next claim follows |
-| I1.6b | Wi-Fi switch off 1 min **while downloading** and leave the PSP on Downloads; switch on | the worker rejoins (`rejoin profile` line) and claims follow within about 20 s without a press; a send made meanwhile lands |
+| I1.6b | Wi-Fi switch off 1 min **while downloading** and leave the PSP on Downloads; switch on | the worker rejoins (`rejoin profile` line) and claims follow within about 10 s without a press; a send made meanwhile lands |
 | I1.7 | Settings → Games from RomM → Off; quit and relaunch | RomM no longer lists the PSP; one `remote_install false` per connection (`send: RomM sends no more games to this PSP`), no claims in the log |
 | I1.8 | Read back | `send` lines (per-send outcome, claim ms for non-empty claims), `stats:`; browse stack ≥ 8 KB free; system memory 84 KB |
 
 While the switch is on and Skiff sits idle, the empty claim shows as a `request:` line about every
-20 s and nothing else: an empty claim logs no `send` line. A claim that brought sends logs
+10 s and nothing else: an empty claim logs no `send` line. A claim that brought sends logs
 `send: claim of N in M ms: ...`, and each send `send <first 8 characters of its id>: rom <id> ->
 <done|already_installed|failed|left taken> (<why>)`. `scripts/memstick.sh results` also checks that
 neither the token pairing wrote nor the `X-Skiff-Test` value appears in any file under

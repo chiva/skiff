@@ -104,9 +104,9 @@ load each other's saves (one game, both ways), a sync cut by the Wi-Fi switch or
 both sides whole, and with the release EBOOT an 8 MB save hashes in 1.6 s and restores in
 14–18 s. Sleep found four bugs, fixed in #99. See [Hardware findings](hardware-findings.md#save-sync-s1).
 
-## Games sent from RomM
+## Games sent from RomM ✅
 
-Built (#103, #105) for the next release; waiting for hardware run I1 before it is marked done.
+Built (#103, #105, #108) for the next release.
 
 A player picks the PSP in RomM 5.4's web UI (**Install on device**), on a phone or computer, and
 Skiff adds the game to Downloads without asking. Skiff holds no socket, so it claims sends right
@@ -118,10 +118,11 @@ changed installed copy, or no room. A Settings switch (on by default) tells RomM
 the PSP. See [Architecture](architecture.md#the-app) and the
 [guide](../guide/04-connect-to-romm.md#games-sent-from-romm).
 
-I1 checks on a PSP-1000 that the PSP shows online, sends land on the next claim (about one interval), also those made while
-Skiff was closed and while it sits on Downloads after the Wi-Fi came back, refusals reach RomM
-with their reason, and the claims cost no download speed or frames
-([Testing](testing.md#the-app-on-a-psp)).
+Hardware run I1 passed on a PSP-1000 against RomM 5.4.0 (2026-10-12): the PSP shows online, sends
+land on the next claim, also those made while Skiff was closed or the Wi-Fi was off, refusals reach
+RomM with their reason, and an empty claim takes about 170 ms without holding up a download or
+the screen; claims every 20 s were too slow to wait for, so #108 made it 10 s. See
+[Hardware findings](hardware-findings.md#games-sent-from-romm-i1).
 
 ## Phase 5: PS1
 

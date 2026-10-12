@@ -361,7 +361,8 @@ static skiff_err open_transport(void *ctx, const skiff_app_transport_settings *s
     return SKIFF_OK;
 }
 
-/* The browsing thread starts with the first call: no stack is taken before Skiff goes online. */
+/* The browsing thread starts with the first call: the free-space count at startup (app.c), which
+ * then runs while the Wi-Fi joins instead of holding the starting screen for 3 s (S1). */
 static skiff_err call_start(void *ctx, skiff_app_call_fn fn, void *arg) {
     skiff_psp_app *platform = ctx;
     if (!platform->caller.started) {

@@ -518,13 +518,24 @@ static int frame_upload(const skiff_romm_upload *upload, upload_stream *stream) 
            append_plain(stream->path, size, limit);
 }
 
-/* 1 if needle (size > 0) occurs in haystack. */
+/* 1 if needle (size > 0) occurs in haystack. memchr() finds each place its first byte occurs, so
+ * a save's bytes are not compared one call per byte (8 MB of them on every upload). */
 static int contains(const unsigned char *haystack, size_t haystack_size, const char *needle,
                     size_t needle_size) {
-    for (size_t i = 0; i + needle_size <= haystack_size; i++) {
-        if (memcmp(haystack + i, needle, needle_size) == 0) {
+    if (haystack_size < needle_size) {
+        return 0;
+    }
+    const size_t starts = haystack_size - needle_size + 1;
+    const int first = (unsigned char)needle[0];
+    for (size_t i = 0; i < starts;) {
+        const unsigned char *found = memchr(haystack + i, first, starts - i);
+        if (found == NULL) {
+            return 0;
+        }
+        if (memcmp(found, needle, needle_size) == 0) {
             return 1;
         }
+        i = (size_t)(found - haystack) + 1;
     }
     return 0;
 }

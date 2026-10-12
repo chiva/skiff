@@ -66,6 +66,7 @@ static skiff_err fake_open(skiff_storage *base, const char *path, skiff_file_mod
 static skiff_err fake_read(skiff_file *base, void *buffer, size_t size, size_t *got) {
     const fake_file *file = (const fake_file *)base;
     fake_storage *fake = owner(file);
+    fake->reads++;
     if (is_cut(fake)) {
         return SKIFF_ERR_STORAGE_NO_MEDIA;
     }

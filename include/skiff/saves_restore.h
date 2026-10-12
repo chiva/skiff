@@ -113,6 +113,17 @@ skiff_err skiff_saves_restore(skiff_storage *storage, const skiff_storage_roots 
                               const char *unit_path, const char *save_target,
                               skiff_saves_restore_report *report);
 
+/*
+ * skiff_saves_restore(), with the unit's content hash checked against expected_hash (RomM's, for a
+ * downloaded unit) in step 1, on the read that checks the unit whole, so the caller need not read
+ * it once more for that: SKIFF_ERR_ROMM_SAVE_MISMATCH when they differ, before anything is written,
+ * with report->content_hash the unit's. NULL checks nothing.
+ */
+skiff_err skiff_saves_restore_checked(skiff_storage *storage, const skiff_storage_roots *roots,
+                                      const char *unit_path, const char *save_target,
+                                      const char *expected_hash,
+                                      skiff_saves_restore_report *report);
+
 /* What skiff_saves_recover() found. */
 typedef enum skiff_saves_recovery_outcome {
     /* No restore was pending (a leftover stage from one cut before its journal was removed). */

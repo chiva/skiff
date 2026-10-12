@@ -225,8 +225,12 @@ skiff_err skiff_romm_saves_negotiate(skiff_romm_client *client, const skiff_romm
 skiff_err skiff_romm_saves_upload(skiff_romm_client *client, const skiff_romm_upload *upload,
                                   skiff_romm_save *out);
 
-/* What an upload reads from the Memory Stick at a time, on the heap. */
-#define SKIFF_ROMM_UPLOAD_BUFFER_BYTES ((size_t)16 * 1024)
+/* What an upload reads from the Memory Stick at a time, on the heap. While the Memory Stick works
+ * the Wi-Fi transfer stops and takes about 0.1 s to pick up again (hardware-findings.md, Download
+ * speed), so reads are few and large, as a download's writes are
+ * (SKIFF_DOWNLOAD_WRITE_BUFFER_BYTES): 16 KB reads, 512 pauses per 8 MB, held S1.6's upload to 123
+ * KB/s. */
+#define SKIFF_ROMM_UPLOAD_BUFFER_BYTES ((size_t)1024 * 1024)
 
 /*
  * GET /api/saves/{save_id}/content?device_id=&optimistic=false into download->path, and its size

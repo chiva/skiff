@@ -75,6 +75,8 @@ existing ones.
 - `create_pbp_file` writes to `build/<preset>/pbp/<target>/`; its OUTPUT_DIR must not equal the
   executable's path.
 - PARAM.SFO versions are `XX.YY`; the patch number is shown in-app only.
+- The `psp` preset is a debug build (`-O0`), and `scripts/memstick.sh` installs it: time code paths
+  on hardware with that in mind. `src/saves/md5.c` is built `-O2` there too (`cmake/SkiffPsp.cmake`).
 - `create_pbp_file` defaults to `MEMSIZE=2` (limited memory); `cmake/SkiffPsp.cmake` passes
   `MEMSIZE 1` so 64 MB models get their full RAM.
 - PPSSPPHeadless prints a program's stdout only in its full log (`-l`, `I stdout: ` prefix).

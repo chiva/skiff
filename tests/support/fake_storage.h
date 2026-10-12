@@ -79,6 +79,8 @@ typedef struct fake_storage {
     int free_space_queries;
     uint64_t bytes_written;
     uint64_t bytes_read;
+    /* Read calls on any path, as a device sees each one. */
+    int reads;
     int writes;
     int syncs;
     int opens;

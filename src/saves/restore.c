@@ -815,7 +815,7 @@ static skiff_err extract(restorer *r, const char *unit_path, const char *save_ta
 /* Steps 1 to 6, after any earlier restore was finished. Before the journal is on the device every
  * failure removes the stage, so the Memory Stick is as it was but for a backup. */
 static skiff_err restore(restorer *r, const char *unit_path, const char *save_target,
-                         skiff_saves_restore_report *report) {
+                         const char *expected_hash, skiff_saves_restore_report *report) {
     skiff_saves_recovery recovery;
     skiff_err err = recover(r, &recovery);
     if (err == SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED ||
@@ -825,6 +825,13 @@ static skiff_err restore(restorer *r, const char *unit_path, const char *save_ta
     }
     if (err == SKIFF_OK) {
         err = read_unit(r, unit_path, save_target, NULL);
+    }
+    /* The caller's own check of the unit (RomM's hash for a download) rides on this read, so the
+     * unit is read whole once less. */
+    if (err == SKIFF_OK && expected_hash != NULL &&
+        strcmp(r->incoming->content_hash, expected_hash) != 0) {
+        memcpy(report->content_hash, r->incoming->content_hash, sizeof report->content_hash);
+        return SKIFF_ERR_ROMM_SAVE_MISMATCH;
     }
     if (err == SKIFF_OK) {
         err = collect_live(r, save_target);
@@ -916,6 +923,13 @@ skiff_err skiff_saves_work_unit_path(const char *save_target, char *out, size_t 
 skiff_err skiff_saves_restore(skiff_storage *storage, const skiff_storage_roots *roots,
                               const char *unit_path, const char *save_target,
                               skiff_saves_restore_report *report) {
+    return skiff_saves_restore_checked(storage, roots, unit_path, save_target, NULL, report);
+}
+
+skiff_err skiff_saves_restore_checked(skiff_storage *storage, const skiff_storage_roots *roots,
+                                      const char *unit_path, const char *save_target,
+                                      const char *expected_hash,
+                                      skiff_saves_restore_report *report) {
     skiff_saves_restore_report done;
     memset(&done, 0, sizeof done);
     if (report != NULL) {
@@ -930,9 +944,9 @@ skiff_err skiff_saves_restore(skiff_storage *storage, const skiff_storage_roots 
     if (err != SKIFF_OK) {
         return err;
     }
-    err = restore(r, unit_path, save_target, &done);
+    err = restore(r, unit_path, save_target, expected_hash, &done);
     restorer_destroy(r);
-    if (err == SKIFF_OK && report != NULL) {
+    if ((err == SKIFF_OK || err == SKIFF_ERR_ROMM_SAVE_MISMATCH) && report != NULL) {
         *report = done;
     }
     return err;

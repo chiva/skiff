@@ -33,9 +33,10 @@ typedef struct file_pass {
     uint32_t crc;
 } file_pass;
 
-/* Reads the unit's file i from start to end, feeding each chunk to the unit when out is open and
- * to md5 when given. */
-static skiff_err read_file(writer *w, size_t i, skiff_file *out, skiff_md5 *md5, file_pass *pass) {
+/* Reads the unit's file i from start to end, feeding each chunk to the unit when out is open, to
+ * md5 when given, and to the CRC-32 when with_crc is set (the zip needs it; a hash does not). */
+static skiff_err read_file(writer *w, size_t i, skiff_file *out, skiff_md5 *md5, int with_crc,
+                           file_pass *pass) {
     const char *name = w->unit->files[i].name;
     const char *slash = strchr(name, SAVES_PATH_SEPARATOR);
     char folder[SKIFF_SAVES_NAME_SIZE];
@@ -57,7 +58,7 @@ static skiff_err read_file(writer *w, size_t i, skiff_file *out, skiff_md5 *md5,
     while (err == SKIFF_OK && got > 0) {
         err = skiff_file_read(file, w->buffer, sizeof w->buffer, &got);
         if (err == SKIFF_OK && got > 0) {
-            crc = crc32(crc, w->buffer, (uInt)got);
+            crc = with_crc ? crc32(crc, w->buffer, (uInt)got) : crc;
             pass->size += got;
             if (md5 != NULL) {
                 skiff_md5_update(md5, w->buffer, got);
@@ -131,7 +132,7 @@ static skiff_err write_entry(writer *w, size_t i) {
     skiff_md5 md5;
     skiff_md5_init(&md5);
     file_pass measured;
-    skiff_err err = read_file(w, i, NULL, &md5, &measured);
+    skiff_err err = read_file(w, i, NULL, &md5, 1, &measured);
     if (err == SKIFF_OK && measured.size != file->size) {
         err = SKIFF_ERR_STORAGE_IO;
     }
@@ -152,7 +153,7 @@ static skiff_err write_entry(writer *w, size_t i) {
     err = skiff_file_write(out, w->header, header_bytes);
     file_pass copied = {0, 0};
     if (err == SKIFF_OK) {
-        err = read_file(w, i, out, NULL, &copied);
+        err = read_file(w, i, out, NULL, 1, &copied);
     }
     if (err == SKIFF_OK && (copied.size != measured.size || copied.crc != measured.crc)) {
         err = SKIFF_ERR_STORAGE_IO;
@@ -236,7 +237,7 @@ skiff_err skiff_saves_hash_unit(skiff_storage *storage, const skiff_storage_root
         skiff_md5 md5;
         skiff_md5_init(&md5);
         file_pass pass;
-        err = read_file(w, i, NULL, &md5, &pass);
+        err = read_file(w, i, NULL, &md5, 0, &pass);
         if (err == SKIFF_OK && pass.size != unit->files[i].size) {
             err = SKIFF_ERR_STORAGE_IO;
         }

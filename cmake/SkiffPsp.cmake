@@ -22,6 +22,12 @@ set(SKIFF_PBP_MEMSIZE_FULL 1)
 set(SKIFF_PBP_ICON "${PROJECT_SOURCE_DIR}/assets/psp/ICON0.PNG")
 set(SKIFF_PBP_BACKGROUND "${PROJECT_SOURCE_DIR}/assets/psp/PIC1.PNG")
 
+# MD5 is optimised in every PSP build: at -O0 (the debug EBOOTs the hardware tier runs) it hashed
+# 8 MB of saves in 7.8 s on a PSP-1000 (S1.6), so the hardware tier would time what never ships.
+# The release build's own -O3 is left alone. (skiff_core is created in this directory scope.)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/src/saves/md5.c PROPERTIES COMPILE_OPTIONS
+                            "$<$<CONFIG:Debug>:-O2>")
+
 # Shared by every PSP executable: module metadata and the HOME-menu lifecycle. OBJECT, not STATIC:
 # nothing references module_info.c by symbol, so an archive member would be dropped at link time.
 add_library(skiff_psp OBJECT src/platform/psp/module_info.c src/platform/psp/lifecycle.c)

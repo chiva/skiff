@@ -944,17 +944,6 @@ static skiff_err download(app_call *call, apply_scratch *a) {
         err = skiff_romm_saves_download(call->romm, &request, &size);
     }
     const int64_t fetched = call->now_ms(call->clock_ctx);
-    if (err == SKIFF_OK) {
-        err = skiff_saves_read_unit(call->storage, &call->roots, a->unit_path, game->save_target,
-                                    NULL, &a->unit);
-    }
-    if (err == SKIFF_OK && strcmp(a->unit.content_hash, game->server_hash) != 0) {
-        skiff_log_write(call->saves.log, SKIFF_LOG_WARN, SAVES_LOG_TAG,
-                        "%s: save %llu hashes to %s, not RomM's %s", game->save_target,
-                        (unsigned long long)game->server_save_id, a->unit.content_hash,
-                        game->server_hash);
-        err = SKIFF_ERR_ROMM_SAVE_MISMATCH;
-    }
     /* Checked again right before anything is replaced: the download can take a while. */
     if (err == SKIFF_OK) {
         err = confirm_local(call, a, game);
@@ -963,22 +952,30 @@ static skiff_err download(app_call *call, apply_scratch *a) {
         (void)skiff_storage_remove(call->storage, a->real_path);
         return SKIFF_OK;
     }
+    const int64_t confirmed = call->now_ms(call->clock_ctx);
+    /* The restore checks the unit against RomM's hash on its first read, before it writes. */
     if (err == SKIFF_OK) {
-        err = skiff_saves_restore(call->storage, &call->roots, a->unit_path, game->save_target,
-                                  &a->report);
-        if (err != SKIFF_OK) {
+        err = skiff_saves_restore_checked(call->storage, &call->roots, a->unit_path,
+                                          game->save_target, game->server_hash, &a->report);
+        if (err == SKIFF_ERR_ROMM_SAVE_MISMATCH) {
+            skiff_log_write(call->saves.log, SKIFF_LOG_WARN, SAVES_LOG_TAG,
+                            "%s: save %llu hashes to %s, not RomM's %s", game->save_target,
+                            (unsigned long long)game->server_save_id, a->report.content_hash,
+                            game->server_hash);
+        } else if (err != SKIFF_OK) {
             settle_restore(call);
         }
     }
     (void)skiff_storage_remove(call->storage, a->real_path);
     skiff_log_write(
         call->saves.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, SAVES_LOG_TAG,
-        "%s: download of save %llu, %llu bytes in %lld ms, restore in %lld ms "
-        "(backup %u, %zu replaced, %zu removed, %zu installs kept): %s (%d)",
+        "%s: download of save %llu, %llu bytes in %lld ms, local check in %lld ms, restore in "
+        "%lld ms (backup %u, %zu replaced, %zu removed, %zu installs kept): %s (%d)",
         game->save_target, (unsigned long long)game->server_save_id, (unsigned long long)size,
-        (long long)(fetched - started), (long long)elapsed_ms(call, fetched),
-        (unsigned)a->report.backup, a->report.folders_replaced, a->report.folders_removed,
-        a->report.installs_kept, skiff_err_name(err), (int)err);
+        (long long)(fetched - started), (long long)(confirmed - fetched),
+        (long long)elapsed_ms(call, confirmed), (unsigned)a->report.backup,
+        a->report.folders_replaced, a->report.folders_removed, a->report.installs_kept,
+        skiff_err_name(err), (int)err);
     if (err != SKIFF_OK) {
         return err;
     }

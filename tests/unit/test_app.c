@@ -804,7 +804,7 @@ static void test_a_slow_down_waits_five_seconds_more(void) {
 }
 
 static void test_the_first_free_space_query_is_made_while_starting(void) {
-    TEST_PRINTF("the first query counts the whole Memory Stick (2.6 s on a PSP): made at startup, "
+    TEST_PRINTF("the first query counts the whole Memory Stick (3 s on a PSP): made at startup, "
                 "not when a screen that shows free space first opens");
     write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
     serve_heartbeat("5.3.1");
@@ -814,6 +814,58 @@ static void test_the_first_free_space_query_is_made_while_starting(void) {
     run_until(SKIFF_APP_SCREEN_PAIR);
     TEST_PRINTF("free space queries before any screen showed it: %d", storage.free_space_queries);
     TEST_ASSERT_EQUAL_INT(1, storage.free_space_queries);
+    TEST_ASSERT_TRUE(app->free_known);
+}
+
+static void test_the_first_free_space_count_runs_off_the_screen_while_the_wifi_joins(void) {
+    open_paired_library(1);
+    skiff_app_destroy(app);
+    app = NULL;
+    storage.free_space_queries = 0;
+    TEST_PRINTF("the count is held on the browsing thread: the screen goes on and the Wi-Fi joins");
+    env_state.hold_calls = 1;
+    const int joins = env_state.net_starts;
+    create_app();
+    for (int i = 0; i < FRAMES_MAX && env_state.net_starts == joins; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(CALL_FREE_SPACE, app->call.kind);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, storage.free_space_queries, "not on the screen's thread");
+    TEST_ASSERT_NOT_NULL_MESSAGE(app->manifest,
+                                 "started after the files the starting screen reads itself");
+    TEST_ASSERT_TRUE(app->free_pending);
+    TEST_ASSERT_FALSE(app->free_known);
+    TEST_PRINTF("a screen that shows free space meanwhile asks nothing more, and shows none yet");
+    app_set_screen(app, SKIFF_APP_SCREEN_SETTINGS);
+    TEST_ASSERT_EQUAL_INT(0, storage.free_space_queries);
+    TEST_ASSERT_FALSE(shows("Free space"));
+    app_set_screen(app, SKIFF_APP_SCREEN_CONNECTING);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT(1, storage.free_space_queries);
+    TEST_ASSERT_FALSE(app->free_pending);
+    TEST_ASSERT_TRUE(app->free_known);
+    TEST_PRINTF("once known, the screens show it and ask again as before");
+    frame(SKIFF_UI_ACTION_MENU);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_ASSERT_EQUAL_INT(2, storage.free_space_queries);
+    TEST_ASSERT_TRUE(shows("Free space"));
+    TEST_ASSERT_EQUAL_UINT64(storage.free_bytes, app->free_bytes);
+}
+
+static void test_a_failed_free_space_count_shows_none_and_is_asked_again_later(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(1);
+    storage.free_space_error = SKIFF_ERR_STORAGE_IO;
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_FALSE(app->free_known);
+    TEST_ASSERT_FALSE(app->free_pending);
+    storage.free_space_error = SKIFF_OK;
+    frame(SKIFF_UI_ACTION_MENU);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_ASSERT_TRUE(app->free_known);
 }
 
 static void test_a_denied_or_expired_pairing_offers_a_new_code(void) {
@@ -4724,8 +4776,11 @@ static void test_a_suspend_mid_connect_joins_again_before_the_next_step(void) {
     create_app();
     for (int i = 0; i < FRAMES_MAX && !(env_state.call_pending && app->call.kind == CALL_HEARTBEAT);
          i++) {
+        /* Only the heartbeat is held: the free-space count at startup comes back. */
+        env_state.hold_calls = !app_call_busy(app) || app->call.kind == CALL_HEARTBEAT;
         frame(0);
     }
+    env_state.hold_calls = 1;
     TEST_ASSERT_EQUAL_INT(CALL_HEARTBEAT, app->call.kind);
     TEST_ASSERT_EQUAL_INT(1, env_state.net_starts);
     TEST_PRINTF("the PSP sleeps while the heartbeat is out; RomM's answer is taken after waking");
@@ -5671,6 +5726,8 @@ int main(void) {
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
     RUN_TEST(test_a_slow_down_waits_five_seconds_more);
     RUN_TEST(test_the_first_free_space_query_is_made_while_starting);
+    RUN_TEST(test_the_first_free_space_count_runs_off_the_screen_while_the_wifi_joins);
+    RUN_TEST(test_a_failed_free_space_count_shows_none_and_is_asked_again_later);
     RUN_TEST(test_a_denied_or_expired_pairing_offers_a_new_code);
     RUN_TEST(test_an_address_too_long_for_a_qr_code_is_shown_as_text_only);
     RUN_TEST(test_the_longest_address_leaves_room_for_the_code_and_an_error);

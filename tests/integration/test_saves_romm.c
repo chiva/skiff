@@ -102,7 +102,13 @@ static const char *required_env(const char *name) {
 
 void setUp(void) {}
 
-void tearDown(void) {}
+/* The disc test's unit, freed here too when an assertion ends the test early. */
+static skiff_saves_unit *disc_unit;
+
+void tearDown(void) {
+    skiff_saves_unit_destroy(disc_unit);
+    disc_unit = NULL;
+}
 
 static void sleep_seconds(uint32_t seconds) {
     const struct timespec wait = {.tv_sec = (time_t)seconds, .tv_nsec = 0};
@@ -318,8 +324,8 @@ static void test_a_save_folder_travels_through_the_save_disc(void) {
     write_bytes(path, DISC_PARAM, sizeof DISC_PARAM - 1);
 
     TEST_PRINTF("A collects the disc's save folders into a unit, as the app does");
-    skiff_saves_unit *unit = NULL;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_unit_create(&unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_unit_create(&disc_unit));
+    skiff_saves_unit *unit = disc_unit;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_collect(storage, &a_roots, SKIFF_STORAGE_ROOT_SAVES,
                                                         disc_target, unit));
     TEST_ASSERT_EQUAL_size_t(2, unit->file_count);
@@ -411,7 +417,6 @@ static void test_a_save_folder_travels_through_the_save_disc(void) {
     op = slot_operation(disc_rom_id);
     TEST_ASSERT_NOT_NULL(op);
     TEST_ASSERT_EQUAL_STRING(hash, op->server_content_hash);
-    skiff_saves_unit_destroy(unit);
 }
 
 int main(void) {

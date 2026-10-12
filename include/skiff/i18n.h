@@ -288,6 +288,12 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_SAVE_LEAVE_NOTE, 0,                                                               \
       "Leave it keeps this PSP without the save; RomM keeps its copy.",                            \
       "Dejarla así deja esta PSP sin la partida; RomM conserva su copia.")                         \
+    X(SKIFF_TEXT_REMOVE_THIS_PSP, 0, "Remove this PSP's", "Borrar la de la PSP")                   \
+    X(SKIFF_TEXT_SAVE_REMOVE_NOTE, 0,                                                              \
+      "Remove this PSP's deletes the save on this PSP too, as it was deleted in RomM; Skiff "      \
+      "keeps a backup of it first.",                                                               \
+      "Borrar la de la PSP elimina también la partida de esta PSP, como se eliminó en RomM; "      \
+      "antes Skiff guarda una copia.")                                                             \
     X(SKIFF_TEXT_DETAILS_SAVE, 1, "Save: {1}", "Partida: {1}")                                     \
     X(SKIFF_TEXT_BACKUPS_EMPTY, 0, "No backups of this game's saves yet.",                         \
       "Aún no hay copias de las partidas de este juego.")                                          \

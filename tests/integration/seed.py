@@ -578,11 +578,12 @@ def main():
     library = write_library(library_roms) if library_roms > 0 else []
     asyncio.run(scan(session_cookie(auth)))
     save_disc = None
-    if os.environ.get("SKIFF_SAVE_DISC", "1") != "0":
+    with_save_disc = os.environ.get("SKIFF_SAVE_DISC", "1") != "0"
+    if with_save_disc:
         write_save_disc()
         asyncio.run(scan(session_cookie(auth)))
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
-    if os.environ.get("SKIFF_SAVE_DISC", "1") != "0":
+    if with_save_disc:
         save_disc = save_disc_rom(auth, platform_id)
         log(f"save disc: ROM {save_disc['rom_id']}, save ID {SAVE_DISC_TARGET}")
     log(f"roms {rom_id}, {extra_rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")

@@ -355,6 +355,14 @@ static skiff_err read_installed(app_call *call, check_scratch *s) {
             remember(call, s, id, "");
             continue;
         }
+        /* An answer Skiff refuses for one ROM (RomM's data, not the connection) costs only that
+         * game: not remembered, so a later check asks again once RomM is fixed or rescanned. */
+        if (err == SKIFF_ERR_ROMM_BAD_RESPONSE) {
+            skiff_log_write(call->saves.log, SKIFF_LOG_WARN, SAVES_LOG_TAG,
+                            "ROM %llu: details refused, asked again next check: %s (%d)",
+                            (unsigned long long)id, skiff_err_name(err), (int)err);
+            continue;
+        }
         if (err != SKIFF_OK) {
             return err;
         }
@@ -392,8 +400,13 @@ static skiff_err read_folders(app_call *call, check_scratch *s) {
     return err;
 }
 
-/* ASCII case folding, whatever the C library's locale. */
-static char fold(char c) { return c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c; }
+/* ASCII case folding, whatever the C library's locale (and whether char is signed). */
+static char fold(char c) {
+    if (c < 'a' || c > 'z') {
+        return c;
+    }
+    return (char)(c - 'a' + 'A');
+}
 
 static int starts_with(const char *name, const char *prefix) {
     for (size_t i = 0; prefix[i] != '\0'; i++) {

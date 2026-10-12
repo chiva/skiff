@@ -32,8 +32,8 @@ export SKIFF_IT_CERTS SKIFF_IT_TOKEN SKIFF_IT_ROM_ID SKIFF_IT_FILE_NAME SKIFF_IT
 export SKIFF_IT_FILE_NAME_RAW SKIFF_IT_EXTRA_ROM_ID SKIFF_IT_EXTRA_FILE_NAME_RAW SKIFF_IT_EXTRA_SIZE
 export SKIFF_IT_EXTRA_CRC32
 # The synthetic PSP disc, whose save ID RomM reads (save sync's ROM).
-SKIFF_IT_SAVE_DISC_ROM_ID="$(jq -r .save_disc.rom_id "$SEED")"
-SKIFF_IT_SAVE_DISC_TARGET="$(jq -r .save_disc.save_target "$SEED")"
+SKIFF_IT_SAVE_DISC_ROM_ID="$(jq -er .save_disc.rom_id "$SEED")"
+SKIFF_IT_SAVE_DISC_TARGET="$(jq -er .save_disc.save_target "$SEED")"
 export SKIFF_IT_SAVE_DISC_ROM_ID SKIFF_IT_SAVE_DISC_TARGET
 # The collections: a token that may list them, and the seeded ones' ids and the shelf's size.
 SKIFF_IT_COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"

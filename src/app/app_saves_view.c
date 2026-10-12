@@ -327,13 +327,19 @@ void app_saves_choice_view(skiff_app *app) {
         add_formatted_line(app, SKIFF_TEXT_SAVE_ON_THIS_PSP, args, 1);
     }
     server_line(app, game);
-    app_view_add_wrapped(
-        app, app_text(app, deleted_here ? SKIFF_TEXT_SAVE_LEAVE_NOTE : SKIFF_TEXT_SAVE_KEEP_NOTE),
-        SKIFF_APP_TEXT_WIDTH);
+    /* RomM's side is no save at all: taking it removes this PSP's, which is said as such. */
+    const int deleted_there = game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER;
+    app_view_add_wrapped(app,
+                         app_text(app, deleted_here    ? SKIFF_TEXT_SAVE_LEAVE_NOTE
+                                       : deleted_there ? SKIFF_TEXT_SAVE_REMOVE_NOTE
+                                                       : SKIFF_TEXT_SAVE_KEEP_NOTE),
+                         SKIFF_APP_TEXT_WIDTH);
     app_view_add_hint(app, SKIFF_UI_ACTION_CONFIRM,
                       deleted_here ? SKIFF_TEXT_DOWNLOAD_AGAIN : SKIFF_TEXT_KEEP_THIS_PSP);
     app_view_add_hint(app, SKIFF_UI_ACTION_EXTRA,
-                      deleted_here ? SKIFF_TEXT_LEAVE_IT : SKIFF_TEXT_USE_ROMM);
+                      deleted_here    ? SKIFF_TEXT_LEAVE_IT
+                      : deleted_there ? SKIFF_TEXT_REMOVE_THIS_PSP
+                                      : SKIFF_TEXT_USE_ROMM);
     app_view_add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_LATER);
 }
 

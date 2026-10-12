@@ -4327,6 +4327,79 @@ static void test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call
     skiff_saves_baseline_destroy(baseline);
 }
 
+static void test_a_roms_details_skiff_refuses_cost_only_that_game(void) {
+    put_save(GAME_DOWN, DOWN_OLD);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_DOWN, hash);
+    const unsigned ids[] = {ROM_UP, ROM_DOWN};
+    const uint32_t crcs[] = {body_crc, body_crc};
+    record_installs(ids, crcs, 2);
+    TEST_PRINTF("RomM answers one installed game's details with something Skiff refuses");
+    serve_raw("/api/roms/101", JSON_OK "{\"id\":\"not a number\"}");
+    serve_rom_with_save(ROM_DOWN, "Down Game", GAME_DOWN);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_DOWN, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_DOWN, hash, "false", SAVE_DOWN);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("the other game still syncs; the refused one is asked about again next time");
+    TEST_ASSERT_EQUAL_STRING("Saves: 1 synced, 0 need you", view()->status);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    TEST_ASSERT_EQUAL_STRING(GAME_DOWN, skiff_saves_baseline_rom_target(baseline, ROM_DOWN));
+    TEST_ASSERT_NOT_NULL(skiff_saves_baseline_find(baseline, GAME_DOWN));
+    skiff_saves_baseline_destroy(baseline);
+}
+
+/* A unit without files (an end record alone): what RomM holds once a save was deleted elsewhere. */
+static const unsigned char EMPTY_UNIT[] = {0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0};
+
+static void test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    record_installed(ROM_UP, body_crc);
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "conflict", ROM_UP, SAVE_UP, SKIFF_SAVES_EMPTY_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_device_of(SAVE_UP, ROM_UP, SKIFF_SAVES_EMPTY_HASH);
+    serve_content_of(SAVE_UP, EMPTY_UNIT, sizeof EMPTY_UNIT);
+    serve_downloaded(SAVE_UP, ROM_UP, SKIFF_SAVES_EMPTY_HASH);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("RomM's save is an empty unit: never applied on its own");
+    TEST_ASSERT_EQUAL_STRING("Saves: 0 synced, 1 need you", view()->status);
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Deleted in RomM"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_ASSERT_TRUE(shows(GAME_UP ": the save was deleted in RomM, but this PSP still has one."));
+    TEST_PRINTF("taking RomM's side is named for what it does");
+    TEST_ASSERT_TRUE(shows("deletes the save on this PSP too"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_REMOVE_THIS_PSP)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_USE_ROMM)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_KEEP_THIS_PSP)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", data, "the save is removed here");
+    char backup[TEMP_DIR_PATH_MAX];
+    app_file("saves-backup/" GAME_UP "/1.zip", backup, sizeof backup);
+    FILE *file = fopen(backup, "rb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(file, "after a backup");
+    fclose(file);
+    TEST_ASSERT_EQUAL_STRING(GAME_UP ": save synced", view()->status);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4448,5 +4521,7 @@ int main(void) {
     RUN_TEST(test_leave_it_compares_again_when_the_save_came_back);
     RUN_TEST(test_a_save_id_learnt_from_details_reaches_saves_json);
     RUN_TEST(test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call);
+    RUN_TEST(test_a_roms_details_skiff_refuses_cost_only_that_game);
+    RUN_TEST(test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here);
     return UNITY_END();
 }

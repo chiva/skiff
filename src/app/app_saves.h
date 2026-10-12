@@ -53,6 +53,11 @@
 #define APP_SAVES_DETAIL_LINES 3
 #define APP_SAVES_ROWS SKIFF_APP_ROWS_FIT(APP_SAVES_DETAIL_LINES, 0)
 #define APP_SAVES_BACKUP_ROWS SKIFF_APP_ROWS_FIT(1, 0)
+/* A restore cut by a suspend is settled again (skiff_saves_recover()) this many times, this far
+ * apart, before save sync stops for the session: on waking, the Memory Stick does not answer at
+ * once (S1.7, 2026-10-12: the settle right after the wake failed with 302). */
+#define APP_SAVES_SETTLE_ATTEMPTS 3
+#define APP_SAVES_SETTLE_RETRY_MS 2000
 
 /* Why a game cannot be synced. */
 typedef enum app_save_problem {
@@ -114,6 +119,9 @@ typedef enum app_saves_op {
     SAVES_OP_DOWNLOAD,
     SAVES_OP_LEAVE_DELETED,
     SAVES_OP_RESTORE_BACKUP,
+    /* A restore a suspend cut, settled again from its journal (or its stage removed), and the
+     * downloaded unit it left removed; only the Memory Stick. */
+    SAVES_OP_SETTLE,
 } app_saves_op;
 
 /* A save call's inputs and results (inside app_call). */
@@ -167,8 +175,9 @@ typedef enum app_saves_origin {
 /* Why save sync cannot run, in the order the Saves screen says it. */
 typedef enum app_saves_block {
     SAVES_OK,
-    /* The restore journal left at launch could not be replayed (the storage error in
-     * app_saves.recovered): the journal stays for the next launch. */
+    /* The restore journal left at launch (or by a restore that failed since, after its settles)
+     * could not be replayed (the storage error in app_saves.recovered): the journal stays for the
+     * next launch, or for a settle the player asks for on the Saves screen. */
     SAVES_UNRECOVERED,
     /* Not connected to RomM yet (nothing is known about the server). */
     SAVES_NOT_CONNECTED,
@@ -241,6 +250,12 @@ typedef struct app_saves {
     app_header_text activity;
     /* What the recovery at startup found (SKIFF_OK, 308 or 309), and where its notice goes on. */
     skiff_err recovered;
+    /* A restore that failed across a suspend waits to be settled again before any other save call
+     * (SAVES_OP_SETTLE): its game, the settles tried, and when the next may run. */
+    int settle_pending;
+    char settle_target[SKIFF_SAVES_TARGET_SIZE];
+    int settle_attempts;
+    int64_t settle_retry_ms;
 } app_saves;
 
 #endif

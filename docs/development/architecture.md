@@ -226,7 +226,11 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   before its next request, a call that failed across one is taken as a lost connection whatever
   error it saw (on waking, writes to files opened before fail and the Memory Stick may not be back
   yet: S1.7 saw 302, then 402 from a CA file curl could not read), and a save transfer the player
-  started runs once more after the join. Quitting
+  started runs once more after the join, once the access point has given an address again (after a
+  suspend it can still read as joined: a connection joined before the last suspend is never taken
+  as standing). A restore whose settle failed right after the wake (the Memory Stick not back yet)
+  is settled again, `APP_SAVES_SETTLE_ATTEMPTS` times `APP_SAVES_SETTLE_RETRY_MS` apart, before any
+  other save call; only then does save sync stop, with Retry on the Saves screen. Quitting
   stops the worker (5 s); only when it stopped are the app, the network (after a disconnect that
   succeeded), TLS and the mutexes released, otherwise the process exit does it. A system dialog
   that will not close ends the app the same way.

@@ -137,7 +137,8 @@ int app_saves_busy(const skiff_app *app) {
     /* A session waits to close while its choice is on screen: nothing runs meanwhile. */
     const int closing = saves->batch_session != 0 && app->screen != SKIFF_APP_SCREEN_SAVE_CHOICE;
     return is_saves_call(app->call.kind) || saves->want_check || saves->want_one ||
-           saves->want_apply || saves->batch || closing || any_recheck(saves->shown);
+           saves->want_apply || saves->batch || closing || any_recheck(saves->shown) ||
+           saves->settle_pending;
 }
 
 /* Drops what waited to run, the list and what RomM refused: a new server or token. */
@@ -370,6 +371,18 @@ static void start_apply(skiff_app *app, const app_save_game *game, app_saves_op 
     app_call_start(app, CALL_SAVES_APPLY);
 }
 
+/* Settles a restore a suspend cut (SAVES_OP_SETTLE), before any other save call. */
+static void start_settle(skiff_app *app) {
+    app_saves *saves = app->saves;
+    prepare(app);
+    app->call.saves.op = SAVES_OP_SETTLE;
+    memset(&app->call.saves.game, 0, sizeof app->call.saves.game);
+    snprintf(app->call.saves.game.save_target, sizeof app->call.saves.game.save_target, "%s",
+             saves->settle_target);
+    saves->settle_attempts++;
+    app_call_start(app, CALL_SAVES_APPLY);
+}
+
 static void start_complete(skiff_app *app) {
     app_saves *saves = app->saves;
     prepare(app);
@@ -501,6 +514,13 @@ void app_saves_update(skiff_app *app) {
         }
     }
     if (!may_run(app)) {
+        return;
+    }
+    /* Nothing reads or writes saves before a restore a suspend cut is settled. */
+    if (saves->settle_pending) {
+        if (app_now(app) >= saves->settle_retry_ms) {
+            start_settle(app);
+        }
         return;
     }
     if (app_saves_blocked(app) != SAVES_OK) {
@@ -726,9 +746,57 @@ void app_saves_checked(skiff_app *app) {
     saves->batch_session = saves->shown->session_id;
 }
 
+/* Whether a settle failed the way a Memory Stick does just after waking (try again soon). */
+static int stick_not_back(skiff_err err) {
+    return err == SKIFF_ERR_STORAGE_IO || err == SKIFF_ERR_STORAGE_NO_MEDIA ||
+           err == SKIFF_ERR_STORAGE_NOT_FOUND;
+}
+
+/* A settle (SAVES_OP_SETTLE) came back: save sync goes on, tries again soon, or stops for the
+ * session after APP_SAVES_SETTLE_ATTEMPTS (the Saves screen then offers one more). */
+static void settled(skiff_app *app) {
+    app_saves *saves = app->saves;
+    const skiff_err recovery = app->call.saves.recovery;
+    saves->activity.text[0] = '\0';
+    app->dirty = 1;
+    const int failed = recovery_failed(recovery);
+    skiff_log_write(app->log, failed ? SKIFF_LOG_WARN : SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "saves: settle %d of %d: %s (%d)", saves->settle_attempts,
+                    APP_SAVES_SETTLE_ATTEMPTS, skiff_err_name(recovery), (int)recovery);
+    if (!failed) {
+        saves->settle_pending = 0;
+        saves->settle_attempts = 0;
+        saves->recovered = recovery;
+        return;
+    }
+    if (saves->settle_attempts < APP_SAVES_SETTLE_ATTEMPTS && stick_not_back(recovery)) {
+        saves->settle_retry_ms = app_now(app) + APP_SAVES_SETTLE_RETRY_MS;
+        return;
+    }
+    saves->settle_pending = 0;
+    saves->settle_attempts = 0;
+    saves->recovered = recovery;
+}
+
+void app_saves_settle_again(skiff_app *app) {
+    app_saves *saves = app->saves;
+    if (saves->settle_pending || app_call_busy(app)) {
+        return;
+    }
+    saves->settle_pending = 1;
+    saves->settle_attempts = 0;
+    saves->settle_retry_ms = 0;
+    saves->settle_target[0] = '\0';
+    app->dirty = 1;
+}
+
 void app_saves_applied(skiff_app *app) {
     app_saves *saves = app->saves;
     note_baseline(app);
+    if (app->call.saves.op == SAVES_OP_SETTLE) {
+        settled(app);
+        return;
+    }
     const skiff_err err = app->call.err;
     const app_saves_call *call = &app->call.saves;
     const app_saves_origin origin = saves->running_origin;
@@ -741,7 +809,14 @@ void app_saves_applied(skiff_app *app) {
                         "saves.json not saved: %s (%d)", skiff_err_name(call->baseline_error),
                         (int)call->baseline_error);
     }
-    if (recovery_failed(call->recovery)) {
+    if (recovery_failed(call->recovery) && app->call.suspended && stick_not_back(call->recovery)) {
+        /* Settled right after the wake, before the Memory Stick answered (S1.7): settled again
+         * soon, before anything else, instead of stopping save sync for the session. */
+        saves->settle_pending = 1;
+        saves->settle_attempts = 0;
+        saves->settle_retry_ms = app_now(app) + APP_SAVES_SETTLE_RETRY_MS;
+        snprintf(saves->settle_target, sizeof saves->settle_target, "%s", game.save_target);
+    } else if (recovery_failed(call->recovery)) {
         saves->recovered = call->recovery;
     }
     /* Left meanwhile: the row and a note say how it went, the player's screen stays. */
@@ -897,6 +972,10 @@ void app_saves_screen_update(skiff_app *app, unsigned actions) {
         if (confirm && !app_call_busy(app)) {
             app_pair_begin(app);
         }
+        return;
+    }
+    if (block == SAVES_UNRECOVERED && confirm) {
+        app_saves_settle_again(app);
         return;
     }
     if (block != SAVES_OK) {

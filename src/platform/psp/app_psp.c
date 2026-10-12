@@ -173,8 +173,8 @@ static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
         give_network(platform);
         return err;
     }
-    const int suspends = skiff_psp_power_events_now().suspends;
-    if (platform->net.joined_suspends == suspends &&
+    const int suspend_count = skiff_psp_power_events_now().suspends;
+    if (platform->net.joined_suspends == suspend_count &&
         skiff_psp_net_online(&platform->net) == SKIFF_OK) {
         give_network(platform);
         *joined = 1;
@@ -182,6 +182,7 @@ static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
     }
     /* A connection half gone (out of range, or one a suspend took although the access point still
      * reads as joined) is dropped before joining again. */
+    platform->join_suspends = suspend_count;
     (void)skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DROP_TIMEOUT_US);
     err = skiff_psp_net_connect_start(&platform->net, platform->join_profile,
                                       SKIFF_PSP_APP_JOIN_TIMEOUT_US);
@@ -212,7 +213,7 @@ static skiff_err net_poll(void *ctx, int *joined) {
     const char *failed_call = platform->net.failed_call != NULL ? platform->net.failed_call : "-";
     const int sce_result = platform->net.sce_result;
     if (result == SKIFF_OK) {
-        platform->net.joined_suspends = skiff_psp_power_events_now().suspends;
+        platform->net.joined_suspends = platform->join_suspends;
     }
     give_network(platform);
     *joined = result == SKIFF_OK;
@@ -666,7 +667,7 @@ static void dialog_ended(skiff_psp_app *platform, skiff_psp_dialog_state state) 
                 ? skiff_psp_net_connected_profile(&platform->net, &platform->picked_profile)
                 : SKIFF_ERR_NET_UNAVAILABLE;
         if (platform->picked_error == SKIFF_OK) {
-            platform->net.joined_suspends = skiff_psp_power_events_now().suspends;
+            platform->net.joined_suspends = platform->join_suspends;
         }
         give_network(platform);
     }
@@ -720,6 +721,7 @@ static int open_dialog(skiff_psp_app *platform, const skiff_app_view *view) {
         }
         err = load_network(platform);
         if (err == SKIFF_OK) {
+            platform->join_suspends = skiff_psp_power_events_now().suspends;
             err = skiff_psp_dialog_start_network(dialog);
         }
         if (err != SKIFF_OK) {

@@ -736,8 +736,11 @@ client that does not register itself.
    "session ... closed" line between the cut download and the rejoin's heartbeat. If the sleep came
    during the restore instead, the folder is whole again, either at once (the restore's copy is
    redone after the wake) or after the next launch, which finishes the cut restore first and says
-   so (308). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it joins the Wi-Fi
-   first, with no 102.
+   so (308), or, within the session, `saves: settle 1 of 3` (more if the Memory Stick was slow to
+   come back) and the download run again after it, with no 302 on the Saves screen. The retried
+   transfer's first request comes only after the join ends (seconds after `joining connection 1`,
+   never tens of ms). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it joins
+   the Wi-Fi first, with no 102.
 8. S1.8: read back. Pass: `save:` lines with hash, upload, download and restore times; `stats:`
    with no frame over 33 ms while saves sync, the browsing thread's lowest free stack at least
    8 KB and system memory free unchanged (84 KB); no token or header value in any file but

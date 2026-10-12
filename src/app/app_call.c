@@ -95,15 +95,17 @@ static void run(void *arg) {
 
 /* ---- On the screen's thread ---- */
 
-/* Whether the call's work needs the Wi-Fi: leaving a save deleted, restoring a backup, listing
- * backups, the free space and queueing "Download all" only touch the Memory Stick. */
+/* Whether the call's work needs the Wi-Fi: leaving a save deleted, restoring a backup, settling a
+ * restore a suspend cut, listing backups and queueing "Download all" only touch the Memory Stick.
+ */
 static int uses_network(const app_call *call) {
     if (call->kind == CALL_BATCH_SPACE || call->kind == CALL_BATCH_QUEUE ||
         call->kind == CALL_SAVES_BACKUPS) {
         return 0;
     }
     return call->kind != CALL_SAVES_APPLY ||
-           (call->saves.op != SAVES_OP_LEAVE_DELETED && call->saves.op != SAVES_OP_RESTORE_BACKUP);
+           (call->saves.op != SAVES_OP_LEAVE_DELETED && call->saves.op != SAVES_OP_RESTORE_BACKUP &&
+            call->saves.op != SAVES_OP_SETTLE);
 }
 
 /* A request that failed across a suspend failed because of it (S1.7: a save's .part write, then a

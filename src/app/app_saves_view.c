@@ -182,6 +182,9 @@ void app_saves_view(skiff_app *app) {
     switch (app_saves_blocked(app)) {
     case SAVES_UNRECOVERED:
         add_error_text(app, saves->recovered);
+        if (!saves->settle_pending) {
+            app_view_add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_RETRY);
+        }
         app_view_add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
         return;
     case SAVES_NOT_CONNECTED:

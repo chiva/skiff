@@ -316,6 +316,11 @@ void app_connect_update(skiff_app *app, unsigned actions) {
         }
         return;
     case CONNECT_PAIRING:
+        /* A pairing under way when the Wi-Fi had to be joined again goes on with its code. */
+        if (app->pairing.active) {
+            app_set_screen(app, SKIFF_APP_SCREEN_PAIR);
+            return;
+        }
         if (app->settings.token[0] == '\0' || app->pairing_requested) {
             app_pair_begin(app);
         } else {
@@ -520,11 +525,23 @@ void app_pair_update(skiff_app *app, unsigned actions) {
             return;
         }
         if (!app_call_busy(app)) {
+            if (!app->net_joined) {
+                /* Joined again first; the walk then asks for this new code (CONNECT_PAIRING). */
+                app->pairing_requested = 1;
+                app_connect_begin(app, CONNECT_NETWORK);
+                return;
+            }
             start_pairing(app);
         }
         return;
     }
     const int64_t now = app_now(app);
+    /* A suspend took the Wi-Fi (app_notice_suspend()): join again before the next poll; the walk
+     * comes back to this pairing (CONNECT_PAIRING). */
+    if (!app->net_joined && !app_call_busy(app)) {
+        app_connect_begin(app, CONNECT_NETWORK);
+        return;
+    }
     const int64_t expires_ms =
         app->pairing.started_ms + (int64_t)app->pairing.pairing.expires_in_s * APP_MS_PER_S;
     if (now >= expires_ms) {

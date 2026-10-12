@@ -622,6 +622,8 @@ void app_saves_screen_update(skiff_app *app, unsigned actions);
 void app_saves_backups_update(skiff_app *app, unsigned actions);
 void app_saves_choice_update(skiff_app *app, unsigned actions);
 void app_saves_restore_confirmed(skiff_app *app);
+/* The player asks for the restore journal that stopped save sync to be settled once more. */
+void app_saves_settle_again(skiff_app *app);
 /* The name a game shows: RomM's title, or its save ID without one. */
 const char *app_saves_title(const app_save_game *game);
 const app_save_game *app_saves_game_of_rom(const skiff_app *app, uint64_t rom_id);

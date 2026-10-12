@@ -132,8 +132,8 @@ its maintainer's signature whenever a version changes. The pspdev base image is 
   emulation on Apple Silicon); CI builds it natively in about two minutes.
 - **A CA bundle to parse.** curl's Mbed TLS backend parses the CA file (Mozilla's full list,
   about 190 KB of PEM) for each new TLS connection and holds it while the connection lives; kept
-  connections pay it once. Its parse time and heap on a PSP are still to be measured by the hardware
-  tier; the list is trimmed only if they are too high.
+  connections pay it once. On a PSP-1000 that costs about 200 ms and 280 KB of heap per new
+  connection, so the list ships whole ([Hardware findings](hardware-findings.md#the-app)).
 - **Networking needs the entropy source, even for plain HTTP.** Since curl 7.57,
   `curl_global_init()` always initialises TLS, which in Mbed TLS 4 means `psa_crypto_init()`. If the
   source cannot answer, no connection of any kind can be made.

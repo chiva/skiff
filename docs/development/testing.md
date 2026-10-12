@@ -616,6 +616,20 @@ the disc needs both the PSP build and the host image.
    `PSP/GAME/Skiff*` but `config.ini`. Everything it prints shows those values as `[redacted]`;
    a leak names the file and exits with 1.
 
+`scripts/memstick.sh install` copies the debug EBOOTs (`build/psp`, built `-O0`): right for
+behaviour, but work the CPU limits runs slower there, and S1's first timings were the debug app's.
+Read timings from the release app: after `install`, run `scripts/dev.sh psp-release` and copy it
+over the debug one, keeping the `config.ini` and CA file `install` wrote:
+
+```bash
+cp -X build/psp-release/pbp/skiff/EBOOT.PBP <mount>/PSP/GAME/Skiff/EBOOT.PBP
+find <mount>/PSP -name '._*' -delete
+```
+
+macOS writes an AppleDouble file (`._<name>`) beside what it copies onto the FAT Memory Stick.
+`scripts/memstick.sh` removes those in Skiff's folders; after copying anything else from macOS,
+delete them as above. Skiff would collect one inside a save folder as part of the save.
+
 At `[log] level = debug`, `skiff.log` also holds what the session measures: one `request:` line
 per request the browsing thread makes (time, status, body bytes, new connections, TLS version and cipher,
 heap afterwards; the first one on a new connection carries the handshake and the parsing of the
@@ -677,22 +691,33 @@ own game's ISO into the test RomM's library for the session only (`docker compos
 `romm:/romm/library/roms/psp/`, never committed) and rescan the platform in RomM's web UI; its
 details in RomM must show a save ID (`save_target`). Download that game with Skiff, so Skiff knows
 which ROM its saves belong to (a game Skiff did not install, and that RomM holds no save for yet,
-is synced from its details with Sync save instead). For S1.6 and S1.7 make a large synthetic save:
-a folder `PSP/SAVEDATA/SKIF00002DATA00/` holding an 8 MB file of random bytes (no `PARAM.SFO`; the
-XMB shows it as Corrupted Data, which is expected). `scripts/memstick.sh install` writes
-`[log] level = debug`.
+is synced from its details with Sync save instead). `scripts/memstick.sh install` writes
+`[log] level = debug`; for S1.8's timings, copy the release app over the debug one (above).
 
-S1.4 and S1.5 upload a save from PPSSPP's side as Argosy does (emulator `ppsspp`, slot `autosave`):
-through Argosy itself, or from the computer with the test server's token, which has the save
-scopes. Zip the game's folders from PPSSPP's `memstick/PSP/SAVEDATA/` (folder entries and
-compression are fine: Skiff reads Argosy's deflated units) and post it as RomM's `saveFile` part;
-`<ROM id>` is the number in the game's address in RomM's web UI, `<LAN IP>` the address the PSP
-uses:
+For S1.6 make a large synthetic save: a folder `PSP/SAVEDATA/SKIF00002DATA00/` holding an 8 MB file
+of random bytes (no `PARAM.SFO`; the XMB shows it as Corrupted Data, which is expected). S1.7
+replaces it with 64 smaller files.
+
+```bash
+mkdir -p <mount>/PSP/SAVEDATA/SKIF00002DATA00
+head -c 8388608 /dev/urandom > <mount>/PSP/SAVEDATA/SKIF00002DATA00/DATA.BIN
+find <mount>/PSP -name '._*' -delete
+```
+
+PPSSPP's Memory Stick (`<PPSSPP folder>` below) is a folder on the computer: `~/.config/ppsspp/` on
+macOS (Homebrew's `ppsspp` 1.20.4 included) and Linux, `memstick` next to the program on Windows
+([PPSSPP's docs](https://www.ppsspp.org/docs/troubleshooting/my-saves-wont-load/)); its saves are in
+`PSP/SAVEDATA/` there. S1.4 and S1.5 upload a save from PPSSPP's side as Argosy does (emulator
+`ppsspp`, slot `autosave`): through Argosy itself, or from the computer with the test server's
+token, which has the save scopes. Zip the game's folders from PPSSPP's `PSP/SAVEDATA/` (folder
+entries and compression are fine: Skiff reads Argosy's deflated units) and post it as RomM's
+`saveFile` part; `<ROM id>` is the number in the game's address in RomM's web UI, `<LAN IP>` the
+address the PSP uses:
 
 ```bash
 export SKIFF_TOKEN="$(jq -r .token build/integration/romm.json)"
 rm -f /tmp/ppsspp-save.zip  # zip -r would add to an older archive
-(cd <ppsspp>/memstick/PSP/SAVEDATA && zip -r /tmp/ppsspp-save.zip <game ID>* -x '*.DS_Store')
+(cd "<PPSSPP folder>/PSP/SAVEDATA" && zip -r /tmp/ppsspp-save.zip <game ID>* -x '*.DS_Store' '*/._*')
 curl -sS --cacert build/integration/certs/ca.crt -H "Authorization: Bearer $SKIFF_TOKEN" \
   -F "saveFile=@/tmp/ppsspp-save.zip;filename=<game ID>.zip;type=application/zip" \
   "https://<LAN IP>:8443/api/saves?rom_id=<ROM id>&emulator=ppsspp&slot=autosave"
@@ -703,48 +728,72 @@ that ROM's `autosave` slot from RomM's web UI, so nothing is lost. Without a `de
 applies no upload guard (the 409 for a device that has not synced the slot's newest save), as for a
 client that does not register itself.
 
+S1.4 and S1.5 need saves that differ, not a game session for each. On the PSP, restore an older
+backup (Settings → Saves → the game → △ Backups): a restored save that differs from the one last
+synced counts as changed on this PSP. On RomM's side, upload a variant with the recipe above:
+PPSSPP's save, or the game's folders copied with one small file added (such as `SKIFTEST.TXT`),
+which changes the save's hash.
+
 1. S1.1: Settings → Pair again, approve with every permission ticked. Pass: `config.ini`'s
    `[auth] scopes` lists `assets.read`, `assets.write`, `devices.read` and `devices.write`; the
    queue and the installed games are still there; Settings → Saves shows a list, not "Pair again".
 2. S1.2: play your game, save, quit to the XMB and launch Skiff. Pass: the header says "Checking
    saves..." after the library loads, then "Saves: 1 synced, 0 need you"; RomM's web UI shows
    `<ID> [date].zip` in slot `autosave` with emulator `psp_console`.
-3. S1.3: in your own PPSSPP (phone or PC), load that save (through Argosy, or by unzipping the unit
-   into its `memstick/PSP/SAVEDATA/`). Pass: the game loads it (PSP → PPSSPP).
+3. S1.3: in PPSSPP (phone or computer), load that save (through Argosy, or by unzipping the unit
+   into its `PSP/SAVEDATA/`). Pass: the game loads it (PSP → PPSSPP).
 4. S1.4: save in PPSSPP, upload it to the same ROM as `ppsspp` in slot `autosave` (Argosy, or
    the recipe above), launch Skiff. Pass: the launch check downloads it ("Saves: 1 synced"),
    Settings → Saves → the game → △ Backups lists Backup 1, and the game on the PSP loads the save
    (PPSSPP → PSP, PPSSPP's `EncryptSave` at its default).
-5. S1.5: change the save on the PSP, upload another from PPSSPP's side, launch Skiff. Pass: "1 need
-   you"; once that note is gone the library's footer still shows △ Settings (1), and Settings'
-   Saves row "1 needs you" in amber; on the Saves screen the game is first, its state in amber;
-   ✕ Sync opens the choice with the game in the header, both sides' dates and times in aligned
-   columns with the device RomM's save came from, and each button's symbol (✕/○ as the console's
-   confirm button is set) beside what it does, all within the screen in English and Spanish;
-   □ Use RomM's restores it and the backup is listed. Repeat and choose ✕ Keep this PSP's: RomM's
-   history keeps the other save, and the count is gone from Settings. A game with a long name
-   shows "Synced: <name>..." in the header, the name cut, never the action.
+5. S1.5: change the save on the PSP (or restore an older backup), upload another from PPSSPP's side
+   (or a variant), launch Skiff. Pass: "1 need you"; once that note is gone the library's footer
+   still shows △ Settings (1), and Settings' Saves row "1 needs you" in amber; on the Saves screen
+   the game is first, its state in amber; ✕ Sync opens the choice with the game in the header, both
+   sides' dates and times in aligned columns with the device RomM's save came from, and each
+   button's symbol (✕/○ as the console's confirm button is set) beside what it does, all within the
+   screen in English and Spanish; □ Use RomM's restores it and the backup is listed. Repeat and
+   choose ✕ Keep this PSP's: RomM's history keeps the other save, and the count is gone from
+   Settings. A game with a long name shows "Synced: <name>..." in the header, the name cut, never
+   the action.
 6. S1.6: open Skiff Save Disc's details in the library (its line says what Skiff knows of its
    save) and press □ Sync save, then turn the Wi-Fi switch off while "Syncing" shows. Pass: an
    error (111 or 103) and no save in RomM for the disc; switch on, □ Sync save again: it uploads,
    and the disc is now on the Saves screen.
-7. S1.7: delete `SKIF00002DATA00` (XMB, or USB), launch Skiff: "Deleted on this PSP"; ✕ Sync, then
-   ✕ Download again, and put the PSP to sleep while "Syncing" shows; wake it. Pass: no error
-   (no 302, 402 or 102): "Connecting" shows, the Wi-Fi is joined again and the download runs again
-   by itself, back on the Saves screen with "Synced"; skiff.log has "woke from a suspend", "taken as
-   SKIFF_ERR_NET_CONNECTION_LOST" and "lost to a suspend, again after joining the Wi-Fi", and no
-   "session ... closed" line between the cut download and the rejoin's heartbeat. If the sleep came
-   during the restore instead, the folder is whole again, either at once (the restore's copy is
-   redone after the wake) or after the next launch, which finishes the cut restore first and says
-   so (308), or, within the session, `saves: settle 1 of 3` (more if the Memory Stick was slow to
-   come back) and the download run again after it, with no 302 on the Saves screen. The retried
-   transfer's first request comes only after the join ends (seconds after `joining connection 1`,
-   never tens of ms). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it joins
-   the Wi-Fi first, with no 102.
-8. S1.8: read back. Pass: `save:` lines with hash, upload, download and restore times; `stats:`
-   with no frame over 33 ms while saves sync, the browsing thread's lowest free stack at least
-   8 KB and system memory free unchanged (84 KB); no token or header value in any file but
-   `config.ini` (`scripts/memstick.sh results` checks).
+7. S1.7: replace the disc's save with 64 files of 128 KiB (8.3 names), so that step 5 of a restore
+   (replacing the live folder, file by file) lasts long enough to sleep in, and launch Skiff: the
+   launch check uploads it.
+
+   ```bash
+   rm -f <mount>/PSP/SAVEDATA/SKIF00002DATA00/*
+   for i in $(seq -w 0 63); do
+     head -c 131072 /dev/urandom > "<mount>/PSP/SAVEDATA/SKIF00002DATA00/DATA$i.BIN"
+   done
+   find <mount>/PSP -name '._*' -delete
+   ```
+
+   Then delete `SKIF00002DATA00` (XMB, or USB), launch Skiff: "Deleted on this PSP"; ✕ Sync, then
+   ✕ Download again, and put the PSP to sleep; wake it. Do this twice, deleting the folder again in
+   between: once while the download runs, and once in step 5, about 45 s after ✕ Download again
+   with the release app (the download took 25–32 s there and the restore 14–18 s, about half of
+   it step 5; the first run's `save:` download line gives both times, to adjust by). Pass, for
+   both: no 302, 402 or 102 on screen. After the sleep in the download: "Connecting" shows, the
+   Wi-Fi is joined again and the download runs again by itself, back on the Saves screen with
+   "Synced"; skiff.log has "woke from a suspend", "taken as SKIFF_ERR_NET_CONNECTION_LOST" and
+   "lost to a suspend, again after joining the Wi-Fi", and no "session ... closed" line between
+   the cut download and the rejoin's heartbeat. The retried transfer's first request comes only
+   after the join ends (seconds after `joining connection 1`, never tens of ms). After the sleep
+   in step 5: the restore is finished from its journal (308), either at once (`restore settled`
+   right after the wake), or by `saves: settle 1 of 3` (more if the Memory Stick was slow to come
+   back), or by the next launch, which says so. Finished within the session, the downloaded unit
+   is gone from `PSP/GAME/Skiff/saves-work/` and the transfer run again finds the save in sync.
+   Either way all 64 files match RomM's unit (download it from RomM's web UI, unzip it and
+   `diff -r` it against the folder). Then put the PSP to sleep on the Saves screen, wake it and ✕ Sync: it
+   joins the Wi-Fi first, with no 102.
+8. S1.8: read back. Pass: `save:` lines with hash, upload, download and restore times (from the
+   release app); `stats:` with no frame over 33 ms while saves sync, the browsing thread's lowest
+   free stack at least 8 KB and system memory free unchanged (84 KB); no token or header value in
+   any file but `config.ini` (`scripts/memstick.sh results` checks).
 
 Afterwards restore the Memory Stick from the backup (`cp -RX`, then check for `._` files), with the
 synthetic `SKIF00002…` folders removed. B5 can run in the same session.

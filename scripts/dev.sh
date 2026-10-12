@@ -107,13 +107,24 @@ Commands run in the order given and stop at the first failure.
 EOF
 }
 
+# Builds an image silently. `docker build --quiet` would also hide a failing step's output, leaving
+# only BuildKit's "did not complete successfully" in CI logs, so BuildKit's plain log is kept and
+# printed only when the build fails.
+build_image() {
+  local log
+  if ! log="$(docker build --progress=plain "$@" 2>&1 >/dev/null)"; then
+    printf '%s\n' "$log" >&2
+    return 1
+  fi
+}
+
 ensure_toolchain_image() {
   # pspdev publishes amd64 images only; Apple Silicon runs them under emulation. The first build
   # compiles mbedtls and curl and takes minutes there; later runs are cached until the Dockerfile
   # changes.
   echo "toolchain image: building if docker/toolchain.Dockerfile changed..." >&2
-  docker build --quiet --platform linux/amd64 -t "$TOOLCHAIN_IMAGE" \
-    -f "$REPO_ROOT/docker/toolchain.Dockerfile" "$REPO_ROOT/docker" >/dev/null
+  build_image --platform linux/amd64 -t "$TOOLCHAIN_IMAGE" \
+    -f "$REPO_ROOT/docker/toolchain.Dockerfile" "$REPO_ROOT/docker"
 }
 
 # The toolchain command that builds a PSP preset and puts the CA bundle next to the app's EBOOT.
@@ -137,11 +148,11 @@ run_emulator() {
 }
 
 ensure_host_image() {
-  docker build --quiet -t "$HOST_IMAGE" -f "$REPO_ROOT/docker/host.Dockerfile" "$REPO_ROOT/docker" >/dev/null
+  build_image -t "$HOST_IMAGE" -f "$REPO_ROOT/docker/host.Dockerfile" "$REPO_ROOT/docker"
 }
 
 ensure_ppsspp_image() {
-  docker build --quiet -t "$PPSSPP_IMAGE" -f "$REPO_ROOT/docker/ppsspp.Dockerfile" "$REPO_ROOT/docker" >/dev/null
+  build_image -t "$PPSSPP_IMAGE" -f "$REPO_ROOT/docker/ppsspp.Dockerfile" "$REPO_ROOT/docker"
 }
 
 run_host() {

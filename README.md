@@ -38,8 +38,8 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | PS1 games | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |
 
-Saves go to the same RomM slot where RomM clients such as Argosy keep PPSSPP's saves; whether a real
-PSP and PPSSPP load each other's saves is still to be checked on hardware. RomM's in-browser player
+Saves go to the same RomM slot where RomM clients such as Argosy keep PPSSPP's saves, and a real
+PSP and PPSSPP 1.20.4 load each other's saves (checked with one game). RomM's in-browser player
 uploads no PSP saves (a game's own save data) to RomM.
 See [Sync saves](docs/guide/06-sync-saves.md).
 

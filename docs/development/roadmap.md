@@ -68,7 +68,7 @@ on their own thread since (#67).
   recovery after suspend.
 - Settings (server, CA, mTLS), log file, English and Spanish.
 
-## Phase 3: Polish
+## Phase 3: Polish ✅
 
 - **Cover art** ✅: a game's cover beside its details, from RomM's small cover (PNG, decoded and
   scaled on the browsing thread) and kept on the Memory Stick (64 covers, about 4.5 MB). On a
@@ -83,26 +83,31 @@ on their own thread since (#67).
   users' public ones); opening one lists its PSP games, and START downloads them as it does the
   favourites. Listing them needs `collections.read`, which Phase 4's pairing asks for as an optional
   scope, so players pair again once for both; a token without it shows Pair again.
-- **Screen off during downloads**: while games download, the firmware turns the backlight off after
+- **Screen off during downloads** ✅: while games download, the firmware turns the backlight off after
   60 s without a press instead of the player's 2, 5 or 10 minutes (a player's Off is left alone),
-  and the press that lights it again does nothing else. Waiting for hardware run B5.
+  and the press that lights it again does nothing else. Confirmed on a PSP-1000 (B5); see
+  [Hardware findings](hardware-findings.md#backlight).
 
-## Phase 4: Save sync
+## Phase 4: Save sync ✅
 
-Built; waiting for hardware run S1 ([Testing](testing.md#the-app-on-a-psp)). PSP saves to and from
-RomM 5.4 through `/api/sync/negotiate`: each game's save folders travel as one unit, byte for byte
-argosy-sigil's (checked against sigil in CI, not linked), in the `autosave` slot where RomM clients
-such as Argosy keep PPSSPP's saves. Skiff keeps its own record of each sync and never overwrites
-silently: a save changed on both sides waits for the player, as does one deleted on this PSP or
-emptied in RomM, and every restore is staged, journalled and backs up the saves it replaces. The
-launch check applies the rest by itself. S1 also settles whether a real PSP and PPSSPP load each
-other's saves. RomM's in-browser player uploads no PSP saves (a game's own save data), so it takes
-no part. See [Architecture](architecture.md#saves) and the [guide](../guide/06-sync-saves.md).
+PSP saves to and from RomM 5.4 through `/api/sync/negotiate`: each game's save folders travel as
+one unit, byte for byte argosy-sigil's (checked against sigil in CI, not linked), in the `autosave`
+slot where RomM clients such as Argosy keep PPSSPP's saves. Skiff keeps its own record of each sync
+and never overwrites silently: a save changed on both sides waits for the player, as does one
+deleted on this PSP or emptied in RomM, and every restore is staged, journalled and backs up the
+saves it replaces. The launch check applies the rest by itself. RomM's in-browser player uploads no PSP saves (a game's
+own save data), so it takes no part. See [Architecture](architecture.md#saves) and the
+[guide](../guide/06-sync-saves.md).
+
+Hardware run S1 passed on a PSP-1000 against RomM 5.4.0 (2026-10-12): a real PSP and PPSSPP 1.20.4
+load each other's saves (one game, both ways), a sync cut by the Wi-Fi switch or by sleep leaves
+both sides whole, and with the release EBOOT an 8 MB save hashes in 1.6 s and restores in
+14–18 s. Sleep found four bugs, fixed in #99. See [Hardware findings](hardware-findings.md#save-sync-s1).
 
 ## Phase 5: PS1
 
-Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device packaging),
-then add the PS1 installer.
+Next. Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device
+packaging), then add the PS1 installer.
 
 ## Phase 6: More systems
 

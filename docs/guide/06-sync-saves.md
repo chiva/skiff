@@ -1,8 +1,8 @@
 # 6. Sync saves
 
 > [!NOTE]
-> Save sync needs Skiff **0.4.0** or newer and RomM **5.4** or newer. It has not been through its
-> test on a real PSP yet: copy `PSP/SAVEDATA/` to your computer before you rely on it.
+> Save sync needs Skiff **0.4.0** or newer and RomM **5.4** or newer. It passed its test on a real
+> PSP-1000 with RomM 5.4.0; still, copy `PSP/SAVEDATA/` to your computer before your first sync.
 
 Skiff keeps each game's save the same on this PSP and in RomM. It uploads a save you made on the
 PSP, and downloads one made elsewhere: on another PSP, or in PPSSPP through a RomM client such as

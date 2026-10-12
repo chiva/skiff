@@ -25,9 +25,10 @@ takes about 45 minutes. Plug in the charger; Skiff resumes a download that was i
 ## Do my saves work with PPSSPP?
 
 Skiff keeps each game's save in the game's `autosave` slot in RomM, the slot where RomM clients
-such as Argosy keep PPSSPP's saves, so a save one side uploads is offered to the other. Whether a
-game on a real PSP loads a save PPSSPP made, and the reverse, has not been checked on hardware yet.
-See [Sync saves](06-sync-saves.md).
+such as Argosy keep PPSSPP's saves, so a save one side uploads is offered to the other. On a real
+PSP, a save made there loaded in PPSSPP 1.20.4, and one made in PPSSPP loaded on the PSP, with
+PPSSPP's `EncryptSave` setting (in `ppsspp.ini`) left on, its default. That was checked with one
+game, not every game. See [Sync saves](06-sync-saves.md).
 
 ## And with RomM's web player?
 

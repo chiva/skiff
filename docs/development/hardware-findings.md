@@ -16,8 +16,8 @@ as orders of magnitude.
 | Console | PSP-1000 (32 MB RAM), firmware 6.61 with ARK-5, on AC power |
 | Memory Stick | 64 GB, 84% full during the resume and speed runs |
 | Wi-Fi | open access point on channel 6, signal 95–100%, WLAN Power Save off unless stated (the W7 resume runs did not record it) |
-| Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy) on a Mac on the same LAN; TCP connect ≈10 ms |
-| Dates | 2026-10-04 to 2026-10-08 |
+| Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy, 5.4.0 for save sync) on a Mac on the same LAN; TCP connect ≈10 ms |
+| Dates | 2026-10-04 to 2026-10-12 |
 
 ## Decisions at a glance
 
@@ -29,7 +29,8 @@ as orders of magnitude.
 | Client certificate type | handshake 0.69 s with ECDSA P-256, 2.07 s with RSA-2048 | the guide recommends ECDSA P-256 ([TLS](#tls)) |
 | curl buffer, socket receive buffer | no effect beyond noise; a 128 KB receive buffer broke the network stack | defaults; never raise `SO_RCVBUF` to 128 KB |
 | How downloads write | while the Memory Stick writes, Wi-Fi data stops arriving; 64 MiB took 221 s with 128 KB writes, 160 s with 1 MiB writes, 211 s with a writer thread | 1 MiB writes on the download's thread, no writer thread ([download speed](#download-speed)) |
-| How save uploads read | S1.6: 8 MB in 68 s (123 KB/s) read 16 KB at a time, against 290 KB/s for a save download in the same session; the 0.1 s pick-up after each Memory Stick pause, 512 times, is about the 50 s lost | 1 MiB reads (`SKIFF_ROMM_UPLOAD_BUFFER_BYTES`); not measured again yet |
+| How save uploads read | S1.6: 8 MB in 68 s (123 KB/s) read 16 KB at a time, against 290 KB/s for a save download in the same session; the 0.1 s pick-up after each Memory Stick pause, 512 times, is about the 50 s lost | 1 MiB reads (`SKIFF_ROMM_UPLOAD_BUFFER_BYTES`); no gain shown on hardware yet ([save sync](#save-sync-s1)) |
+| Sleep during save sync | after waking, requests went out before the Wi-Fi was joined again (102), and the Memory Stick and files opened before failed (302, 402) | join again before the next request, take a call cut by a sleep as a lost connection and run it once more, settle a cut restore up to 3 times ([save sync](#save-sync-s1)) |
 | Integrity check | zlib CRC-32 33 MB/s, MD5 11 MB/s, SHA-1 8.2 MB/s | CRC-32 computed inline, against RomM's |
 | Warm-up after joining, WLAN Power Save | Power Save adds 100–200 ms jitter to some requests, no throughput loss | no warm-up; both settings supported |
 | Network picker | a saved profile joins without it in 7.3 s | join the profile; the picker is the fallback ([Wi-Fi](#wi-fi-and-memory)) |
@@ -41,7 +42,7 @@ as orders of magnitude.
 | Worker thread stack | 11,952 of 65,536 bytes used in every run, a module reload included, in the jobs probe and in the app; it leaves 84 KB of system memory once joined | 32 KB ([worker thread](#worker-thread), [the app](#the-app)) |
 | Trusted CAs | the full Mozilla bundle costs about 200 ms and 280 KB of heap per new connection | ship it whole ([the app](#the-app)) |
 | Queue and the UI | the UI waited 113 ms on the queue's lock while the worker saved the queue file | two locks: the UI's reads never wait for a save |
-| Screen during downloads | user mode can set the firmware's backlight-off time (30–120 s took); the screen went dark on battery and AC; the press that lights it reaches the program; a power cycle brings the player's time back | 60 s while downloading, the player's time after and at quit, the waking press held back ([backlight](#backlight)) |
+| Screen during downloads | user mode can set the firmware's backlight-off time (30–120 s took); the screen went dark on battery and AC; the press that lights it reaches the program; a power cycle brings the player's time back | 60 s while downloading, the player's time after and at quit, the waking press held back ([backlight](#backlight)); the app does so (B5) |
 
 ## Entropy
 
@@ -208,25 +209,11 @@ what a user-mode program can change about that.
 | After HOME → Quit | the XMB's menu showed the player's 5 min |
 | After a power cycle | the player's 300 s: the probe's 60 s did not last |
 
-
-### Suspends during save sync (S1.7, 2026-10-12)
-
-PSP-1000 with ARK, RomM 5.4.0 on the LAN, an 8 MB synthetic save. The first runs (#99's first
-version) showed three things about waking up:
-
-- Files opened before the suspend fail on their next write (302), as for downloads.
-- The Memory Stick does not answer at once: the first CA file read failed (curl's
-  `CURLE_SSL_CACERT_BADFILE`, 402) and so did the first settle of a cut restore (302), within a
-  second of waking.
-- The access point can still read as joined (`GOT_IP`) although the connection is gone: a request
-  50 ms after "joining" failed with 102. A real rejoin took about 8 s, and the first attempt failed
-  once (0x80410106) before the second worked.
-
-With #99 at 23d13fc (#100's release EBOOT), the PSP slept in step 5 of a 64-file restore. The settle
-right after waking failed with 302. The next settle, 16 s later, finished the restore from its
-journal (308), the downloaded unit was removed, Wi-Fi was joined again (one 0x80410106, then joined
-in 7 s), and the follow-up check found both sides the same. All 64 files were byte-identical to
-RomM's, and no 102, 302 or 402 reached the player.
+The app (row B5, 2026-10-12, the player's Backlight Auto-Off at 2 min), from its `backlight:`
+lines: 60 s while a download ran, the player's 120 s again once the queue emptied and at quit, and
+with Off a download never darkened the screen. The press that lit the screen again did nothing
+else; the one logged came at the player's 120 s after the download, not during it, through the
+same filter.
 
 ## Download speed
 
@@ -385,35 +372,66 @@ only frames over 16 ms were one 33 ms frame in each of the two 10 s windows that
 confirmation and the "Added 34 downloads" message. One library page requested seconds after the
 64 MiB download started took 5.1 s (the next took 191 ms).
 
-### Save sync (S1, 2026-10-12)
+### Save sync (S1)
 
-PSP-1000 with ARK, RomM 5.4.0 on the LAN, the **debug** EBOOT (`scripts/memstick.sh` installs
-`build/psp`, built `-O0`), an 8 MB synthetic save:
+[The app on a PSP](testing.md#the-app-on-a-psp), 2026-10-12 (row S1), the same PSP-1000: the test
+RomM on 5.4.0 with a 60-ROM library, the synthetic save disc (`SKIF00002`), one UMD game of the
+maintainer's own as a `.cso` (RomM read its save ID, `folder-prefix`, from the CSO) and PPSSPP
+1.20.4 on macOS, `[log] level = debug`. The steps ran on `main` after #95–#98; the sleep step
+(S1.7) and the timings ran again on #99 and #100.
 
-| Item | Value |
+| Step | Result |
 |---|---|
-| Hashing the save's folders | 8 MB in 7.8–8.3 s (about 1 MB/s: Skiff's MD5 at `-O0`; the benchmark's PSA MD5, optimised, ran 11 MB/s) |
-| Upload | 8 MB in 68 s of request (85 s with hashing and writing the unit) |
-| Download, then restore | 8 MB in 29 s, then 39 s to restore: the unit read whole three times (RomM's hash, the restore's check, the extraction), each with CRC-32 and MD5 |
-| First free-space count at launch | 3.0 s, on the screen's thread |
+| S1.1 Pair again | all 7 scopes recorded; the queue and installed games kept |
+| S1.2 PSP → RomM | the game, not installed by Skiff, synced once from its details (□ Sync save); after that the check at launch uploaded its changes by itself |
+| S1.3 PSP → PPSSPP | the PSP's unit, unzipped into PPSSPP's `PSP/SAVEDATA/`, loads in PPSSPP 1.20.4 |
+| S1.4 PPSSPP → PSP | a PPSSPP save uploaded as Argosy does (emulator `ppsspp`, slot `autosave`, a deflated zip with folder entries) was downloaded by the check at launch after a backup, and loads on the PSP (PPSSPP's `EncryptSave` at its default) |
+| S1.5 Changed on both | Skiff asks; Use RomM's restores RomM's after a backup; Keep this PSP's uploads with `overwrite`, and RomM keeps the other save in its history |
+| S1.6 Wi-Fi switch off during an 8 MB upload | 103 after about 54 s, nothing in RomM; the retry uploaded |
+| S1.7 Sleep during a sync | passed on #100, after the four fixes below |
+| S1.8 Read back | frames 16 ms (longest 33 ms) while syncing; the browsing thread's lowest free stack 21,960 bytes; 84 KB of system memory free; no token or header value outside `config.ini` |
 
-Since (#100): MD5 is unrolled by round (2.4 times faster on the host at `-O2`) and built `-O2` in
-the debug EBOOTs too; hashing for RomM skips the CRC-32 a zip needs; the restore checks RomM's hash
-on its own first read (the unit is read twice, not three times); uploads read 1 MiB at a time; the
-launch's free-space count runs on the browsing thread.
+The first S1.7 runs slept during the download or the extraction, before #99, and each found a way
+waking went wrong. No run touched a live save before the restore's journal existed.
 
-Measured again on the same PSP with #100's release EBOOT (443d32d), 2026-10-12, 8 MB save:
-
-| Item | Before | After |
+| After waking | Seen | Fix (#99) |
 |---|---|---|
-| Hashing the save's folders | 7.8–8.3 s | 1.6 s |
-| Download (request) | 29 s | 25.4 s |
-| Restore | 39.4 s | 17.8 s: it writes about 16 MB (the stage, then the live copy) at about 1 MB/s |
-| Launch's free-space count | 3.0 s on the screen's thread | 3.1 s on the browsing thread, but the screen's own reads right after (`installed.json`) waited behind it: still a 3.3 s frame. The count now starts after those reads |
+| Closing RomM's sync session | 402: curl could not read the CA file yet | a call cut by a sleep counts as a lost connection (111), whatever error it saw, and RomM's session is left to expire rather than closed over a dead connection |
+| The save download | 302: the `.part` file opened before the sleep could not be written | the same; a transfer the player started runs once more after the join |
+| The next request | 102: the access point still reported an address (`GOT_IP`), so the join ended at once | a connection joined before the last sleep is never taken as standing |
+| Settling the cut restore | 302 at once, before the Memory Stick answered, which stopped save sync for the session | settled again up to 3 times, 2 s apart, before any other save call |
+
+On #100's release EBOOT (23d13fc), with a 64-file 8 MB save so that step 5 of the restore
+(replacing the live folder) lasted long enough to sleep in it, the sleep landed in step 5: the
+settle right after waking failed with 302, the next one (16 s later) redid step 5 from the journal
+(308), the downloaded unit was removed, the Wi-Fi was joined again (one 0x80410106, then joined in
+7 s), the transfer run again found the save in sync, and all 64 files matched RomM's. No 102, 302
+or 402 reached the player.
+
+S1 first ran the **debug** EBOOT (`scripts/memstick.sh` installs `build/psp`, built `-O0`).
+Since #100, MD5 is unrolled by round and built `-O2` in the debug EBOOTs too, hashing for RomM
+skips the CRC-32 a zip needs, the restore checks RomM's hash on its first read of the unit (two
+reads, not three), uploads read 1 MiB at a time, and the launch's free-space count runs on the
+browsing thread after the starting screen's own reads. An 8 MB save:
+
+| Item | Debug EBOOT, before #100 | Release EBOOT, #100 |
+|---|---|---|
+| Hashing the save's folders | 7.8–8.3 s | 1.58 s; 2.2–2.4 s as 64 files |
+| Download (request) | 29 s | 25–32 s |
+| Restore | 39 s: the unit read whole three times, each with CRC-32 and MD5 | 14–18 s: it writes about 16 MB (the stage, then the live copy) at about 1 MB/s |
+| Upload | 68 s of request, 85 s in all | 136 s for the 64-file save, further from the access point (a 64 MiB game downloaded at about 300 KB/s in that session) |
+| First free-space count at launch | 3.0 s on the screen's thread: a 3.3 s frame | off the screen's thread: the 3.3 s frame is gone |
+
+Typical saves are tens of KB: a 20 KB save (3 files) hashed in about 0.1 s, uploaded in 0.8–1.2 s
+and restored in 2.3–2.5 s on the debug EBOOT.
 
 The restore's writes are its cost now: writing the stage and then copying it into the live folder
-writes every byte twice. Renaming the staged files into place instead would halve that, but FAT
-renames across folders on the Memory Stick have not been measured or checked for crash safety.
+writes every byte twice. Renaming the staged files into place would halve that, but whether
+`sceIoRename` moves across folders on the Memory Stick, and how a cut rename leaves FAT, are not
+known (see [open questions](#open-questions)). Uploads have shown no gain from 1 MiB reads yet.
+
+The UI changes from the session are in #97 and #98. The PSP's GE left a corner pixel out of the
+□ symbol drawn with lines, so button symbols are now drawn pixel by pixel.
 
 ## Open questions
 
@@ -434,5 +452,12 @@ renames across folders on the Memory Stick have not been measured or checked for
   now go through the firmware's resolver with a timeout, and `[log] level = debug` logs each
   lookup's time (`resolve <host>: <ms> ms`), so the next occurrence names its cause. Not seen again
   on 2026-10-10 (lookups 4–11 ms).
+- **Restoring by rename.** Whether `sceIoRename` moves a file or folder from Skiff's folder into
+  `PSP/SAVEDATA/` on a real Memory Stick, and what a rename cut by a sleep or a flat battery leaves,
+  is not known. It would halve a restore's writes ([save sync](#save-sync-s1)).
+- **An emptied save folder.** Step 5 of a restore empties a folder the unit lacks before removing
+  it; whether the XMB shows such a folder, if a cut leaves it, as Corrupted Data is not known.
+- **`sceIoRmdir` on a full folder.** PPSSPP removes a folder that still holds files; whether the
+  PSP does is not known. Skiff empties a folder before removing it either way.
 - **Other consoles.** No numbers yet for the PSP-2000, 3000 or Go (64 MB), or for other access
   points.

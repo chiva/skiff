@@ -4287,6 +4287,46 @@ static void test_a_save_id_learnt_from_details_reaches_saves_json(void) {
     skiff_saves_baseline_destroy(baseline);
 }
 
+static void test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    sync_op(ops, sizeof ops, "no_op", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_downloaded(SAVE_UP, ROM_UP, hash);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("the upload works, writing saves.json does not");
+    storage.fail_suffix = "saves.json" SKIFF_STORAGE_DRAFT_SUFFIX;
+    storage.write_budget = 0;
+    storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_NULL(skiff_saves_baseline_find(baseline, GAME_UP));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("room again: the next sync writes what the last one could not");
+    storage.write_error = SKIFF_OK;
+    frame(SKIFF_UI_ACTION_BACK);
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    const skiff_saves_baseline_entry *entry = skiff_saves_baseline_find(baseline, GAME_UP);
+    TEST_ASSERT_NOT_NULL(entry);
+    TEST_ASSERT_EQUAL_UINT64(SAVE_UP, entry->server_save_id);
+    skiff_saves_baseline_destroy(baseline);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4407,5 +4447,6 @@ int main(void) {
     RUN_TEST(test_a_restore_cut_mid_way_is_settled_and_stops_save_sync);
     RUN_TEST(test_leave_it_compares_again_when_the_save_came_back);
     RUN_TEST(test_a_save_id_learnt_from_details_reaches_saves_json);
+    RUN_TEST(test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call);
     return UNITY_END();
 }

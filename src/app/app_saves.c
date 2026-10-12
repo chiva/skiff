@@ -662,11 +662,18 @@ static void one_checked(skiff_app *app) {
     continue_one(app, &game, origin);
 }
 
+/* After a save call: saves.json now holds the baseline, or the next call tries again. */
+static void note_baseline(skiff_app *app) {
+    if (app->call.saves.baseline_saved) {
+        app->saves->baseline_dirty = 0;
+    } else if (app->call.saves.baseline_error != SKIFF_OK) {
+        app->saves->baseline_dirty = 1;
+    }
+}
+
 void app_saves_checked(skiff_app *app) {
     app_saves *saves = app->saves;
-    if (app->call.saves.baseline_saved) {
-        saves->baseline_dirty = 0;
-    }
+    note_baseline(app);
     if (app->call.saves.op == SAVES_OP_CHECK_ONE) {
         one_checked(app);
         return;
@@ -698,9 +705,7 @@ void app_saves_checked(skiff_app *app) {
 
 void app_saves_applied(skiff_app *app) {
     app_saves *saves = app->saves;
-    if (app->call.saves.baseline_saved) {
-        saves->baseline_dirty = 0;
-    }
+    note_baseline(app);
     const skiff_err err = app->call.err;
     const app_saves_call *call = &app->call.saves;
     const app_saves_origin origin = saves->running_origin;

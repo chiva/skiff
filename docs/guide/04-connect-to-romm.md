@@ -149,8 +149,8 @@ added, 1 not added (see RomM)":
 stop listing this PSP in Install on device, and adds nothing; your choice is kept in `config.ini`
 as `[downloads] from_romm = off`. The row may also say:
 
-- **Pair again to allow it**: the PSP was paired by an older Skiff, with the device permissions
-  unticked, or with a token pasted by hand, or RomM refused it (error 218). Choose the row to pair
+- **Pair again to allow it**: the PSP was paired without the device permissions (by a Skiff older
+  than 0.4.0, with them unticked, or with a token pasted by hand), or RomM refused it (error 218). Choose the row to pair
   again with the device permissions ticked; the address, the downloads and your installed games
   stay.
 - **Needs RomM 5.4**: update RomM.

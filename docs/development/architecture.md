@@ -228,10 +228,12 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   next claim. A ROM sent twice in one claim is queued once. Reasons are fixed texts or Skiff's
   error sentence with its code, in the PSP's language; never RomM's text, a token or a path, and
   nothing from the claim reaches the Memory Stick. The header says "From RomM: N added to
-  Downloads", or "N added, M not added (see RomM)", after a round that added or refused anything;
-  an empty claim shows and logs nothing. Switched off in Settings, Skiff sends
+  Downloads", or "From RomM: N added, M not added (see RomM)", after a round that added or refused
+  anything; an empty claim shows nothing and logs no `send` line (only the debug `request:` line
+  every request gets). Switched off in Settings, Skiff sends
   `remote_install: false` once per connection (so RomM stops listing the PSP even if an earlier
-  run quit before telling it) and never claims. A 403 (218) stops sends until pairing again, a 404
+  run quit before telling it) and never claims. A 403 (218) on registering or claiming stops sends
+  until pairing again (one on a report is only logged with its send), a 404
   (the device deleted in RomM, or the feature turned off since the heartbeat) until the next
   connection. While the queue call runs, a download, Download all, a cancel or retry, a server
   change and the confirmations wait; Download all also waits for a claimed round that has not
@@ -553,8 +555,9 @@ by default), so the app refuses what is not a PSP game.
 - **Claim**: `POST …/installs/claim`, no body. RomM takes every pending request and returns every
   one this device holds taken, oldest first, again on every claim until it is reported, so a claim
   not acted on loses nothing. Skiff keeps the first 64 (`total` and `dropped` are counted for the
-  log). A request id is put in a URL only as RomM makes it, a lowercase UUID4 (hyphens after the
-  8th, 12th, 16th and 20th digit); any other is dropped, never reported, and expires in RomM. A
+  log). A request id is put in a URL only in the shape RomM makes it (a UUID4): 36 lowercase
+  hexadecimal digits and hyphens, the hyphens after the 8th, 12th, 16th and 20th digit (the UUID's
+  version and variant are not checked); any other is dropped, never reported, and expires in RomM. A
   status other than `taken`, another device's request or a wrong type refuses the whole claim
   (204). `file_ids` is only counted (at most 64 read).
 - **Report**: `PUT …/installs/{request_id}` with `{"status":"done|already_installed|failed"}` and,

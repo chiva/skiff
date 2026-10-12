@@ -852,7 +852,8 @@ While the switch is on and Skiff sits idle, the empty claim shows as a `request:
 20 s and nothing else: an empty claim logs no `send` line. A claim that brought sends logs
 `send: claim of N in M ms: ...`, and each send `send <first 8 characters of its id>: rom <id> ->
 <done|already_installed|failed|left taken> (<why>)`. `scripts/memstick.sh results` also checks that
-no token or header value appears in any file but `config.ini`.
+neither the token pairing wrote nor the `X-Skiff-Test` value appears in any file under
+`PSP/GAME/Skiff*` but `config.ini` (and its temporary copies).
 
 Afterwards restore Skiff's folder from the backup (`cp -RX`, then check for `._` files).
 

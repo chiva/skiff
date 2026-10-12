@@ -52,6 +52,9 @@
       "This PSP may not sync saves with RomM; pair it again and allow save sync")                  \
     X(SKIFF_ERR_ROMM_SAVE_MISMATCH, 217,                                                           \
       "The save from RomM does not match RomM's checksum; sync it again")                          \
+    X(SKIFF_ERR_ROMM_SENDS_FORBIDDEN, 218,                                                         \
+      "RomM did not let this PSP receive games: pair again and allow it")                          \
+    X(SKIFF_ERR_ROMM_SEND_NOT_PSP, 219, "That game is not a PSP game")                             \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

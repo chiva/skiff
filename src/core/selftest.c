@@ -18,6 +18,7 @@
 #include "skiff/log.h"
 #include "skiff/param_sfo.h"
 #include "skiff/romm.h"
+#include "skiff/romm_installs.h"
 #include "skiff/romm_saves.h"
 #include "skiff/saves.h"
 #include "skiff/saves_restore.h"
@@ -112,6 +113,18 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_SESSION_ID 4294967297ULL
 #define SKIFF_SELFTEST_SAVE_ID 4294967298ULL
 #define SKIFF_SELFTEST_SAVE_DEVICE "Caf\xC3\xA9?PSP"
+/* A claim as RomM writes it: a ROM id and file ids past 32 bits, and a second request whose id is
+ * not one RomM makes (upper case), which must be dropped. */
+#define SKIFF_SELFTEST_INSTALL_ID "0f1e2d3c-4b5a-4987-a6b5-c4d3e2f1a0b9"
+#define SKIFF_SELFTEST_INSTALL_CLAIM                                                               \
+    "[{\"id\":\"" SKIFF_SELFTEST_INSTALL_ID "\",\"user_id\":1,\"device_id\":\"b\",\"rom_id\":"     \
+    "1099511627776,\"file_ids\":[4294967297,4294967298],\"status\":\"taken\",\"reason\":null,"     \
+    "\"created_at\":\"2026-10-12T10:00:00Z\",\"updated_at\":\"2026-10-12T10:00:01Z\"},{\"id\":"    \
+    "\"0F1E2D3C-4B5A-4987-A6B5-C4D3E2F1A0B9\",\"user_id\":1,\"device_id\":\"b\",\"rom_id\":2,"     \
+    "\"file_ids\":[3],\"status\":\"taken\",\"reason\":null,\"created_at\":"                        \
+    "\"2026-10-12T10:00:02Z\",\"updated_at\":\"2026-10-12T10:00:03Z\"}]"
+#define SKIFF_SELFTEST_INSTALL_DEVICE "b"
+#define SKIFF_SELFTEST_INSTALL_FILES 2U
 /* A RomM name with accents and characters FAT refuses, and how it must come out. */
 #define SKIFF_SELFTEST_ROMM_NAME "Pok\xC3\xA9mon: Edici\xC3\xB3n/Plata?.iso"
 #define SKIFF_SELFTEST_SAFE_NAME "Pok\xC3\xA9mon_ Edici\xC3\xB3n_Plata_.iso"
@@ -393,6 +406,30 @@ static const char *check_romm_saves(void) {
                    strcmp(save.origin_device_name, SKIFF_SELFTEST_SAVE_DEVICE) == 0
                ? NULL
                : "a save sync answer came back with other values";
+}
+
+/* A claim of games sent from RomM is parsed as save sync's answers are, on newlib with 64-bit
+ * integers in software, and a report's reason is cut byte by byte where the PSP's char is signed:
+ * a reason one byte too long whose last character is two bytes loses that whole character. */
+static const char *check_romm_sends(void) {
+    static const char claim_text[] = SKIFF_SELFTEST_INSTALL_CLAIM;
+    static skiff_romm_install_claim claim;
+    if (skiff_romm_parse_install_claim(claim_text, sizeof claim_text - 1,
+                                       SKIFF_SELFTEST_INSTALL_DEVICE, &claim) != SKIFF_OK ||
+        claim.total != 2 || claim.dropped != 1 || claim.count != 1) {
+        return "a claim of games sent from RomM did not parse";
+    }
+    if (claim.requests[0].rom_id != SKIFF_SELFTEST_ROMM_ID ||
+        claim.requests[0].file_count != SKIFF_SELFTEST_INSTALL_FILES ||
+        strcmp(claim.requests[0].id, SKIFF_SELFTEST_INSTALL_ID) != 0) {
+        return "a claim of games sent from RomM came back with other values";
+    }
+    char reason[SKIFF_ROMM_INSTALL_REASON_MAX_BYTES + 2];
+    memset(reason, 'a', SKIFF_ROMM_INSTALL_REASON_MAX_BYTES - 1);
+    memcpy(reason + SKIFF_ROMM_INSTALL_REASON_MAX_BYTES - 1, "\xC3\xA9", 3);
+    return skiff_romm_install_reason_length(reason) == SKIFF_ROMM_INSTALL_REASON_MAX_BYTES - 1
+               ? NULL
+               : "a reason for RomM was cut inside a character";
 }
 
 /* libpng and zlib as the EBOOT links them, and RGB565 written as the GE reads it: red in the low
@@ -1075,6 +1112,7 @@ static const selftest_check CHECKS[] = {
     {"romm-json", check_romm_json},
     {"romm-cover", check_romm_cover},
     {"romm-saves", check_romm_saves},
+    {"romm-sends", check_romm_sends},
     {"cover-decode", check_cover_decode},
     {"safe-name", check_safe_names},
     {"spanish-text", check_spanish_text},

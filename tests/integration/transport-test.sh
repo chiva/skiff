@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the host integration tests (transport, resumable downloads, RomM client, pairing, save sync) and runs them against the
+# Builds the host integration tests (transport, resumable downloads, RomM client and installs, pairing, save sync) and runs them against the
 # integration RomM started by `scripts/dev.sh romm-up`, from a container on the compose network
 # (`scripts/dev.sh romm-test`). The seeded file, its CRC-32, the API token and the certificate paths
 # reach the tests as SKIFF_IT_* variables.
@@ -35,6 +35,9 @@ export SKIFF_IT_EXTRA_CRC32
 SKIFF_IT_SAVE_DISC_ROM_ID="$(jq -er .save_disc.rom_id "$SEED")"
 SKIFF_IT_SAVE_DISC_TARGET="$(jq -er .save_disc.save_target "$SEED")"
 export SKIFF_IT_SAVE_DISC_ROM_ID SKIFF_IT_SAVE_DISC_TARGET
+# The game of another platform, which the install test sends to a PSP and Skiff refuses.
+SKIFF_IT_FOREIGN_ROM_ID="$(jq -er .foreign.rom_id "$SEED")"
+export SKIFF_IT_FOREIGN_ROM_ID
 # The collections: a token that may list them, and the seeded ones' ids and the shelf's size.
 SKIFF_IT_COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"
 SKIFF_IT_SHELF_ID="$(jq -r .collections.shelf "$SEED")"
@@ -45,7 +48,8 @@ SKIFF_IT_VIEWER_SHELF_ID="$(jq -r .collections.viewer_public "$SEED")"
 SKIFF_IT_VIEWER_PRIVATE_ID="$(jq -r .collections.viewer_private "$SEED")"
 export SKIFF_IT_COLLECTIONS_TOKEN SKIFF_IT_SHELF_ID SKIFF_IT_SHELF_ROMS SKIFF_IT_EMPTY_SHELF_ID
 export SKIFF_IT_SMART_SHELF_ID SKIFF_IT_VIEWER_SHELF_ID SKIFF_IT_VIEWER_PRIVATE_ID
-# The pairing and save sync tests approve and refuse pairings as the admin, as RomM's web UI does.
+# The pairing, save sync and install tests approve and refuse pairings and send games as the admin,
+# as RomM's web UI does.
 ADMIN_USER="$(grep '^SKIFF_ADMIN_USER=' "$DIR/romm.env" | cut -d= -f2-)"
 ADMIN_PASSWORD="$(grep '^SKIFF_ADMIN_PASSWORD=' "$DIR/romm.env" | cut -d= -f2-)"
 SKIFF_IT_ADMIN_AUTHORIZATION="Basic $(printf '%s:%s' "$ADMIN_USER" "$ADMIN_PASSWORD" | base64 -w0)"

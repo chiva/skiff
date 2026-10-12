@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Length: 475
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"id":"00000000-0000-4000-8000-00000000000d","user_id":1,"name":"Skiff fixture D","platform":"psp","client":"skiff","client_version":"0.0.0","ip_address":null,"mac_address":null,"hostname":null,"client_device_identifier":"0000000000000000000000000000000d","sync_mode":"api","sync_enabled":true,"sync_config":null,"capabilities":{"remote_install":false},"last_seen":"2026-10-12T13:52:37+00:00","created_at":"2026-10-12T13:52:37+00:00","updated_at":"2026-10-12T13:52:55+00:00"}

@@ -1,0 +1,8 @@
+HTTP/1.1 403 Forbidden
+Content-Length: 22
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"detail":"Forbidden"}

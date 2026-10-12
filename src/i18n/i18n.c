@@ -68,6 +68,9 @@
       "sincronizar partidas")                                                                      \
     X(SKIFF_ERR_ROMM_SAVE_MISMATCH,                                                                \
       "La partida de RomM no coincide con su suma de comprobación; vuelve a sincronizarla")        \
+    X(SKIFF_ERR_ROMM_SENDS_FORBIDDEN,                                                              \
+      "RomM no deja que esta PSP reciba juegos: vincúlala de nuevo y permítelo")                   \
+    X(SKIFF_ERR_ROMM_SEND_NOT_PSP, "Ese juego no es de PSP")                                       \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, "No se encuentra ningún Memory Stick")                           \
     X(SKIFF_ERR_STORAGE_NO_SPACE, "No hay suficiente espacio libre en el Memory Stick")            \
     X(SKIFF_ERR_STORAGE_IO, "No se puede leer o escribir en el Memory Stick")                      \

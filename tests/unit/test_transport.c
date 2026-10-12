@@ -204,11 +204,25 @@ static void test_bodies_belong_to_posts_and_ranges_to_gets(void) {
     request.has_range = 1;
     request.if_range = "\"etag\"";
     expect_refused("a POST with a range");
+    request.method = SKIFF_HTTP_PUT;
+    expect_refused("a PUT with a range");
     request.has_range = 0;
     request.if_range = NULL;
     // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     request.method = (skiff_http_method)7;
     expect_refused("an unknown method");
+}
+
+static void test_a_put_carries_its_body_as_a_post_does(void) {
+    static const char BODY[] = "{\"capabilities\":{\"remote_install\":true}}";
+    request.method = SKIFF_HTTP_PUT;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    request.content_type = "application/json";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(&transport.base, &request, &response));
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_PUT, transport.last_request->method);
+    TEST_ASSERT_EQUAL_PTR(BODY, transport.last_request->body);
+    TEST_ASSERT_EQUAL_size_t(sizeof BODY - 1, transport.last_request->body_size);
 }
 
 /* A body reader over data: gives at most per_call bytes a call (0 for whatever is asked), fails
@@ -430,6 +444,7 @@ int main(void) {
     RUN_TEST(test_if_range_needs_a_range_and_no_line_break);
     RUN_TEST(test_a_post_carries_its_body_and_content_type);
     RUN_TEST(test_bodies_belong_to_posts_and_ranges_to_gets);
+    RUN_TEST(test_a_put_carries_its_body_as_a_post_does);
     RUN_TEST(test_a_post_streams_its_body_from_a_reader);
     RUN_TEST(test_a_reader_needs_a_post_a_size_and_no_body);
     RUN_TEST(test_reading_hands_out_exactly_body_size_bytes);

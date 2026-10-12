@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Length: 273
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"id":"e006a065-f327-434b-ba2b-5d8a9b8acf20","user_id":1,"device_id":"00000000-0000-4000-8000-00000000000d","rom_id":2,"file_ids":[2],"status":"already_installed","reason":null,"created_at":"2026-10-12T13:52:54.146715+00:00","updated_at":"2026-10-12T13:52:54.535645+00:00"}

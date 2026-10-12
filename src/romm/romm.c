@@ -10,6 +10,8 @@
 #include "romm_internal.h"
 
 #define PATH_HEARTBEAT "/api/heartbeat"
+#define HEARTBEAT_DEVICE_INSTALL "DEVICE_INSTALL"
+#define HEARTBEAT_ENABLED "ENABLED"
 #define PATH_PLATFORMS "/api/platforms"
 #define PATH_ROMS "/api/roms"
 #define BEARER_PREFIX "Bearer "
@@ -916,6 +918,14 @@ static int client_ready(const skiff_romm_client *client) {
     return client != NULL && client->transport != NULL && client->base_url[0] != '\0';
 }
 
+/* RomM 5.4's DEVICE_INSTALL.ENABLED, true or nothing: a missing key (RomM 5.3) or any other value
+ * only means no sends, so it never refuses the heartbeat. */
+static int read_installs_enabled(const cJSON *root) {
+    const cJSON *install = cJSON_GetObjectItemCaseSensitive(root, HEARTBEAT_DEVICE_INSTALL);
+    return cJSON_IsObject(install) &&
+           cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(install, HEARTBEAT_ENABLED));
+}
+
 skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out) {
     if (out != NULL) {
         memset(out, 0, sizeof *out);
@@ -930,6 +940,9 @@ skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out
         const cJSON *version = cJSON_GetObjectItemCaseSensitive(system, "VERSION");
         err = cJSON_IsString(version) ? skiff_romm_check_version(version->valuestring, out)
                                       : SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    if (err == SKIFF_OK) {
+        out->installs_enabled = read_installs_enabled(root);
     }
     cJSON_Delete(root);
     return err;

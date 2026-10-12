@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Length: 288
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"id":"b133deee-8d1d-4ef8-b526-80a31aba4324","user_id":1,"device_id":"00000000-0000-4000-8000-00000000000d","rom_id":3,"file_ids":[3],"status":"failed","reason":"Ese juego no es de PSP [219]","created_at":"2026-10-12T13:52:54.360243+00:00","updated_at":"2026-10-12T13:52:54.567979+00:00"}

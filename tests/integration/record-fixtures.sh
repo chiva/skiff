@@ -82,3 +82,5 @@ record roms-smart-collection-page-0 \
 "$(dirname "$0")/record-pairing-fixtures.sh" "$DIR" "$OUT"
 # The save sync calls between two paired PSPs, with synthetic save units and device ids.
 "$(dirname "$0")/record-saves-fixtures.sh" "$DIR" "$OUT"
+# The install calls of a paired PSP, games sent to it by the admin, with synthetic device ids.
+"$(dirname "$0")/record-installs-fixtures.sh" "$DIR" "$OUT"

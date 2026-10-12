@@ -51,6 +51,8 @@ typedef enum skiff_http_method {
     /* With a body sent whole (RomM's JSON calls) or streamed from a reader (a save's upload),
      * always with Content-Length. */
     SKIFF_HTTP_POST,
+    /* A POST's body rules under another verb: RomM's device and install updates. */
+    SKIFF_HTTP_PUT,
 } skiff_http_method;
 
 typedef struct skiff_http_request {
@@ -60,11 +62,11 @@ typedef struct skiff_http_request {
     /* Sent on this request after the transport's own default headers. */
     const skiff_http_header *headers;
     size_t header_count;
-    /* POST only: a body of exactly body_size bytes, either in memory (body) or streamed from
-     * read_body (for a file too large to hold), never both; neither for an empty body (body_size
-     * 0). Labelled with "Content-Type: <content_type>" when content_type is set. Sent with
-     * Content-Length, never chunked and never with "Expect: 100-continue", which would cost a PSP a
-     * round trip per request. */
+    /* POST and PUT only: a body of exactly body_size bytes, either in memory (body) or streamed
+     * from read_body (for a file too large to hold), never both; neither for an empty body
+     * (body_size 0). Labelled with "Content-Type: <content_type>" when content_type is set. Sent
+     * with Content-Length, never chunked and never with "Expect: 100-continue", which would cost a
+     * PSP a round trip per request. */
     const char *body;
     skiff_http_read_fn read_body;
     void *read_ctx;
@@ -126,9 +128,9 @@ int skiff_http_url_scheme_valid(const char *url);
  * or SKIFF_ERR_INVALID_ARG before sending for a NULL argument, a missing URL, an unknown method,
  * invalid headers (skiff_http_headers_valid()), has_range without a non-blank if_range (or
  * if_range without has_range), an if_range with a line break, a body, body reader or content type
- * on a GET, a range on a POST, both a body and a body reader, a non-zero body_size with neither or
- * a reader with a body_size of 0, or a content type that is empty or has a line break, and
- * SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an explicit http:// or https:// (curl would
+ * on a GET, a range on a POST or a PUT, both a body and a body reader, a non-zero body_size with
+ * neither or a reader with a body_size of 0, or a content type that is empty or has a line break,
+ * and SKIFF_ERR_CONFIG_INVALID_VALUE for a URL without an explicit http:// or https:// (curl would
  * guess plain HTTP). A streamed body cannot be sent again: when the server drops a kept-alive
  * connection under a request whose body had started, curl cannot retry it on a new connection, and
  * the request fails with SKIFF_ERR_NET_CONNECTION_LOST for the caller to retry. The response is

@@ -59,6 +59,7 @@ skiff_add_unit_test(test_http)
 skiff_add_unit_test(test_transport)
 skiff_add_unit_test(test_fake_transport)
 skiff_add_unit_test(test_romm)
+skiff_add_unit_test(test_romm_installs)
 skiff_add_unit_test(test_romm_pairing)
 # Reaches the shared request helpers the pairing code uses (src/romm/romm_internal.h).
 target_include_directories(test_romm_pairing PRIVATE "${PROJECT_SOURCE_DIR}/src/romm")

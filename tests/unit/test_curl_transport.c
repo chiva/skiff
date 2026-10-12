@@ -257,6 +257,42 @@ static void test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_n
     TEST_ASSERT_NULL(strstr(server.requests[1], "device_code"));
 }
 
+static void test_a_put_sends_its_body_and_the_next_post_is_a_post_again(void) {
+    static const local_http_reply REPLIES[] = {
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"), LOCAL_HTTP_KEEP_OPEN, 0},
+        {STR_AND_SIZE("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), LOCAL_HTTP_CLOSE, 0},
+    };
+    static const char BODY[] = "{\"status\":\"done\"}";
+    serve(REPLIES, 3, "http");
+    create(&TEST_CONFIG);
+    request.method = SKIFF_HTTP_PUT;
+    request.body = BODY;
+    request.body_size = sizeof BODY - 1;
+    request.content_type = "application/json";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_PRINTF("the handle is reused: a POST, then a GET, must not keep the PUT verb");
+    request.method = SKIFF_HTTP_POST;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    memset(&request, 0, sizeof request);
+    request.url = url;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, perform());
+    TEST_ASSERT_EQUAL_INT64_MESSAGE(0, response.new_connections, "one connection for all three");
+    stop_server();
+    TEST_PRINTF("PUT request:\n%s", server.requests[0]);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[0], "PUT /api/heartbeat ", 19));
+    assert_request_has(0, "Content-Type: application/json\r\n");
+    assert_request_has(0, "Content-Length: 17\r\n");
+    assert_request_has(0, "\r\n\r\n{\"status\":\"done\"}");
+    TEST_ASSERT_NULL_MESSAGE(strstr(server.requests[0], "Expect:"), "no 100-continue round trip");
+    TEST_PRINTF("POST request:\n%s", server.requests[1]);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[1], "POST /api/heartbeat ", 20));
+    assert_request_has(1, "\r\n\r\n{\"status\":\"done\"}");
+    TEST_PRINTF("GET request:\n%s", server.requests[2]);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(server.requests[2], "GET /api/heartbeat ", 19));
+    TEST_ASSERT_NULL(strstr(server.requests[2], "Content-Length"));
+}
+
 /* A streamed body: size bytes of a pattern, at most per_call a call, waiting delay_ms before each
  * call; fails with fail_with once fail_at bytes are given (SKIFF_OK for never). */
 typedef struct body_reader {
@@ -779,6 +815,7 @@ int main(void) {
     RUN_TEST(test_range_offset_above_4_gib);
     RUN_TEST(test_keep_alive_reuses_the_connection);
     RUN_TEST(test_a_post_sends_its_body_then_a_get_on_the_same_connection_sends_none);
+    RUN_TEST(test_a_put_sends_its_body_and_the_next_post_is_a_post_again);
     RUN_TEST(test_a_streamed_body_goes_out_exactly_with_content_length);
     RUN_TEST(test_a_reader_error_stops_the_upload_and_the_transport_survives);
     RUN_TEST(test_a_body_shorter_or_longer_than_announced_is_never_completed);

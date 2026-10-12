@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0](https://github.com/chiva/skiff/compare/v0.4.0...v0.5.0) (2026-10-12)
+
+
+### Features
+
+* **app:** add games sent from RomM ([#105](https://github.com/chiva/skiff/issues/105)) ([19c57a6](https://github.com/chiva/skiff/commit/19c57a68f116fb64baabf0811309b6dc1e6a5acb))
+* **app:** check RomM for sent games every 10 s ([#108](https://github.com/chiva/skiff/issues/108)) ([c5dbee7](https://github.com/chiva/skiff/commit/c5dbee778ac3f75999ea54414a39b9ef1a427c5b))
+* **romm:** RomM's install calls ([#103](https://github.com/chiva/skiff/issues/103)) ([dd958c1](https://github.com/chiva/skiff/commit/dd958c141fd47801b17f1e2b9bc38c57dd94147b))
+
 ## [0.4.0](https://github.com/chiva/skiff/compare/v0.3.0...v0.4.0) (2026-10-12)
 
 

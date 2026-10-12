@@ -6,9 +6,12 @@
 
 Skiff keeps each game's save the same on this PSP and in RomM. It uploads a save you made on the
 PSP, and downloads one made elsewhere: on another PSP, or in PPSSPP through a RomM client such as
-Argosy ([FAQ](faq.md#do-my-saves-work-with-ppsspp)). On its own it never replaces a save it cannot
-prove is already on the other side: when both sides hold different saves and it cannot tell which
-is newer, or a save was deleted on this PSP or emptied in RomM, it asks you.
+Argosy ([FAQ](faq.md#do-my-saves-work-with-ppsspp)). A save that changed on one side only syncs on
+its own. Skiff asks only when it cannot safely choose which save to keep: both sides hold different
+saves and both changed since the last sync (or there was no sync yet, or since pairing again), or a
+save was deleted on this PSP or emptied in RomM and still needs a decision. Choosing **Leave it**
+for a save deleted on this PSP ends that question; a later change to RomM's save is then downloaded
+on its own.
 
 ## What it needs
 
@@ -151,4 +154,4 @@ Never synced, and left alone:
 - saves RomM keeps for the game in another slot, or without a slot (Skiff uses the `autosave`
   slot only);
 - PS1 saves, until Skiff installs PS1 games;
-- RomM's in-browser player, which keeps no PSP saves in RomM.
+- RomM's in-browser player, which uploads no PSP saves (a game's own save data) to RomM.

@@ -34,13 +34,14 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | HTTPS, your own certificate authority, and client certificates (mTLS) | ✅ | |
 | Cover art beside each game's details, kept on the Memory Stick (0.3.0) | ✅ | |
 | Favourites and collections from RomM, and "download all" for either (0.4.0) | ✅ | |
-| Sync PSP saves with RomM, asking before it would overwrite one (0.4.0) | ✅ | |
+| Sync PSP saves with RomM: one-sided changes sync on their own, and Skiff asks only when it cannot safely choose (0.4.0) | ✅ | |
 | PS1 games | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |
 
-Saves go to the same RomM slot where RomM clients such as Argosy keep PPSSPP's saves; whether a
-real PSP and PPSSPP load each other's saves is still to be checked on hardware. RomM's in-browser
-player keeps no PSP saves. See [Sync saves](docs/guide/06-sync-saves.md).
+Saves go to the same RomM slot where RomM clients such as Argosy keep PPSSPP's saves; whether a real
+PSP and PPSSPP load each other's saves is still to be checked on hardware. RomM's in-browser player
+uploads no PSP saves (a game's own save data) to RomM.
+See [Sync saves](docs/guide/06-sync-saves.md).
 
 ## What you need
 

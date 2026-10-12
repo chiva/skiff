@@ -31,7 +31,8 @@ See [Sync saves](06-sync-saves.md).
 
 ## And with RomM's web player?
 
-No. RomM's in-browser player keeps no PSP saves in RomM, so there is nothing to exchange with it.
+No. RomM's in-browser player uploads no PSP saves (a game's own save data) to RomM, so there is
+nothing to exchange with it.
 
 ## Which emulator does RomM show for Skiff's saves?
 

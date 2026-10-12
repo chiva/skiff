@@ -697,7 +697,10 @@ curl -sS --cacert build/integration/certs/ca.crt -H "Authorization: Bearer $SKIF
   "https://<LAN IP>:8443/api/saves?rom_id=<ROM id>&emulator=ppsspp&slot=autosave"
 ```
 
-Without a `device_id` RomM applies no upload guard, as for a client that does not register itself.
+Use only a disposable save, on the test RomM. Before S1.4, download any `ppsspp` save already in
+that ROM's `autosave` slot from RomM's web UI, so nothing is lost. Without a `device_id` RomM
+applies no upload guard (the 409 for a device that has not synced the slot's newest save), as for a
+client that does not register itself.
 
 1. S1.1: Settings → Pair again, approve with every permission ticked. Pass: `config.ini`'s
    `[auth] scopes` lists `assets.read`, `assets.write`, `devices.read` and `devices.write`; the

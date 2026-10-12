@@ -318,7 +318,7 @@ static int status_valid(skiff_romm_install_status status) {
 static char *report_body(skiff_romm_install_status status, const char *reason) {
     char cut[SKIFF_ROMM_INSTALL_REASON_MAX_BYTES + 1];
     const size_t length = skiff_romm_install_reason_length(reason);
-    if (length > 0) {
+    if (reason != NULL) {
         memcpy(cut, reason, length);
     }
     cut[length] = '\0';

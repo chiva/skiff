@@ -45,7 +45,7 @@
 #define RAW_MAX 2048
 /* Past what a claim keeps, so the rest wait for the next one. */
 #define FLOOD_REQUESTS (SKIFF_ROMM_INSTALL_CLAIM_MAX + 6)
-#define FLOOD_RAW_MAX (sizeof JSON_200 + 2 + FLOOD_REQUESTS * (CLAIMED_MAX + 1))
+#define FLOOD_RAW_MAX ((size_t)FLOOD_REQUESTS * (CLAIMED_MAX + 1) + sizeof JSON_200 + 2)
 /* More file ids than are read, the last of them not an id: only counted, never refused. */
 #define MANY_FILES (SKIFF_ROMM_INSTALL_FILE_IDS_READ_MAX + 2)
 #define FILE_IDS_MAX (MANY_FILES * 8)

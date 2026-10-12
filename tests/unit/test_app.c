@@ -13,6 +13,8 @@
 #include "skiff/app.h"
 #include "skiff/install.h"
 #include "skiff/jobs.h"
+#include "skiff/saves.h"
+#include "skiff/saves_sync.h"
 
 #include "app_internal.h"
 #include "fake_storage.h"
@@ -454,8 +456,9 @@ static void frame(unsigned actions) {
 }
 
 static const char *screen_name(skiff_app_screen screen) {
-    static const char *const NAMES[] = {"starting", "server", "connecting", "pair",    "library",
-                                        "details",  "queue",  "settings",   "message", "confirm"};
+    static const char *const NAMES[] = {"starting", "server",  "connecting", "pair",    "library",
+                                        "details",  "queue",   "settings",   "message", "confirm",
+                                        "saves",    "backups", "save choice"};
     return NAMES[screen];
 }
 
@@ -3068,6 +3071,1501 @@ static void test_bad_arguments_and_locks(void) {
     TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_START, english(SKIFF_TEXT_QUIT)));
 }
 
+/* ---- Save sync ---- */
+
+/* A token paired with every scope save sync needs, and the device RomM gave this PSP. */
+#define SAVE_SCOPES "platforms.read,roms.read,assets.read,assets.write,devices.read,devices.write"
+#define SAVE_DEVICE "00000000-0000-4000-8000-0000000000aa"
+#define SAVES_ROMM "5.4.0"
+/* The games of the launch check: one only on this PSP (installed by Skiff, so RomM is asked its
+ * save ID), one only in RomM, one with different saves on both and no baseline. */
+#define GAME_UP "SKIF00001"
+#define GAME_DOWN "SKIF00002"
+#define GAME_ASK "SKIF00003"
+#define ROM_UP 101U
+#define ROM_DOWN 102U
+#define ROM_ASK 103U
+#define SAVE_UP 201U
+#define SAVE_DOWN 202U
+#define SAVE_ASK 203U
+#define SAVE_KEPT 204U
+#define SAVE_SESSION 7U
+#define DATA_FOLDER "DATA00"
+#define SAVES_LIST_PATH "/api/roms?platform_ids=1&limit=25&offset=0" LIST_QUERY "&has_saves=true"
+#define NEGOTIATE_PATH "/api/sync/negotiate"
+#define COMPLETE_PATH "/api/sync/sessions/7/complete"
+#define SERVER_TIME "2026-10-11T18:19:00+00:00"
+#define OTHER_DEVICE_NAME "Argosy on Pixel"
+#define HASH_TEXT_MAX 33
+/* A save another device uploaded meanwhile. */
+#define OTHER_HASH "0123456789abcdef0123456789abcdef"
+#define UNIT_BYTES_MAX 4096
+#define SAVE_JSON_MAX 1024
+#define OPS_MAX 2048
+/* A path under the save root: the root and a save file's folder and name. */
+#define SAVE_PATH_MAX (SKIFF_STORAGE_PATH_MAX + 64)
+
+/* What each game's saves hold, here and in RomM. */
+#define UP_LOCAL "slot one, played on this PSP"
+#define DOWN_SERVER "slot one, saved in PPSSPP"
+#define DOWN_OLD "slot one, an older save of this PSP"
+#define ASK_LOCAL "slot one, this PSP's run"
+#define ASK_SERVER "slot one, the phone's run"
+
+static void write_saves_config(const char *scopes) {
+    char config[TEXT_MAX];
+    snprintf(config, sizeof config,
+             "[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN
+             "\ndevice_identifier = 00112233445566778899aabbccddeeff\ndevice_id = " SAVE_DEVICE
+             "\nscopes = %s\n[network]\nprofile = 1\n",
+             scopes);
+    write_config(config);
+}
+
+/* A save file in roots' PSP/SAVEDATA: <save_target>DATA00/DATA.BIN. */
+static void put_save_in(const skiff_storage_roots *where, const char *save_target,
+                        const char *text) {
+    char folder[SAVE_PATH_MAX];
+    snprintf(folder, sizeof folder, "%s/%s" DATA_FOLDER, where->saves, save_target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, folder));
+    char path[SAVE_PATH_MAX + 16];
+    snprintf(path, sizeof path, "%s/DATA.BIN", folder);
+    write_file(path, text, strlen(text));
+}
+
+static void put_save(const char *save_target, const char *text) {
+    put_save_in(&roots, save_target, text);
+}
+
+static void read_save(const char *save_target, char *out, size_t size) {
+    char path[SAVE_PATH_MAX];
+    snprintf(path, sizeof path, "%s/%s" DATA_FOLDER "/DATA.BIN", roots.saves, save_target);
+    read_file(path, out, size);
+}
+
+/* RomM's content_hash of the game's saves on this PSP, as Skiff computes it. */
+static void local_hash(const char *save_target, char *out) {
+    skiff_saves_unit *unit = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_unit_create(&unit));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_saves_collect(posix, &roots, SKIFF_STORAGE_ROOT_SAVES, save_target, unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_hash_unit(posix, &roots, unit));
+    snprintf(out, HASH_TEXT_MAX, "%s", unit->content_hash);
+    skiff_saves_unit_destroy(unit);
+}
+
+/* The unit RomM would serve for save_target holding text, made on another Memory Stick: its bytes
+ * into out and its hash. */
+static size_t server_unit(const char *save_target, const char *text, unsigned char *out,
+                          size_t size, char *hash) {
+    char root[TEMP_DIR_PATH_MAX];
+    char app_root[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "server-side", root, sizeof root));
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "server-side/app", app_root, sizeof app_root));
+    skiff_storage_roots other;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_init(root, app_root, &other));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, other.app));
+    put_save_in(&other, save_target, text);
+    skiff_saves_unit *unit = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_unit_create(&unit));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_saves_collect(posix, &other, SKIFF_STORAGE_ROOT_SAVES, save_target, unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_write_unit(posix, &other, unit, "app:/unit.zip"));
+    snprintf(hash, HASH_TEXT_MAX, "%s", unit->content_hash);
+    skiff_saves_unit_destroy(unit);
+    char path[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, "server-side/app/unit.zip", path, sizeof path));
+    FILE *file = fopen(path, "rb");
+    TEST_ASSERT_NOT_NULL(file);
+    const size_t got = fread(out, 1, size, file);
+    fclose(file);
+    return got;
+}
+
+/* A PSP ROM with saves as RomM lists it, its save ID read by RomM's scan. */
+static int saves_item(char *out, size_t size, unsigned id, const char *title, const char *target) {
+    return snprintf(out, size,
+                    "{\"id\":%u,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"%s.iso\","
+                    "\"fs_size_bytes\":%u,\"save_target\":\"%s\",\"save_target_layout\":"
+                    "\"folder-prefix\"}",
+                    id, title, title, BODY_BYTES, target);
+}
+
+/* The PSP ROMs RomM holds saves for: items, a JSON list's inside. */
+static void serve_saves_list(const char *items, unsigned count) {
+    char raw[RAW_MAX];
+    snprintf(raw, sizeof raw, JSON_OK "{\"items\":[%s],\"total\":%u,\"limit\":%d,\"offset\":0}",
+             items, count, SKIFF_ROMM_PAGE_SIZE);
+    serve_raw(SAVES_LIST_PATH, raw);
+}
+
+/* A ROM's details with its save ID, as RomM 5.4 answers for a scanned disc. */
+static void serve_rom_with_save(unsigned id, const char *title, const char *target) {
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, id, title, target);
+    item[strlen(item) - 1] = '\0';
+    char raw[2 * SAVE_JSON_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK "%s,\"files\":[{\"rom_id\":%u,\"file_name\":\"%s.iso\","
+                     "\"file_size_bytes\":%u}]}",
+             item, id, title, BODY_BYTES);
+    char path[64];
+    snprintf(path, sizeof path, "/api/roms/%u", id);
+    serve_raw(path, raw);
+}
+
+/* One negotiate operation of slot "autosave" (another slot with other_slot); save 0 and hash
+ * NULL for none. */
+static int sync_op(char *out, size_t size, const char *action, unsigned rom, unsigned save,
+                   const char *hash, const char *slot) {
+    char save_id[16] = "null";
+    char server_hash[48] = "null";
+    if (save != 0) {
+        snprintf(save_id, sizeof save_id, "%u", save);
+    }
+    if (hash != NULL) {
+        snprintf(server_hash, sizeof server_hash, "\"%s\"", hash);
+    }
+    return snprintf(out, size,
+                    "{\"action\":\"%s\",\"rom_id\":%u,\"save_id\":%s,\"file_name\":\"save.zip\","
+                    "\"slot\":\"%s\",\"emulator\":\"ppsspp\",\"reason\":\"test\","
+                    "\"server_updated_at\":%s,\"server_content_hash\":%s}",
+                    action, rom, save_id, slot, hash != NULL ? "\"" SERVER_TIME "\"" : "null",
+                    server_hash);
+}
+
+static fake_route *serve_negotiate(const char *operations) {
+    char raw[OPS_MAX + 128];
+    snprintf(raw, sizeof raw, JSON_OK "{\"session_id\":%u,\"operations\":[%s]}", SAVE_SESSION,
+             operations);
+    return serve_raw(NEGOTIATE_PATH, raw);
+}
+
+/* A save as RomM answers for it (SaveSchema), uploaded by device_name's device. */
+static void save_json(char *out, size_t size, unsigned id, unsigned rom, const char *hash,
+                      const char *device_name) {
+    snprintf(out, size,
+             "{\"id\":%u,\"rom_id\":%u,\"file_name\":\"save [2026-10-11_18-19-00].zip\","
+             "\"slot\":\"autosave\",\"emulator\":\"ppsspp\",\"content_hash\":\"%s\","
+             "\"updated_at\":\"" SERVER_TIME "\",\"file_size_bytes\":100,"
+             "\"origin_device_id\":\"other-device\",\"device_syncs\":[{\"device_id\":"
+             "\"other-device\",\"device_name\":\"%s\"}]}",
+             id, rom, hash, device_name);
+}
+
+static fake_route *serve_save(const char *path, unsigned id, unsigned rom, const char *hash) {
+    char json[SAVE_JSON_MAX];
+    save_json(json, sizeof json, id, rom, hash, OTHER_DEVICE_NAME);
+    char raw[SAVE_JSON_MAX + 64];
+    snprintf(raw, sizeof raw, JSON_OK "%s", json);
+    return serve_raw(path, raw);
+}
+
+static void upload_path(unsigned rom, const char *hash, const char *overwrite, char *out,
+                        size_t size) {
+    snprintf(out, size,
+             "/api/saves?rom_id=%u&emulator=psp_console&slot=autosave&device_id=" SAVE_DEVICE
+             "&content_hash=%s&overwrite=%s&autocleanup=true&autocleanup_limit=10",
+             rom, hash, overwrite);
+}
+
+static fake_route *serve_upload(unsigned rom, const char *hash, const char *overwrite,
+                                unsigned save) {
+    char path[512];
+    upload_path(rom, hash, overwrite, path, sizeof path);
+    return serve_save(path, save, rom, hash);
+}
+
+static void serve_content_of(unsigned save, const unsigned char *bytes, size_t size) {
+    static char raw[UNIT_BYTES_MAX + 128];
+    const int used =
+        snprintf(raw, sizeof raw, "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n", size);
+    memcpy(raw + used, bytes, size);
+    char path[160];
+    snprintf(path, sizeof path, "/api/saves/%u/content?device_id=" SAVE_DEVICE "&optimistic=false",
+             save);
+    TEST_ASSERT_NOT_NULL(fake_transport_add_raw(&transport, path, raw, (size_t)used + size));
+}
+
+static void serve_downloaded(unsigned save, unsigned rom, const char *hash) {
+    char path[64];
+    snprintf(path, sizeof path, "/api/saves/%u/downloaded", save);
+    serve_save(path, save, rom, hash);
+}
+
+static void serve_device_of(unsigned save, unsigned rom, const char *hash) {
+    char path[128];
+    snprintf(path, sizeof path, "/api/saves/%u?device_id=" SAVE_DEVICE, save);
+    serve_save(path, save, rom, hash);
+}
+
+static void serve_complete(void) { serve_raw(COMPLETE_PATH, JSON_OK "{\"session\":{\"id\":7}}"); }
+
+/* A baseline in saves.json before the app starts: the game synced as server_hash (save) and
+ * local_hash, with its folders' summary as they are now. */
+static void record_saves_baseline(const char *save_target, unsigned rom, unsigned save,
+                                  const char *server_hash, const char *local) {
+    skiff_saves_baseline *baseline = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_create(&baseline));
+    char path[SKIFF_STORAGE_PATH_MAX];
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_storage_resolve(&roots, SKIFF_SAVES_BASELINE_PATH, path, sizeof path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_load(baseline, posix, path, NULL));
+    skiff_saves_baseline_entry entry;
+    memset(&entry, 0, sizeof entry);
+    snprintf(entry.save_target, sizeof entry.save_target, "%s", save_target);
+    entry.rom_id = rom;
+    entry.server_save_id = save;
+    snprintf(entry.server_hash, sizeof entry.server_hash, "%s", server_hash);
+    snprintf(entry.local_hash, sizeof entry.local_hash, "%s", local);
+    entry.synced_ms = UTC_BASE_MS;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_tree_summarize(posix, &roots, SKIFF_STORAGE_ROOT_SAVES,
+                                                     save_target, &entry.tree));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_record(baseline, &entry));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_save(baseline, posix, path));
+    skiff_saves_baseline_destroy(baseline);
+}
+
+static void read_baseline(skiff_saves_baseline **out) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_create(out));
+    char path[SKIFF_STORAGE_PATH_MAX];
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_storage_resolve(&roots, SKIFF_SAVES_BASELINE_PATH, path, sizeof path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_load(*out, posix, path, NULL));
+}
+
+/* Frames until save sync has nothing left to run. */
+static void run_saves(void) {
+    for (int i = 0; i < FRAMES_MAX && (app_saves_busy(app) || app_call_busy(app)); i++) {
+        frame(0);
+    }
+    frame(0);
+    TEST_ASSERT_FALSE(app_saves_busy(app));
+    print_view();
+}
+
+/* A paired library on RomM version with three games of its own, its token holding scopes. */
+static void open_saves_library(const char *scopes, const char *version) {
+    write_saves_config(scopes);
+    serve_heartbeat(version);
+    serve_platforms();
+    serve_page(0, 3, 3);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+}
+
+/* Settings, its third row: the Saves screen. */
+static void open_saves_screen(void) {
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    print_view();
+}
+
+/* Moves the Saves list's selection to the row labelled label. */
+static void select_save_row(const char *label) {
+    for (size_t i = 0; i < APP_SAVES_GAMES_MAX; i++) {
+        const skiff_app_view *v = view();
+        const size_t at = v->list.selected - v->list.first;
+        if (at < v->row_count && strstr(v->rows[at].label, label) != NULL) {
+            return;
+        }
+        frame(SKIFF_UI_ACTION_DOWN);
+    }
+    TEST_FAIL_MESSAGE(label);
+}
+
+static int requested_path(const char *path) {
+    for (size_t i = 0; i < transport.log_count; i++) {
+        if (strcmp(transport.log[i].url + strlen(SERVER), path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int requested_prefix(const char *prefix) {
+    for (size_t i = 0; i < transport.log_count; i++) {
+        if (strncmp(transport.log[i].url + strlen(SERVER), prefix, strlen(prefix)) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const fake_request *request_to(const char *path) {
+    for (size_t i = 0; i < transport.log_count; i++) {
+        if (strcmp(transport.log[i].url + strlen(SERVER), path) == 0) {
+            return &transport.log[i];
+        }
+    }
+    return NULL;
+}
+
+/* The launch check's three games and what RomM answers for them. */
+typedef struct saves_scene {
+    char up_hash[HASH_TEXT_MAX];
+    char ask_hash[HASH_TEXT_MAX];
+    char down_hash[HASH_TEXT_MAX];
+    char ask_server_hash[HASH_TEXT_MAX];
+    unsigned char down_unit[UNIT_BYTES_MAX];
+    size_t down_size;
+    unsigned char ask_unit[UNIT_BYTES_MAX];
+    size_t ask_size;
+} saves_scene;
+
+static saves_scene scene;
+
+static void set_saves_scene(void) {
+    memset(&scene, 0, sizeof scene);
+    put_save(GAME_UP, UP_LOCAL);
+    put_save(GAME_ASK, ASK_LOCAL);
+    local_hash(GAME_UP, scene.up_hash);
+    local_hash(GAME_ASK, scene.ask_hash);
+    scene.down_size = server_unit(GAME_DOWN, DOWN_SERVER, scene.down_unit, sizeof scene.down_unit,
+                                  scene.down_hash);
+    scene.ask_size = server_unit(GAME_ASK, ASK_SERVER, scene.ask_unit, sizeof scene.ask_unit,
+                                 scene.ask_server_hash);
+    record_installed(ROM_UP, body_crc);
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    char items[RAW_MAX];
+    int used = saves_item(items, sizeof items, ROM_DOWN, "Down Game", GAME_DOWN);
+    items[used++] = ',';
+    saves_item(items + used, sizeof items - (size_t)used, ROM_ASK, "Ask Game", GAME_ASK);
+    serve_saves_list(items, 2);
+    char ops[OPS_MAX];
+    used = sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    ops[used++] = ',';
+    used += sync_op(ops + used, sizeof ops - (size_t)used, "download", ROM_DOWN, SAVE_DOWN,
+                    scene.down_hash, APP_SAVES_SLOT);
+    ops[used++] = ',';
+    used += sync_op(ops + used, sizeof ops - (size_t)used, "download", ROM_DOWN, SAVE_DOWN + 90,
+                    scene.ask_hash, "quicksave");
+    ops[used++] = ',';
+    sync_op(ops + used, sizeof ops - (size_t)used, "conflict", ROM_ASK, SAVE_ASK,
+            scene.ask_server_hash, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    TEST_PRINTF("a check of one game negotiates for its ROM alone");
+    sync_op(ops, sizeof ops, "conflict", ROM_ASK, SAVE_ASK, scene.ask_server_hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, scene.up_hash, "false", SAVE_UP);
+    serve_content_of(SAVE_DOWN, scene.down_unit, scene.down_size);
+    serve_downloaded(SAVE_DOWN, ROM_DOWN, scene.down_hash);
+    serve_device_of(SAVE_ASK, ROM_ASK, scene.ask_server_hash);
+    serve_complete();
+}
+
+static void test_the_launch_check_syncs_what_needs_no_choice_and_counts_the_rest(void) {
+    set_saves_scene();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    TEST_PRINTF("after the library's first page: the check, then every transfer needing no choice");
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Saves: 2 synced, 1 need you", view()->status);
+
+    TEST_PRINTF("negotiate lists this PSP's saves, asks back unlisted ones, filters no emulator");
+    const fake_request *negotiate = request_to(NEGOTIATE_PATH);
+    TEST_ASSERT_NOT_NULL(negotiate);
+    TEST_PRINTF("negotiate body: %s", negotiate->body);
+    TEST_ASSERT_NOT_NULL(strstr(negotiate->body, "\"device_id\":\"" SAVE_DEVICE "\""));
+    TEST_ASSERT_NOT_NULL(strstr(negotiate->body, "\"restore_unlisted\":true"));
+    TEST_ASSERT_NOT_NULL(strstr(negotiate->body, scene.up_hash));
+    TEST_ASSERT_NOT_NULL(strstr(negotiate->body, scene.ask_hash));
+    TEST_ASSERT_NULL(strstr(negotiate->body, "emulators"));
+    TEST_PRINTF("the installed game's save ID came from its details");
+    TEST_ASSERT_TRUE(requested_path("/api/roms/101"));
+
+    TEST_PRINTF("Up Game: only on this PSP, uploaded without overwrite, as a long transfer");
+    char path[512];
+    upload_path(ROM_UP, scene.up_hash, "false", path, sizeof path);
+    const fake_request *upload = request_to(path);
+    TEST_ASSERT_NOT_NULL(upload);
+    TEST_ASSERT_TRUE(upload->long_transfer);
+    TEST_ASSERT_NOT_NULL(strstr(upload->body, "filename=\"" GAME_UP ".zip\""));
+
+    TEST_PRINTF("Down Game: only in RomM, downloaded, checked, restored and confirmed");
+    char data[64];
+    read_save(GAME_DOWN, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(DOWN_SERVER, data);
+    TEST_ASSERT_TRUE(requested_path("/api/saves/202/downloaded"));
+    TEST_ASSERT_FALSE_MESSAGE(requested_prefix("/api/saves/203/content"),
+                              "a conflict is never transferred on its own");
+    TEST_PRINTF("Ask Game: both differ and no baseline; its RomM side's device was read");
+    TEST_ASSERT_TRUE(requested_path("/api/saves/203?device_id=" SAVE_DEVICE));
+    TEST_ASSERT_TRUE_MESSAGE(requested_path(COMPLETE_PATH), "the session is closed");
+    read_save(GAME_ASK, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(ASK_LOCAL, data);
+
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_PRINTF("saves.json: %zu game(s)", baseline->count);
+    const skiff_saves_baseline_entry *up = skiff_saves_baseline_find(baseline, GAME_UP);
+    const skiff_saves_baseline_entry *down = skiff_saves_baseline_find(baseline, GAME_DOWN);
+    TEST_ASSERT_NOT_NULL(up);
+    TEST_ASSERT_NOT_NULL(down);
+    TEST_ASSERT_NULL(skiff_saves_baseline_find(baseline, GAME_ASK));
+    TEST_ASSERT_EQUAL_UINT64(SAVE_UP, up->server_save_id);
+    TEST_ASSERT_EQUAL_STRING(scene.up_hash, up->local_hash);
+    TEST_ASSERT_EQUAL_UINT64(SAVE_DOWN, down->server_save_id);
+    TEST_ASSERT_EQUAL_STRING(scene.down_hash, down->server_hash);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(scene.down_hash, down->local_hash,
+                                     "what was restored is what RomM holds");
+    TEST_ASSERT_EQUAL_STRING(GAME_UP, skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    skiff_saves_baseline_destroy(baseline);
+
+    TEST_PRINTF("the Saves screen, by name");
+    wait_ms(SKIFF_APP_NOTE_MS);
+    open_saves_screen();
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), view()->title);
+    TEST_ASSERT_EQUAL_STRING("3 games", view()->status);
+    TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING("Ask Game", view()->rows[0].label);
+    TEST_ASSERT_EQUAL_STRING("Differs from Ro...", view()->rows[0].detail);
+    TEST_ASSERT_EQUAL_STRING("Down Game", view()->rows[1].label);
+    TEST_ASSERT_EQUAL_STRING("Synced 21 Sep", view()->rows[1].detail);
+    TEST_PRINTF("a game RomM lists no saves for yet shows by its save ID");
+    TEST_ASSERT_EQUAL_STRING(GAME_UP, view()->rows[2].label);
+    TEST_ASSERT_TRUE(shows("Differs from RomM's"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SYNC)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_MENU, english(SKIFF_TEXT_BACKUPS)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_TRUE(shows("Last synced 21 Sep"));
+
+    TEST_PRINTF("skiff.log: save lines with ids and hashes, never the token");
+    static char log_text[64 * 1024];
+    skiff_log_flush(app->log);
+    read_app_file(SKIFF_APP_LOG_FILE_NAME, log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "save: check: 3 game(s)"));
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "save: " GAME_DOWN ": download of save 202"));
+    TEST_ASSERT_NOT_NULL(strstr(log_text, scene.up_hash));
+    TEST_ASSERT_NULL(strstr(log_text, TOKEN));
+}
+
+/* The launch check, then the Saves screen at Ask Game and its conflict. */
+static void open_the_conflict(void) {
+    set_saves_scene();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    select_save_row("Ask Game");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+}
+
+static void test_a_conflict_shows_both_saves_and_keep_this_psps_overwrites(void) {
+    open_the_conflict();
+    TEST_PRINTF("both dates, and the device RomM's save came from");
+    TEST_ASSERT_TRUE(shows("Ask Game has different saves on this PSP and in RomM."));
+    TEST_ASSERT_TRUE(shows("On this PSP: "));
+    TEST_ASSERT_TRUE(shows("In RomM: 11 Oct 18:19, from " OTHER_DEVICE_NAME));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_KEEP_THIS_PSP)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_USE_ROMM)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_LATER)));
+    TEST_PRINTF("Later: nothing changes");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    run_saves();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_PRINTF("Keep this PSP's: the one upload that replaces RomM's save");
+    serve_upload(ROM_ASK, scene.ask_hash, "true", SAVE_KEPT);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    char path[512];
+    upload_path(ROM_ASK, scene.ask_hash, "true", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+    upload_path(ROM_ASK, scene.ask_hash, "false", path, sizeof path);
+    TEST_ASSERT_FALSE(requested_path(path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("Ask Game: save synced", view()->status);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    const skiff_saves_baseline_entry *ask = skiff_saves_baseline_find(baseline, GAME_ASK);
+    TEST_ASSERT_NOT_NULL(ask);
+    TEST_ASSERT_EQUAL_UINT64(SAVE_KEPT, ask->server_save_id);
+    TEST_ASSERT_EQUAL_STRING(scene.ask_hash, ask->local_hash);
+    skiff_saves_baseline_destroy(baseline);
+}
+
+static void test_use_romms_restores_it_after_a_backup(void) {
+    open_the_conflict();
+    serve_content_of(SAVE_ASK, scene.ask_unit, scene.ask_size);
+    serve_downloaded(SAVE_ASK, ROM_ASK, scene.ask_server_hash);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    char data[64];
+    read_save(GAME_ASK, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(ASK_SERVER, data);
+    TEST_ASSERT_EQUAL_STRING("Ask Game: save synced", view()->status);
+    TEST_PRINTF("this PSP's save went to a backup first, listed on the Backups screen");
+    char backup[TEMP_DIR_PATH_MAX];
+    app_file("saves-backup/" GAME_ASK "/1.zip", backup, sizeof backup);
+    FILE *file = fopen(backup, "rb");
+    TEST_ASSERT_NOT_NULL(file);
+    fclose(file);
+    wait_ms(SKIFF_APP_NOTE_MS);
+    select_save_row("Ask Game");
+    frame(SKIFF_UI_ACTION_MENU);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_BACKUPS, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("Ask Game", view()->status);
+    TEST_ASSERT_EQUAL_size_t(1, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING("Backup 1", view()->rows[0].label);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RESTORE)));
+    TEST_PRINTF("restoring it asks first, then puts this PSP's run back");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_CONFIRM, view()->screen);
+    TEST_ASSERT_TRUE(shows("Restore this backup?"));
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_BACKUPS, view()->screen);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    read_save(GAME_ASK, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(ASK_LOCAL, data);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_PRINTF("checked again since: changed on this PSP, which the next sync uploads");
+    select_save_row("Ask Game");
+    TEST_ASSERT_TRUE(shows("Changed on this PSP"));
+}
+
+static void test_romms_409_turns_an_upload_into_a_question(void) {
+    put_save(GAME_UP, "an older run");
+    char old_hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, old_hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, old_hash, old_hash);
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    TEST_PRINTF("negotiate shows RomM's save as it was synced: an upload of the local change");
+    sync_op(ops, sizeof ops, "upload", ROM_UP, SAVE_UP, old_hash, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    serve_raw(path, "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\n\r\n"
+                    "{\"detail\":\"Slot has a newer save since your last sync\"}");
+    TEST_PRINTF("but another device saved meanwhile: RomM refuses, and negotiating again shows it");
+    sync_op(ops, sizeof ops, "conflict", ROM_UP, SAVE_KEPT, OTHER_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_device_of(SAVE_KEPT, ROM_UP, OTHER_HASH);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_TRUE(requested_path(path));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Changed on both"));
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(UP_LOCAL, data, "nothing was overwritten either way");
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING(old_hash, skiff_saves_baseline_find(baseline, GAME_UP)->server_hash);
+    skiff_saves_baseline_destroy(baseline);
+}
+
+static void test_a_save_deleted_on_this_psp_asks_and_can_be_left_deleted(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    char folder[SAVE_PATH_MAX];
+    snprintf(folder, sizeof folder, "%s/" GAME_UP DATA_FOLDER "/DATA.BIN", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, folder));
+    snprintf(folder, sizeof folder, "%s/" GAME_UP DATA_FOLDER, roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_rmdir(posix, folder));
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("deleted here since the last sync: never downloaded back on its own");
+    TEST_ASSERT_EQUAL_STRING("Saves: 0 synced, 1 need you", view()->status);
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Deleted on this PSP"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_ASSERT_TRUE(shows("Up Game: the save was deleted on this PSP, but RomM still has it."));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD_AGAIN)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_LEAVE_IT)));
+    TEST_PRINTF("Leave it: remembered, so the next sync leaves it too");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("Synced"));
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING(SKIFF_SAVES_EMPTY_HASH,
+                             skiff_saves_baseline_find(baseline, GAME_UP)->local_hash);
+    skiff_saves_baseline_destroy(baseline);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+    TEST_ASSERT_TRUE(shows("Synced"));
+}
+
+static void test_without_the_save_scopes_saves_offer_pair_again(void) {
+    put_save(GAME_DOWN, DOWN_OLD);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_DOWN, hash);
+    record_saves_baseline(GAME_DOWN, ROM_DOWN, SAVE_DOWN, hash, hash);
+    open_saves_library(BROWSE_SCOPES, SAVES_ROMM);
+    TEST_PRINTF("an older token: the launch says so once, and RomM is not asked");
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_SAVES_PAIR_NOTE), view()->status);
+    TEST_ASSERT_FALSE(requested_prefix("/api/sync"));
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Pair again to sync saves with RomM"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_PAIR_AGAIN)));
+    TEST_ASSERT_TRUE(view()->has_list);
+    TEST_ASSERT_EQUAL_size_t(0, view()->row_count);
+    TEST_PRINTF("Pair again forgets the baselines (perhaps another RomM user), not the saves");
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_size_t(1, baseline->count);
+    skiff_saves_baseline_destroy(baseline);
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_TOKEN, "romm/device-token.http"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_size_t(0, baseline->count);
+    skiff_saves_baseline_destroy(baseline);
+    char data[64];
+    read_save(GAME_DOWN, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(DOWN_OLD, data);
+}
+
+static void test_a_forbidden_save_call_offers_pair_again(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    record_installed(ROM_UP, body_crc);
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list("", 0);
+    serve_raw(NEGOTIATE_PATH, "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n"
+                              "{\"detail\":\"Forbidden\"}");
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_TRUE(requested_path(NEGOTIATE_PATH));
+    open_saves_screen();
+    TEST_PRINTF("RomM refused the token: read as a missing scope, no error screen");
+    TEST_ASSERT_TRUE(shows("Pair again to sync saves with RomM"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_PAIR_AGAIN)));
+}
+
+static void test_romm_5_3_browses_but_says_save_sync_needs_5_4(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    open_saves_library(SAVE_SCOPES, "5.3.1");
+    run_saves();
+    TEST_ASSERT_FALSE(requested_prefix("/api/sync"));
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Save sync needs RomM 5.4 or newer [215]"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+}
+
+static void test_a_check_that_times_out_says_so_and_retries(void) {
+    fake_route *list = serve_raw(SAVES_LIST_PATH, JSON_OK "{}");
+    list->fail_before_response = SKIFF_ERR_NET_TIMEOUT;
+    list->max_uses = 1;
+    serve_saves_list("", 0);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[103]"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RETRY)));
+    TEST_PRINTF("Retry: the Wi-Fi is joined again first, then the check, back on the Saves screen");
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_GREATER_THAN_INT(joins, env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("No saves on this PSP or in RomM yet."));
+    TEST_ASSERT_TRUE(view()->has_list);
+    TEST_ASSERT_EQUAL_size_t(0, view()->row_count);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_SYNC_ALL)));
+}
+
+static void test_a_restore_cut_short_is_settled_before_anything_with_a_notice(void) {
+    char work[TEMP_DIR_PATH_MAX];
+    app_file("saves-work", work, sizeof work);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, work));
+    char journal[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/journal", journal, sizeof journal);
+    write_file(journal, "not a journal", strlen("not a journal"));
+    write_saves_config(BROWSE_SCOPES);
+    serve_library(1);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_MESSAGE);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_NOTICE), view()->title);
+    TEST_ASSERT_TRUE(shows("[309]"));
+    TEST_ASSERT_EQUAL_size_t(0, transport.request_count);
+    TEST_PRINTF("OK goes on to RomM as usual");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    FILE *file = fopen(journal, "rb");
+    TEST_ASSERT_NULL_MESSAGE(file, "the journal is gone");
+}
+
+/* The library lists ROM_UP among its games: id 101 is "Game 101". */
+static void open_saves_library_with_rom_up(void) {
+    write_saves_config(SAVE_SCOPES);
+    serve_heartbeat(SAVES_ROMM);
+    serve_platforms();
+    serve_list_page("", ROM_UP - 1, 0, 1, 1);
+    serve_saves_list("", 0);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    run_saves();
+}
+
+static void test_a_games_details_show_its_save_and_sync_it(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    TEST_PRINTF("no ROM claims the folder yet: RomM was not asked to negotiate");
+    TEST_ASSERT_FALSE(requested_path(NEGOTIATE_PATH));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_SAVE)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    TEST_ASSERT_TRUE(shows("Save: Synced 21 Sep"));
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+}
+
+static void test_a_details_sync_that_lands_after_leaving_does_nothing_more(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_EXTRA);
+    frame(0);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_PRINTF("Back while the save is checked: the check finishes, nothing is transferred");
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    env_state.hold_calls = 0;
+    run_saves();
+    TEST_ASSERT_TRUE(requested_path(NEGOTIATE_PATH));
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves?"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+}
+
+static void test_a_new_server_forgets_every_baseline_and_save_id(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    open_saves_library(BROWSE_SCOPES, "5.3.1");
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_saves_baseline_remember_rom(app->saves->baseline, ROM_UP, GAME_UP, NULL));
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_size_t(0, baseline->count);
+    TEST_ASSERT_EQUAL_size_t(0, baseline->rom_count);
+    skiff_saves_baseline_destroy(baseline);
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(UP_LOCAL, data, "the saves themselves stay");
+}
+
+static void test_the_saves_row_waits_for_the_connection(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat(SAVES_ROMM);
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    TEST_PRINTF("pairing, from which Settings opens before Skiff ever reached the library");
+    frame(SKIFF_UI_ACTION_MENU);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), view()->rows[2].label);
+    TEST_ASSERT_TRUE(view()->rows[2].dim);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_PRINTF("opened anyway (the platform's smoke test can): no token yet, so Pair again");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_open_saves(app));
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("Pair again to sync saves with RomM"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_open_saves(NULL));
+}
+
+/* What the app smoke test draws: no server at all, so an empty list and why. */
+static void test_the_saves_screen_before_any_server_says_why_it_is_empty(void) {
+    create_app();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_INVALID_ARG, skiff_app_open_saves(app),
+                                  "not before startup");
+    run_until(SKIFF_APP_SCREEN_SERVER);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_open_saves(app));
+    frame(0);
+    print_view();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("Saves sync once Skiff is connected to RomM."));
+    TEST_ASSERT_TRUE(view()->has_list);
+    TEST_ASSERT_EQUAL_size_t(0, view()->row_count);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_DIALOG_NONE, view()->dialog);
+}
+
+/* ROMs whose save IDs leave a game unsyncable, and the ISO and CSO of one game. */
+#define ROM_OLD_SCAN 110U
+#define ROM_TWIN_ISO 111U
+#define ROM_TWIN_CSO 112U
+#define ROM_PAIR_ISO 113U
+#define ROM_PAIR_CSO 114U
+#define SAVE_TWIN 212U
+#define GAME_TWIN "SKIF00004"
+#define GAME_PAIR "SKIF00005"
+#define GAME_UNKNOWN "ULJM05000"
+
+static void test_rows_say_why_a_game_cannot_sync_and_one_twin_is_chosen(void) {
+    put_save(GAME_TWIN, "the twin's save");
+    put_save(GAME_PAIR, "the pair's save");
+    put_save(GAME_UNKNOWN, "a game RomM does not know");
+    char twin_hash[HASH_TEXT_MAX];
+    local_hash(GAME_TWIN, twin_hash);
+    char items[RAW_MAX];
+    int used = snprintf(items, sizeof items,
+                        "{\"id\":%u,\"platform_id\":1,\"name\":\"Old Scan\",\"fs_name\":"
+                        "\"Old Scan.pbp\",\"fs_size_bytes\":10,\"save_target\":null,"
+                        "\"save_target_layout\":null},",
+                        ROM_OLD_SCAN);
+    const unsigned ids[] = {ROM_TWIN_ISO, ROM_TWIN_CSO, ROM_PAIR_ISO, ROM_PAIR_CSO};
+    const char *const titles[] = {"Twin ISO", "Twin CSO", "Pair ISO", "Pair CSO"};
+    const char *const targets[] = {GAME_TWIN, GAME_TWIN, GAME_PAIR, GAME_PAIR};
+    for (size_t i = 0; i < 4; i++) {
+        used +=
+            saves_item(items + used, sizeof items - (size_t)used, ids[i], titles[i], targets[i]);
+        items[used++] = i < 3 ? ',' : '\0';
+    }
+    serve_saves_list(items, 5);
+    TEST_PRINTF("of the twins, only the CSO's slot holds a save: the same as this PSP's");
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_TWIN_CSO, SAVE_TWIN, twin_hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_downloaded(SAVE_TWIN, ROM_TWIN_CSO, twin_hash);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_TRUE_MESSAGE(requested_path("/api/saves/212/downloaded"),
+                             "RomM is told this PSP holds the same save");
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    const skiff_saves_baseline_entry *twin = skiff_saves_baseline_find(baseline, GAME_TWIN);
+    TEST_ASSERT_NOT_NULL(twin);
+    TEST_ASSERT_EQUAL_UINT64(ROM_TWIN_CSO, twin->rom_id);
+    skiff_saves_baseline_destroy(baseline);
+    open_saves_screen();
+    TEST_ASSERT_EQUAL_size_t(4, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING("Old Scan", view()->rows[0].label);
+    TEST_ASSERT_EQUAL_STRING("Can't sync", view()->rows[0].detail);
+    TEST_ASSERT_TRUE(view()->rows[0].dim);
+    TEST_ASSERT_EQUAL_STRING("SKIF00005", view()->rows[1].label);
+    TEST_ASSERT_EQUAL_STRING("Twin CSO", view()->rows[2].label);
+    TEST_ASSERT_EQUAL_STRING("Synced 21 Sep", view()->rows[2].detail);
+    TEST_ASSERT_EQUAL_STRING(GAME_UNKNOWN, view()->rows[3].label);
+    TEST_PRINTF("RomM scanned it before 5.4: rescan");
+    TEST_ASSERT_TRUE(shows("Can't sync: RomM has no save ID for this game."));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("rescan the platform"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_PRINTF("two games with this save ID and saves in neither: picked from the details");
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_TRUE(shows("Several games in RomM use this save."));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_TRUE(shows("Open the one you play in the library"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_PRINTF("a save folder no game in RomM claims");
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_TRUE(shows("Skiff does not know which game in RomM uses this save."));
+    TEST_PRINTF("and it has no backups to list");
+    frame(SKIFF_UI_ACTION_MENU);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_BACKUPS, view()->screen);
+    TEST_ASSERT_TRUE(shows("No backups of this game's saves yet."));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RESTORE)));
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+}
+
+static void test_a_game_without_a_save_id_says_so_on_its_details(void) {
+    serve_saves_list("", 0);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_details(1);
+    TEST_ASSERT_TRUE(shows("Save: no save ID in RomM"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_SAVE)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    TEST_ASSERT_FALSE(app_saves_busy(app));
+}
+
+static void test_a_save_that_fails_romms_checksum_is_never_restored(void) {
+    unsigned char unit[UNIT_BYTES_MAX];
+    char real_hash[HASH_TEXT_MAX];
+    const size_t size = server_unit(GAME_DOWN, DOWN_SERVER, unit, sizeof unit, real_hash);
+    put_save(GAME_DOWN, DOWN_OLD);
+    char old_hash[HASH_TEXT_MAX];
+    local_hash(GAME_DOWN, old_hash);
+    record_saves_baseline(GAME_DOWN, ROM_DOWN, SAVE_UP, old_hash, old_hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_DOWN, "Down Game", GAME_DOWN);
+    serve_saves_list(item, 1);
+    TEST_PRINTF("RomM says its save hashes to one thing; the file it sends hashes to another");
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_DOWN, SAVE_DOWN, OTHER_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_content_of(SAVE_DOWN, unit, size);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Saves: 0 synced, 1 need you", view()->status);
+    char data[64];
+    read_save(GAME_DOWN, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(DOWN_OLD, data);
+    TEST_ASSERT_FALSE(requested_path("/api/saves/202/downloaded"));
+    char work[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/" GAME_DOWN ".zip", work, sizeof work);
+    TEST_ASSERT_NULL_MESSAGE(fopen(work, "rb"), "the download is not kept");
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[217]"));
+    TEST_PRINTF("syncing it by hand says so too");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("does not match RomM's checksum; sync it again [217]"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+}
+
+static void test_a_lost_connection_stops_the_batch_for_the_next_check(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    put_save(GAME_ASK, ASK_LOCAL);
+    char up[HASH_TEXT_MAX];
+    char ask[HASH_TEXT_MAX];
+    local_hash(GAME_UP, up);
+    local_hash(GAME_ASK, ask);
+    char items[RAW_MAX];
+    int used = saves_item(items, sizeof items, ROM_UP, "Alpha", GAME_UP);
+    items[used++] = ',';
+    saves_item(items + used, sizeof items - (size_t)used, ROM_ASK, "Beta", GAME_ASK);
+    serve_saves_list(items, 2);
+    char ops[OPS_MAX];
+    used = sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    ops[used++] = ',';
+    sync_op(ops + used, sizeof ops - (size_t)used, "upload", ROM_ASK, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    fake_route *first = serve_upload(ROM_UP, up, "false", SAVE_UP);
+    first->fail_before_response = SKIFF_ERR_NET_CONNECTION_LOST;
+    serve_upload(ROM_ASK, ask, "false", SAVE_ASK);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    char path[512];
+    upload_path(ROM_ASK, ask, "false", path, sizeof path);
+    TEST_ASSERT_FALSE_MESSAGE(requested_path(path), "the batch stopped at the lost connection");
+    TEST_ASSERT_EQUAL_STRING("Saves: 0 synced, 1 need you", view()->status);
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[111]"));
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_TRUE(shows("Changed on this PSP"));
+}
+
+static void test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync(void) {
+    char work[TEMP_DIR_PATH_MAX];
+    app_file("saves-work", work, sizeof work);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, work));
+    char journal[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/journal", journal, sizeof journal);
+    write_file(journal, "not a journal", strlen("not a journal"));
+    TEST_PRINTF("the Memory Stick refuses to let the journal go");
+    storage.fail_suffix = "journal";
+    storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    put_save(GAME_UP, UP_LOCAL);
+    record_installed(ROM_UP, body_crc);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("browsing works; nothing about saves is asked of RomM");
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+    TEST_ASSERT_FALSE(requested_prefix("/api/sync"));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+}
+
+static void test_a_new_server_waits_until_the_old_baselines_are_gone(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    open_saves_library(BROWSE_SCOPES, "5.3.1");
+    serve_heartbeat("5.3.1");
+    storage.fail_suffix = "saves.json";
+    storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    print_view();
+    TEST_PRINTF("saves.json could not be dropped: the old server stays, said with the error");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "url = " SERVER));
+    TEST_ASSERT_NOT_NULL(strstr(config, "token = " TOKEN));
+}
+
+static void test_a_transfer_that_ends_after_leaving_keeps_the_players_screen(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    for (int i = 0; i < FRAMES_MAX && app->call.kind != CALL_SAVES_APPLY; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_SAVES_APPLY, app->call.kind);
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_ASSERT_TRUE(app_call_busy(app));
+    TEST_PRINTF("Back while the save uploads: the upload finishes, the library stays on screen");
+    frame(SKIFF_UI_ACTION_BACK);
+    env_state.hold_calls = 0;
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+}
+
+static void test_a_restore_cut_mid_way_is_settled_and_stops_save_sync(void) {
+    char extra[SAVE_PATH_MAX];
+    snprintf(extra, sizeof extra, "%s/" GAME_ASK "EXTRA", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, extra));
+    char file[SAVE_PATH_MAX + 16];
+    snprintf(file, sizeof file, "%s/DATA.BIN", extra);
+    write_file(file, "a folder RomM's save lacks", strlen("a folder RomM's save lacks"));
+    open_the_conflict();
+    serve_content_of(SAVE_ASK, scene.ask_unit, scene.ask_size);
+    serve_downloaded(SAVE_ASK, ROM_ASK, scene.ask_server_hash);
+    TEST_PRINTF("Use RomM's: its save lacks a folder, which the Memory Stick will not remove");
+    storage.fail_suffix = GAME_ASK "EXTRA";
+    storage.rmdir_error = SKIFF_ERR_STORAGE_IO;
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(requested_path("/api/saves/203/downloaded"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_PRINTF(
+        "the journal could not be settled either: nothing syncs until a launch finishes it");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    char journal[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/journal", journal, sizeof journal);
+    FILE *kept = fopen(journal, "rb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(kept, "the journal stays for the next launch");
+    fclose(kept);
+}
+
+static void test_leave_it_compares_again_when_the_save_came_back(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    char folder[SAVE_PATH_MAX];
+    snprintf(folder, sizeof folder, "%s/" GAME_UP DATA_FOLDER "/DATA.BIN", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, folder));
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_PRINTF("the save comes back (over USB) before the player answers");
+    put_save(GAME_UP, UP_LOCAL);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(hash, skiff_saves_baseline_find(baseline, GAME_UP)->local_hash,
+                                     "never recorded as deleted while it is there");
+    skiff_saves_baseline_destroy(baseline);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("Synced"));
+}
+
+static void test_a_save_id_learnt_from_details_reaches_saves_json(void) {
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_BACK);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_NULL_MESSAGE(skiff_saves_baseline_rom_target(baseline, ROM_UP),
+                             "the details screen writes nothing itself");
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("the next save call writes it, though it changes nothing else");
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING(GAME_UP, skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    skiff_saves_baseline_destroy(baseline);
+}
+
+static void test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    sync_op(ops, sizeof ops, "no_op", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_downloaded(SAVE_UP, ROM_UP, hash);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("the upload works, writing saves.json does not");
+    storage.fail_suffix = "saves.json" SKIFF_STORAGE_DRAFT_SUFFIX;
+    storage.write_budget = 0;
+    storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_NULL(skiff_saves_baseline_find(baseline, GAME_UP));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("room again: the next sync writes what the last one could not");
+    storage.write_error = SKIFF_OK;
+    frame(SKIFF_UI_ACTION_BACK);
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    const skiff_saves_baseline_entry *entry = skiff_saves_baseline_find(baseline, GAME_UP);
+    TEST_ASSERT_NOT_NULL(entry);
+    TEST_ASSERT_EQUAL_UINT64(SAVE_UP, entry->server_save_id);
+    skiff_saves_baseline_destroy(baseline);
+}
+
+static void test_a_roms_details_skiff_refuses_cost_only_that_game(void) {
+    put_save(GAME_DOWN, DOWN_OLD);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_DOWN, hash);
+    const unsigned ids[] = {ROM_UP, ROM_DOWN};
+    const uint32_t crcs[] = {body_crc, body_crc};
+    record_installs(ids, crcs, 2);
+    TEST_PRINTF("RomM answers one installed game's details with something Skiff refuses");
+    serve_raw("/api/roms/101", JSON_OK "{\"id\":\"not a number\"}");
+    serve_rom_with_save(ROM_DOWN, "Down Game", GAME_DOWN);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_DOWN, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_DOWN, hash, "false", SAVE_DOWN);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF(
+        "the other game still syncs; the refused one waits, without a save ID, for Sync all");
+    TEST_ASSERT_EQUAL_STRING("Saves: 1 synced, 0 need you", view()->status);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    TEST_ASSERT_EQUAL_STRING(GAME_DOWN, skiff_saves_baseline_rom_target(baseline, ROM_DOWN));
+    TEST_ASSERT_NOT_NULL(skiff_saves_baseline_find(baseline, GAME_DOWN));
+    skiff_saves_baseline_destroy(baseline);
+}
+
+/* A unit without files (an end record alone): what RomM holds once a save was deleted elsewhere. */
+static const unsigned char EMPTY_UNIT[] = {0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0,
+                                           0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0};
+
+static void test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    record_installed(ROM_UP, body_crc);
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "conflict", ROM_UP, SAVE_UP, SKIFF_SAVES_EMPTY_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_device_of(SAVE_UP, ROM_UP, SKIFF_SAVES_EMPTY_HASH);
+    serve_content_of(SAVE_UP, EMPTY_UNIT, sizeof EMPTY_UNIT);
+    serve_downloaded(SAVE_UP, ROM_UP, SKIFF_SAVES_EMPTY_HASH);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("RomM's save is an empty unit: never applied on its own");
+    TEST_ASSERT_EQUAL_STRING("Saves: 0 synced, 1 need you", view()->status);
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Deleted in RomM"));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_ASSERT_TRUE(shows(GAME_UP ": the save was deleted in RomM, but this PSP still has one."));
+    TEST_PRINTF("taking RomM's side is named for what it does");
+    TEST_ASSERT_TRUE(shows("deletes the save on this PSP too"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_REMOVE_THIS_PSP)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_USE_ROMM)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_KEEP_THIS_PSP)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", data, "the save is removed here");
+    char backup[TEMP_DIR_PATH_MAX];
+    app_file("saves-backup/" GAME_UP "/1.zip", backup, sizeof backup);
+    FILE *file = fopen(backup, "rb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(file, "after a backup");
+    fclose(file);
+    TEST_ASSERT_EQUAL_STRING(GAME_UP ": save synced", view()->status);
+}
+
+/* PSP ROMs with saves, ids from first_id, on the list's page at offset of a list of total. */
+static void serve_saves_page(unsigned offset, unsigned first_id, unsigned count, unsigned total) {
+    static char raw[RAW_MAX];
+    int used = snprintf(raw, sizeof raw, JSON_OK "{\"items\":[");
+    for (unsigned i = 0; i < count; i++) {
+        char title[32];
+        char target[SKIFF_SAVES_TARGET_SIZE];
+        snprintf(title, sizeof title, "Many %03u", first_id + i);
+        snprintf(target, sizeof target, "SKIM%05u", first_id + i);
+        used += snprintf(raw + used, sizeof raw - (size_t)used, i > 0 ? "," : "");
+        used += saves_item(raw + used, sizeof raw - (size_t)used, first_id + i, title, target);
+    }
+    snprintf(raw + used, sizeof raw - (size_t)used, "],\"total\":%u,\"limit\":%d,\"offset\":%u}",
+             total, SKIFF_ROMM_PAGE_SIZE, offset);
+    char path[256];
+    snprintf(path, sizeof path,
+             "/api/roms?platform_ids=1&limit=25&offset=%u" LIST_QUERY "&has_saves=true", offset);
+    serve_raw(path, raw);
+}
+
+#define MANY_FIRST_ID 300U
+#define MANY_GAMES 33U
+
+static void test_many_games_are_negotiated_in_rounds(void) {
+    serve_saves_page(0, MANY_FIRST_ID, SKIFF_ROMM_PAGE_SIZE, MANY_GAMES);
+    serve_saves_page(SKIFF_ROMM_PAGE_SIZE, MANY_FIRST_ID + SKIFF_ROMM_PAGE_SIZE,
+                     MANY_GAMES - SKIFF_ROMM_PAGE_SIZE, MANY_GAMES);
+    serve_negotiate("");
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    size_t negotiations = 0;
+    size_t first_round = 0;
+    for (size_t i = 0; i < transport.log_count; i++) {
+        const fake_request *request = &transport.log[i];
+        if (strcmp(request->url + strlen(SERVER), NEGOTIATE_PATH) != 0) {
+            continue;
+        }
+        size_t ids = 0;
+        const char *list = strstr(request->body, "\"rom_ids\":[");
+        for (const char *c = list; c != NULL && *c != ']'; c++) {
+            ids += *c == ',';
+        }
+        TEST_PRINTF("negotiate %zu: %zu ROM(s)", negotiations + 1, list != NULL ? ids + 1 : 0);
+        if (negotiations == 0) {
+            first_round = ids + 1;
+        }
+        negotiations++;
+    }
+    TEST_PRINTF(
+        "33 games with saves: two rounds of at most 32 ROMs, the first one's session closed");
+    TEST_ASSERT_EQUAL_size_t(2, negotiations);
+    TEST_ASSERT_EQUAL_size_t(APP_SAVES_NEGOTIATE_ROMS, first_round);
+    TEST_ASSERT_TRUE(requested_path(COMPLETE_PATH));
+}
+
+static void test_sync_all_asks_again_about_a_game_once_without_a_save_id(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_installed(ROM_UP, body_crc);
+    TEST_PRINTF("RomM has no save ID for the installed game yet");
+    char raw[SAVE_JSON_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK
+             "{\"id\":101,\"platform_id\":1,\"name\":\"Up Game\",\"fs_name\":\"Up Game.iso\","
+             "\"fs_size_bytes\":%u,\"save_target\":null,\"save_target_layout\":null,"
+             "\"files\":[{\"rom_id\":101,\"file_name\":\"Up Game.iso\",\"file_size_bytes\":%u}]}",
+             BODY_BYTES, BODY_BYTES);
+    serve_raw("/api/roms/101", raw)->max_uses = 1;
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_FALSE(requested_path(NEGOTIATE_PATH));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Can't sync"));
+    TEST_PRINTF("rescanned in RomM since: Sync all asks again and syncs it");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+    TEST_ASSERT_TRUE(shows("Synced"));
+}
+
+#define MANY_INSTALLED_FIRST 400U
+#define MANY_INSTALLED (APP_SAVES_LOOKUPS_MAX + 1)
+
+static void test_installed_games_past_the_lookup_budget_are_reached_next_time(void) {
+    unsigned ids[MANY_INSTALLED];
+    uint32_t crcs[MANY_INSTALLED];
+    for (unsigned i = 0; i < MANY_INSTALLED; i++) {
+        ids[i] = MANY_INSTALLED_FIRST + i;
+        crcs[i] = body_crc;
+    }
+    record_installs(ids, crcs, MANY_INSTALLED);
+    serve_saves_list("", 0);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("RomM has none of them: a check asks about %d, remembering each",
+                APP_SAVES_LOOKUPS_MAX);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(baseline, MANY_INSTALLED_FIRST));
+    TEST_ASSERT_NULL(
+        skiff_saves_baseline_rom_target(baseline, MANY_INSTALLED_FIRST + APP_SAVES_LOOKUPS_MAX));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("the next check asks about the one never asked first");
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(
+                                     baseline, MANY_INSTALLED_FIRST + APP_SAVES_LOOKUPS_MAX));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_ASSERT_EQUAL_size_t(APP_SAVES_LOOKUPS_MAX - 1, app->saves->lookup_cursor);
+}
+
+static void test_another_rom_with_the_same_save_id_starts_as_a_first_sync(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    TEST_PRINTF("this PSP's save last synced with the other copy of the game (ROM 102)");
+    record_saves_baseline(GAME_UP, ROM_DOWN, SAVE_DOWN, hash, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "no_op", ROM_DOWN, SAVE_DOWN, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    sync_op(ops, sizeof ops, "conflict", ROM_UP, SAVE_UP, OTHER_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_device_of(SAVE_UP, ROM_UP, OTHER_HASH);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("synced from ROM 101, whose RomM save differs: asked, never downloaded");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_ASSERT_TRUE(shows("has different saves on this PSP and in RomM."));
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+}
+
+#define SHIFTED_FIRST_ID 500U
+
+static void test_a_rom_read_twice_across_shifted_pages_is_one_game(void) {
+    TEST_PRINTF("a save uploaded while the list is read shifts ROM 524 onto the next page too");
+    serve_saves_page(0, SHIFTED_FIRST_ID, SKIFF_ROMM_PAGE_SIZE, SKIFF_ROMM_PAGE_SIZE + 2);
+    serve_saves_page(SKIFF_ROMM_PAGE_SIZE, SHIFTED_FIRST_ID + SKIFF_ROMM_PAGE_SIZE - 1, 2,
+                     SKIFF_ROMM_PAGE_SIZE + 2);
+    serve_negotiate("");
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    TEST_ASSERT_FALSE_MESSAGE(shows("Can't sync"), "not taken for two games with one save ID");
+    TEST_ASSERT_TRUE(shows("No saves on this PSP or in RomM yet."));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -3163,5 +4661,38 @@ int main(void) {
     RUN_TEST(test_the_app_browses_and_downloads_with_the_bundled_cas);
     RUN_TEST(test_wrapping_breaks_between_words_and_inside_long_ones);
     RUN_TEST(test_bad_arguments_and_locks);
+    RUN_TEST(test_the_launch_check_syncs_what_needs_no_choice_and_counts_the_rest);
+    RUN_TEST(test_a_conflict_shows_both_saves_and_keep_this_psps_overwrites);
+    RUN_TEST(test_use_romms_restores_it_after_a_backup);
+    RUN_TEST(test_romms_409_turns_an_upload_into_a_question);
+    RUN_TEST(test_a_save_deleted_on_this_psp_asks_and_can_be_left_deleted);
+    RUN_TEST(test_without_the_save_scopes_saves_offer_pair_again);
+    RUN_TEST(test_a_forbidden_save_call_offers_pair_again);
+    RUN_TEST(test_romm_5_3_browses_but_says_save_sync_needs_5_4);
+    RUN_TEST(test_a_check_that_times_out_says_so_and_retries);
+    RUN_TEST(test_a_restore_cut_short_is_settled_before_anything_with_a_notice);
+    RUN_TEST(test_a_games_details_show_its_save_and_sync_it);
+    RUN_TEST(test_a_details_sync_that_lands_after_leaving_does_nothing_more);
+    RUN_TEST(test_a_new_server_forgets_every_baseline_and_save_id);
+    RUN_TEST(test_the_saves_row_waits_for_the_connection);
+    RUN_TEST(test_the_saves_screen_before_any_server_says_why_it_is_empty);
+    RUN_TEST(test_rows_say_why_a_game_cannot_sync_and_one_twin_is_chosen);
+    RUN_TEST(test_a_game_without_a_save_id_says_so_on_its_details);
+    RUN_TEST(test_a_save_that_fails_romms_checksum_is_never_restored);
+    RUN_TEST(test_a_lost_connection_stops_the_batch_for_the_next_check);
+    RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
+    RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
+    RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);
+    RUN_TEST(test_a_restore_cut_mid_way_is_settled_and_stops_save_sync);
+    RUN_TEST(test_leave_it_compares_again_when_the_save_came_back);
+    RUN_TEST(test_a_save_id_learnt_from_details_reaches_saves_json);
+    RUN_TEST(test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call);
+    RUN_TEST(test_a_roms_details_skiff_refuses_cost_only_that_game);
+    RUN_TEST(test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here);
+    RUN_TEST(test_many_games_are_negotiated_in_rounds);
+    RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
+    RUN_TEST(test_installed_games_past_the_lookup_budget_are_reached_next_time);
+    RUN_TEST(test_another_rom_with_the_same_save_id_starts_as_a_first_sync);
+    RUN_TEST(test_a_rom_read_twice_across_shifted_pages_is_one_game);
     return UNITY_END();
 }

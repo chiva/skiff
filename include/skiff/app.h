@@ -117,6 +117,12 @@ typedef enum skiff_app_screen {
     SKIFF_APP_SCREEN_MESSAGE,
     /* A question: OK goes ahead, back does not. */
     SKIFF_APP_SCREEN_CONFIRM,
+    /* Settings → Saves: every game with saves here or in RomM, and its state. */
+    SKIFF_APP_SCREEN_SAVES,
+    /* A game's save backups. */
+    SKIFF_APP_SCREEN_SAVE_BACKUPS,
+    /* A game whose saves changed on both sides, or were deleted on one: the player picks. */
+    SKIFF_APP_SCREEN_SAVE_CHOICE,
 } skiff_app_screen;
 
 /* The system dialog the platform should run, while the view shows the screen under it. */
@@ -317,6 +323,10 @@ skiff_log *skiff_app_log(const skiff_app *app);
 int skiff_app_downloading(const skiff_app *app);
 
 /* ---- Exposed for the tests and the platform ---- */
+
+/* Opens the Saves screen (Settings → Saves), as the platform's smoke test does to draw it.
+ * SKIFF_ERR_INVALID_ARG for NULL, before startup, or under a system dialog. */
+skiff_err skiff_app_open_saves(skiff_app *app);
 
 /*
  * Makes config's ca_file, cert_file and key_file into paths in app: and points headers at its

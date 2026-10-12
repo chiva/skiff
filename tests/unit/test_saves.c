@@ -637,6 +637,64 @@ static void test_write_checks_its_arguments(void) {
     TEST_ASSERT_FALSE(exists(UNIT_PATH));
 }
 
+/* ---- Hash without writing ---- */
+
+static void test_hashing_matches_a_written_unit_and_writes_nothing(void) {
+    put_probe(SKIFF_STORAGE_ROOT_SAVES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, collect(SKIFF_STORAGE_ROOT_SAVES));
+    const uint64_t written_before = storage.bytes_written;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_hash_unit(&storage.base, &roots, unit));
+    TEST_PRINTF("hash %s, %llu bytes written", unit->content_hash,
+                (unsigned long long)(storage.bytes_written - written_before));
+    TEST_ASSERT_EQUAL_STRING(PROBE_HASH, unit->content_hash);
+    TEST_ASSERT_EQUAL_STRING(PROBE_DATA01_MD5, unit->files[2].md5);
+    TEST_ASSERT_EQUAL_UINT64(written_before, storage.bytes_written);
+    TEST_ASSERT_FALSE(exists(UNIT_PATH));
+    TEST_PRINTF("the same hash a unit written from the folders carries");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, write_unit());
+    TEST_ASSERT_EQUAL_STRING(PROBE_HASH, unit->content_hash);
+}
+
+static void test_hashing_an_empty_game_gives_the_empty_hash(void) {
+    put_folder(SKIFF_STORAGE_ROOT_SAVES "/" GAME "EMPTY");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, collect(SKIFF_STORAGE_ROOT_SAVES));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_hash_unit(&storage.base, &roots, unit));
+    TEST_ASSERT_EQUAL_STRING(EMPTY_HASH, unit->content_hash);
+}
+
+static void assert_no_hash_after(skiff_err expected) {
+    TEST_ASSERT_EQUAL_STRING(skiff_err_name(expected),
+                             skiff_err_name(skiff_saves_hash_unit(&storage.base, &roots, unit)));
+    TEST_ASSERT_EQUAL_STRING("", unit->content_hash);
+    for (size_t i = 0; i < unit->file_count; i++) {
+        TEST_ASSERT_EQUAL_STRING("", unit->files[i].md5);
+    }
+}
+
+static void test_hashing_refuses_a_changed_or_unreadable_save(void) {
+    put_probe(SKIFF_STORAGE_ROOT_SAVES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, collect(SKIFF_STORAGE_ROOT_SAVES));
+    TEST_PRINTF("a file rewritten since the collect, longer then shorter");
+    put_text(SKIFF_STORAGE_ROOT_SAVES "/" DATA01 "/DATA.BIN", "slot one, played longer");
+    assert_no_hash_after(SKIFF_ERR_STORAGE_IO);
+    put_text(SKIFF_STORAGE_ROOT_SAVES "/" DATA01 "/DATA.BIN", "slot");
+    assert_no_hash_after(SKIFF_ERR_STORAGE_IO);
+    TEST_PRINTF("a read the Memory Stick refuses");
+    put_probe(SKIFF_STORAGE_ROOT_SAVES);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, collect(SKIFF_STORAGE_ROOT_SAVES));
+    storage.fail_suffix = "DATA.BIN";
+    storage.read_error = SKIFF_ERR_STORAGE_IO;
+    assert_no_hash_after(SKIFF_ERR_STORAGE_IO);
+    storage.read_error = SKIFF_OK;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_saves_hash_unit(NULL, &roots, unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_saves_hash_unit(&storage.base, NULL, unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_hash_unit(&storage.base, &roots, NULL));
+    unit->root[0] = '\0';
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_hash_unit(&storage.base, &roots, unit));
+}
+
 /* ---- Read ---- */
 
 static void test_skiffs_unit_reads_back_the_same(void) {
@@ -787,6 +845,9 @@ int main(void) {
     RUN_TEST(test_a_cut_write_leaves_no_partial_unit);
     RUN_TEST(test_a_suspend_or_failed_sync_leaves_no_partial_unit);
     RUN_TEST(test_a_save_changed_since_the_collect_is_refused);
+    RUN_TEST(test_hashing_matches_a_written_unit_and_writes_nothing);
+    RUN_TEST(test_hashing_an_empty_game_gives_the_empty_hash);
+    RUN_TEST(test_hashing_refuses_a_changed_or_unreadable_save);
     RUN_TEST(test_write_checks_its_arguments);
     RUN_TEST(test_skiffs_unit_reads_back_the_same);
     RUN_TEST(test_units_from_sigil_argosy_and_streaming_writers_extract_alike);

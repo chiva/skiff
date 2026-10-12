@@ -23,6 +23,12 @@ ROMs and the three special files, plus a second favourites collection with LIBRA
 more (a user may have several; RomM lists their union). Adding a ROM to a collection renames
 nothing, so any ROM may be a favourite.
 
+Save sync: unless SKIFF_SAVE_DISC is 0 (the fixture recording turns it off, so the recorded lists
+keep their two ROMs), a third scan adds a synthetic PSP disc, an ISO 9660 image holding only
+UMD_DATA.BIN with the made-up game ID SKIF-00002 (no game, no EBOOT): RomM 5.4 reads its save ID from
+it (save_target SKIF00002, layout folder-prefix), which the app's save sync and the integration tests
+use.
+
 Collections, for the Collections screen: the admin keeps a regular collection holding both seeded
 ROMs (with SKIFF_LIBRARY_ROMS also the first LIBRARY_SHELF numbered ROMs and the three special
 files, two pages), an empty one, and a smart one RomM fills from a saved search (the extra ROM). A
@@ -31,7 +37,7 @@ admin too, and a private one, which it lists to nobody else. A second client tok
 collections; the first cannot (RomM answers it 403).
 
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
-SKIFF_LIBRARY_ROMS (optional).
+SKIFF_LIBRARY_ROMS (optional), SKIFF_SAVE_DISC (optional, 1 by default).
 """
 
 import asyncio
@@ -75,6 +81,23 @@ UNSUPPORTED_NAME = "Skiff Not A Game.zip"
 CONTROL_NAME = "Skiff Control\aCharacter.iso"
 LONG_NAME = "Skiff " + "A Name Far Too Long For The Memory Stick " * 4 + "End.iso"
 SPECIAL_BYTES = 2048
+# The synthetic save disc: its file, the ID its UMD_DATA.BIN starts with (as a disc writes it, with
+# the dash), and the save ID RomM's scan makes of it.
+SAVE_DISC_NAME = "Skiff Save Disc.iso"
+SAVE_DISC_ID = "SKIF-00002"
+SAVE_DISC_TARGET = "SKIF00002"
+SAVE_DISC_LAYOUT = "folder-prefix"
+# ISO 9660 (ECMA-119): 2048-byte sectors, the system area (16 sectors), then the volume
+# descriptors; the path tables, the root folder and the one file after them.
+ISO_SECTOR = 2048
+ISO_PVD_SECTOR = 16
+ISO_TERMINATOR_SECTOR = 17
+ISO_L_PATH_SECTOR = 18
+ISO_M_PATH_SECTOR = 19
+ISO_ROOT_SECTOR = 20
+ISO_FILE_SECTOR = 21
+ISO_ROOT_RECORD_AT = 156
+ISO_DIRECTORY_FLAG = 2
 # ROMs per listing page when the seed looks them up after the scan.
 LIST_LIMIT = 500
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
@@ -160,6 +183,99 @@ def write_payload(size, name=PAYLOAD_NAME, seed=PAYLOAD_SEED):
         "md5": md5.hexdigest(),
         "crc32": f"{crc:08x}",
     }
+
+
+def iso_both16(value):
+    return value.to_bytes(2, "little") + value.to_bytes(2, "big")
+
+
+def iso_both32(value):
+    return value.to_bytes(4, "little") + value.to_bytes(4, "big")
+
+
+def iso_text(text, size):
+    return text.encode("ascii").ljust(size, b" ")
+
+
+def iso_record(name, sector, size, flags):
+    """One directory record (ECMA-119 9.1), padded to an even length."""
+    record = bytearray(33 + len(name))
+    record[2:10] = iso_both32(sector)
+    record[10:18] = iso_both32(size)
+    record[18:25] = bytes([126, 1, 1, 0, 0, 0, 0])  # 2026-01-01 00:00:00 UTC
+    record[25] = flags
+    record[28:32] = iso_both16(1)
+    record[32] = len(name)
+    record[33:] = name
+    if len(record) % 2:
+        record += b"\0"
+    record[0] = len(record)
+    return bytes(record)
+
+
+def write_save_disc():
+    """The synthetic PSP disc: just enough ISO 9660 for a reader to find UMD_DATA.BIN in its root
+    folder, the file RomM's scan reads the game ID from ("SKIF-00002|...")."""
+    umd_data = f"{SAVE_DISC_ID}|0000000000000000|0001|G".encode("ascii")
+    sectors = ISO_FILE_SECTOR + 1
+    image = bytearray(sectors * ISO_SECTOR)
+    root = iso_record(b"\0", ISO_ROOT_SECTOR, ISO_SECTOR, ISO_DIRECTORY_FLAG)
+    folder = root + iso_record(b"\1", ISO_ROOT_SECTOR, ISO_SECTOR, ISO_DIRECTORY_FLAG)
+    folder += iso_record(b"UMD_DATA.BIN;1", ISO_FILE_SECTOR, len(umd_data), 0)
+    path_entry = bytes([1, 0]) + ISO_ROOT_SECTOR.to_bytes(4, "little") + (1).to_bytes(2, "little")
+    path_table_l = path_entry + b"\0\0"
+    path_table_m = bytes([1, 0]) + ISO_ROOT_SECTOR.to_bytes(4, "big") + (1).to_bytes(2, "big")
+    path_table_m += b"\0\0"
+    pvd = bytearray(ISO_SECTOR)
+    pvd[0:7] = b"\x01CD001\x01"
+    pvd[8:40] = iso_text("PSP GAME", 32)
+    pvd[40:72] = iso_text("SKIFF_SAVE_DISC", 32)
+    pvd[80:88] = iso_both32(sectors)
+    pvd[120:124] = iso_both16(1)
+    pvd[124:128] = iso_both16(1)
+    pvd[128:132] = iso_both16(ISO_SECTOR)
+    pvd[132:140] = iso_both32(len(path_table_l))
+    pvd[140:144] = ISO_L_PATH_SECTOR.to_bytes(4, "little")
+    pvd[148:152] = ISO_M_PATH_SECTOR.to_bytes(4, "big")
+    pvd[ISO_ROOT_RECORD_AT : ISO_ROOT_RECORD_AT + len(root)] = root
+    pvd[190:318] = iso_text("", 128)
+    pvd[318:574] = iso_text("", 256)
+    pvd[574:702] = iso_text("PSP GAME", 128)
+    pvd[702:813] = iso_text("", 111)
+    for at in (813, 830, 847, 864):
+        pvd[at : at + 17] = b"0" * 16 + b"\0"
+    pvd[881] = 1
+    terminator = bytearray(ISO_SECTOR)
+    terminator[0:7] = b"\xffCD001\x01"
+    for sector, data in (
+        (ISO_PVD_SECTOR, pvd),
+        (ISO_TERMINATOR_SECTOR, terminator),
+        (ISO_L_PATH_SECTOR, path_table_l),
+        (ISO_M_PATH_SECTOR, path_table_m),
+        (ISO_ROOT_SECTOR, folder),
+        (ISO_FILE_SECTOR, umd_data),
+    ):
+        image[sector * ISO_SECTOR : sector * ISO_SECTOR + len(data)] = data
+    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    (LIBRARY_DIR / SAVE_DISC_NAME).write_bytes(bytes(image))
+    return SAVE_DISC_NAME
+
+
+def save_disc_rom(auth, platform_id):
+    """The save disc's ROM, which RomM's scan must have given its save ID."""
+    _, (rom_id,) = find_roms(auth, [SAVE_DISC_NAME])
+    status, rom = request("GET", f"/api/roms/{rom_id}", auth)
+    if (
+        status != HTTP_OK
+        or rom.get("save_target") != SAVE_DISC_TARGET
+        or rom.get("save_target_layout") != SAVE_DISC_LAYOUT
+        or rom.get("platform_id") != platform_id
+    ):
+        raise SystemExit(
+            f"seed: the save disc scanned as save_target {rom.get('save_target')!r}, layout "
+            f"{rom.get('save_target_layout')!r} (HTTP {status})"
+        )
+    return {"rom_id": rom_id, "file_name": SAVE_DISC_NAME, "save_target": SAVE_DISC_TARGET}
 
 
 def request(method, path, auth, body=None):
@@ -461,7 +577,15 @@ def main():
     extra = write_payload(EXTRA_BYTES, EXTRA_NAME, EXTRA_SEED)
     library = write_library(library_roms) if library_roms > 0 else []
     asyncio.run(scan(session_cookie(auth)))
+    save_disc = None
+    with_save_disc = os.environ.get("SKIFF_SAVE_DISC", "1") != "0"
+    if with_save_disc:
+        write_save_disc()
+        asyncio.run(scan(session_cookie(auth)))
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
+    if with_save_disc:
+        save_disc = save_disc_rom(auth, platform_id)
+        log(f"save disc: ROM {save_disc['rom_id']}, save ID {SAVE_DISC_TARGET}")
     log(f"roms {rom_id}, {extra_rom_id} on platform {platform_id} after {time.monotonic() - started:.1f} s")
     if library:
         log(f"library: {len(library)} more files, and every other file in {LIBRARY_DIR}")
@@ -482,6 +606,7 @@ def main():
                 "favourite_rom_ids": favourite_rom_ids,
                 "collections_token": create_token(auth, COLLECTIONS_TOKEN_NAME, COLLECTIONS_TOKEN_SCOPES),
                 "collections": collections,
+                "save_disc": save_disc,
             }
         )
     )

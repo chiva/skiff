@@ -119,6 +119,7 @@ static fake_request *log_request(fake_transport *fake, const skiff_http_request 
     }
     entry->body_size = request->body_size;
     entry->body_streamed = request->read_body != NULL;
+    entry->long_transfer = request->long_transfer;
     if (request->content_type != NULL) {
         snprintf(entry->content_type, sizeof entry->content_type, "%s", request->content_type);
     }

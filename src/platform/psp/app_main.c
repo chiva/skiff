@@ -40,9 +40,11 @@ typedef struct smoke {
     int ok;
 } smoke;
 
-static const char *const SCREEN_NAMES[] = {"starting", "server",  "connecting", "pair",
-                                           "library",  "details", "queue",      "settings",
-                                           "message",  "confirm"};
+static const char *const SCREEN_NAMES[] = {
+    "starting", "server",  "connecting", "pair",  "library", "details",    "queue",
+    "settings", "message", "confirm",    "saves", "backups", "save choice"};
+_Static_assert(sizeof SCREEN_NAMES / sizeof SCREEN_NAMES[0] == SKIFF_APP_SCREEN_SAVE_CHOICE + 1,
+               "every screen needs a name for the report");
 
 static void smoke_frame(smoke *s, const skiff_app_view *view) {
     s->frames++;
@@ -111,6 +113,27 @@ static int smoke_calls(smoke *s, skiff_psp_app *platform) {
              (int)err);
     skiff_psp_report_line_offscreen(&s->report, line);
     return counted && cancelled;
+}
+
+/* The Saves screen (Settings → Saves) drawn as the app builds it: PPSSPPHeadless has no server, so
+ * its list is empty and it says why; a few frames go through the renderer. */
+#define SMOKE_SAVES_FRAMES 3
+
+static int smoke_saves(smoke *s, skiff_psp_app *platform) {
+    const skiff_err err = skiff_app_open_saves(platform->app);
+    const skiff_app_view *view = NULL;
+    for (int i = 0; i < SMOKE_SAVES_FRAMES && err == SKIFF_OK; i++) {
+        view = skiff_psp_app_step(platform);
+    }
+    const int ok = err == SKIFF_OK && view != NULL && view->screen == SKIFF_APP_SCREEN_SAVES &&
+                   view->has_list && view->row_count == 0;
+    char line[SKIFF_APP_TITLE_MAX + 2 * SKIFF_TEXT_MAX];
+    snprintf(line, sizeof line, "saves screen: %s, %zu rows, \"%s\": %s (%d) %s",
+             view != NULL ? view->title : "-", view != NULL ? view->row_count : (size_t)0,
+             view != NULL && view->line_count > 0 ? view->lines[0] : "", skiff_err_name(err),
+             (int)err, ok ? "ok" : "FAILED");
+    skiff_psp_report_line_offscreen(&s->report, line);
+    return ok;
 }
 
 /* A cover as the details screen draws it: a red square from a 5650 texture, read back from the
@@ -224,6 +247,9 @@ int main(int argc, char *argv[]) {
 #ifdef SKIFF_APP_SMOKE
     if (s.ok) {
         s.ok = smoke_calls(&s, &platform);
+    }
+    if (s.ok) {
+        s.ok = smoke_saves(&s, &platform);
     }
     if (s.ok) {
         s.ok = smoke_cover(&s, &platform);

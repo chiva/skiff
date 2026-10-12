@@ -70,8 +70,11 @@ int skiff_saves_tree_changed(const skiff_saves_tree_summary *then,
 #define SKIFF_SAVES_BASELINE_VERSION 1
 /* Games the baseline holds: the save folders of a well-filled Memory Stick, with room to spare. */
 #define SKIFF_SAVES_BASELINE_GAMES_MAX 512
-/* An entry is about 280 bytes of JSON at most (no name in it needs escaping), so 512 fit in 160 KB;
- * a larger file is not one Skiff wrote, and is treated as damaged. */
+/* RomM ROMs whose save ID the baseline remembers (installed.json holds at most as many games). */
+#define SKIFF_SAVES_BASELINE_ROMS_MAX 512
+/* An entry is about 280 bytes of JSON at most (no name in it needs escaping), so 512 fit in 160 KB,
+ * and a remembered ROM about 45, 23 KB more; a larger file is not one Skiff wrote, and is treated
+ * as damaged. */
 #define SKIFF_SAVES_BASELINE_BYTES_MAX ((size_t)192 * 1024)
 /* Ids are JSON numbers, which cJSON prints with 15 significant digits. */
 #define SKIFF_SAVES_ID_MAX 999999999999999ULL
@@ -91,9 +94,20 @@ typedef struct skiff_saves_baseline_entry {
     skiff_saves_tree_summary tree;
 } skiff_saves_baseline_entry;
 
+/* A ROM's save ID as RomM gave it, kept so a game Skiff installed is matched to its save folders
+ * without asking RomM for its details at every launch. */
+typedef struct skiff_saves_rom_target {
+    uint64_t rom_id;
+    /* Empty: RomM had no save ID Skiff syncs for the ROM when it was asked. */
+    char save_target[SKIFF_SAVES_TARGET_SIZE];
+} skiff_saves_rom_target;
+
 typedef struct skiff_saves_baseline {
     size_t count;
     skiff_saves_baseline_entry entries[SKIFF_SAVES_BASELINE_GAMES_MAX];
+    /* The ROMs remembered, oldest first. */
+    size_t rom_count;
+    skiff_saves_rom_target roms[SKIFF_SAVES_BASELINE_ROMS_MAX];
     /* SKIFF_OK, or the storage error the last load hit: the baselines on the Memory Stick are then
      * unknown, and skiff_saves_baseline_save() refuses with it rather than replace them. */
     skiff_err load_error;
@@ -152,13 +166,30 @@ skiff_err skiff_saves_baseline_record(skiff_saves_baseline *baseline,
 int skiff_saves_baseline_forget(skiff_saves_baseline *baseline, const char *save_target);
 
 /* Drops every entry: the server changed, or this PSP paired again (perhaps as another RomM user).
- * Without a baseline any difference asks the player. Save afterwards. Does nothing for NULL. */
+ * Without a baseline any difference asks the player. The remembered ROMs stay (they are the
+ * server's, whoever pairs). Save afterwards. Does nothing for NULL. */
 void skiff_saves_baseline_forget_all(skiff_saves_baseline *baseline);
+
+/* rom_id's remembered save ID: NULL when the ROM is not remembered, "" when RomM had none. */
+const char *skiff_saves_baseline_rom_target(const skiff_saves_baseline *baseline, uint64_t rom_id);
+
+/* Remembers rom_id's save ID (save_target, or "" for none), replacing what was remembered for it;
+ * when SKIFF_SAVES_BASELINE_ROMS_MAX ROMs are held, the oldest is forgotten first. *changed (may be
+ * NULL) says whether anything changed. SKIFF_ERR_INVALID_ARG for a NULL argument (but changed), an
+ * id of 0 or over SKIFF_SAVES_ID_MAX, or a save_target that is neither empty nor valid. Save
+ * afterwards. */
+skiff_err skiff_saves_baseline_remember_rom(skiff_saves_baseline *baseline, uint64_t rom_id,
+                                            const char *save_target, int *changed);
+
+/* Forgets every remembered ROM: the server changed, so its ROM ids mean other games. Save
+ * afterwards. Does nothing for NULL. */
+void skiff_saves_baseline_forget_roms(skiff_saves_baseline *baseline);
 
 /*
  * saves.json: {"version":1,"games":[{"save_target":"ULUS10064","rom_id":12,"save_id":34,
  * "server_hash":"<32 hex>","local_hash":"<32 hex>","synced_ms":1790812800123,"files":4,
- * "tree":"<32 hex>"}]} ("files" is -1 for SKIFF_SAVES_TREE_UNKNOWN, with an empty "tree"). Written
+ * "tree":"<32 hex>"}],"roms":[{"rom_id":12,"save_target":"ULUS10064"}]} ("files" is -1 for
+ * SKIFF_SAVES_TREE_UNKNOWN, with an empty "tree"; "roms" may be absent, for none). Written
  * into out, terminated, its length in *length. SKIFF_ERR_BUFFER_TOO_SMALL, SKIFF_ERR_NO_MEMORY,
  * SKIFF_ERR_INVALID_ARG for a NULL argument.
  */
@@ -245,6 +276,8 @@ typedef struct skiff_saves_decision {
  *   no L, and no S or an empty S                  in sync, NO_SAVES
  *   L present, no S                               upload, ONLY_LOCAL
  *   no L, S present, B_l a save                   ask (deleted local), DELETED_LOCAL
+ *   no L, S present, B_l empty, S == B_s          in sync, UNCHANGED (the player left a save
+ *                                                 deleted on this PSP; see below)
  *   no L, S present, otherwise                    download, ONLY_SERVER
  *   S empty, L present                            ask (deleted server), SERVER_EMPTY ...
  *                                                 ... unless S == B_s and L != B_l: upload,
@@ -256,8 +289,10 @@ typedef struct skiff_saves_decision {
  *   L == B_l, S == B_s                            in sync, UNCHANGED
  *
  * so it never downloads over a local change, never uploads over a server change, and never
- * restores an empty unit on its own. SKIFF_ERR_INVALID_ARG for a NULL argument or a hash that is
- * not 32 lowercase hex digits; out is zeroed then.
+ * restores an empty unit on its own. A save deleted on this PSP that the player chose to leave is
+ * recorded as a baseline with B_l the empty hash and B_s the server's: it stays left until the
+ * server's save changes, which is then downloaded (nothing local to lose). SKIFF_ERR_INVALID_ARG
+ * for a NULL argument or a hash that is not 32 lowercase hex digits; out is zeroed then.
  */
 skiff_err skiff_saves_decide(const skiff_saves_sync_input *in, skiff_saves_decision *out);
 

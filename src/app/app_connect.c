@@ -30,6 +30,11 @@ void app_drop_client(skiff_app *app) {
 }
 
 void app_resume_after_connect(skiff_app *app) {
+    if (app->failed_request == REQUEST_SAVES) {
+        app->failed_request = REQUEST_NONE;
+        app_saves_resume(app);
+        return;
+    }
     if (app->failed_request == REQUEST_ROM) {
         app->failed_request = REQUEST_NONE;
         app_set_screen(app, SKIFF_APP_SCREEN_DETAILS);
@@ -379,9 +384,19 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     skiff_config_issue issue;
     memset(&issue, 0, sizeof issue);
     const int had_token = app->settings.token[0] != '\0';
-    skiff_err err = skiff_romm_pairing_config_text(
-        app->config_text, app->config_length, app->settings.device_identifier, result,
-        app->edit_text, sizeof app->edit_text, &length, &issue);
+    /* Perhaps another RomM user: without a baseline, any difference asks the player. Forgotten
+     * before the token is saved, so a restart never meets the old baselines with the new token. */
+    skiff_err err = had_token ? app_saves_forget(app, 0) : SKIFF_OK;
+    if (err != SKIFF_OK) {
+        skiff_romm_pairing_clear(&app->pairing.pairing, result);
+        app->pairing.active = 0;
+        app_show_error(app, err, NULL, MESSAGE_NEW_PAIRING, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
+                       SKIFF_APP_SCREEN_PAIR);
+        return;
+    }
+    err = skiff_romm_pairing_config_text(app->config_text, app->config_length,
+                                         app->settings.device_identifier, result, app->edit_text,
+                                         sizeof app->edit_text, &length, &issue);
     if (err == SKIFF_OK) {
         err = app_config_replace(app, app->edit_text, length);
     }

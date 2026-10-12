@@ -38,7 +38,7 @@ with your PSP model and firmware.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–214)
+## RomM errors (200–217)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -57,6 +57,9 @@ with your PSP model and firmware.
 | 212 | RomM has a newer save | Another device (a second PSP, or PPSSPP through a client such as Argosy) saved this game in RomM after this PSP last synced it, so RomM kept that save rather than replace it with this PSP's. Nothing was overwritten: sync again to compare the two |
 | 213 | The save is too large for RomM | RomM, or a proxy in front of it, refused the upload as too large. RomM accepts saves of up to 512 MB unless `MAX_ASSET_UPLOAD_SIZE_BYTES` sets another limit; a reverse proxy may allow far less (nginx: `client_max_body_size`, 1 MB by default). Raise the proxy's limit for `/api/saves` |
 | 214 | Too many collections, or too large ones | RomM sends every collection you can see (yours and other users' public ones) in one answer, with every game in it, and that answer is too large for the PSP's memory: about 3,300 games with covers across all of them, or more than 128 collections. Browsing and favourites are not affected. Make large collections of your own smaller (or delete those you no longer use), or ask whoever owns a large public one to make it private; then choose **Retry** |
+| 215 | Save sync needs RomM 5.4 or newer | Browsing and downloading work with RomM 5.3, but syncing saves relies on what RomM 5.4 added: a record of what each device synced, and the save ID it reads from each PSP game when it scans. Update RomM to 5.4 or newer, then rescan the PSP platform so RomM reads each game's save ID |
+| 216 | This PSP may not sync saves | The token this PSP holds does not allow save sync: it was paired by an older Skiff, someone unticked the save permissions (assets and devices) on RomM's pairing page, or your RomM user lacks them. In **Settings**, choose **Pair again** and leave save sync ticked; your downloads and installed games stay. If it keeps happening, check that your RomM user's role may read and write assets and devices |
+| 217 | The save from RomM does not match its checksum | The save arrived whole, but its contents are not the ones RomM recorded for it, so Skiff did not restore it: the save on this PSP is untouched. This usually means the save file was changed on the server; sync again. If it keeps happening, upload the save again from the device that made it |
 
 ## Memory Stick errors (300–309)
 

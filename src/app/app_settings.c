@@ -4,7 +4,8 @@
 #include "app_internal.h"
 
 /* The rows of the settings screen, in order. */
-enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_ROWS };
+enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_SAVES, SETTINGS_ROWS };
+_Static_assert(SETTINGS_ROWS == APP_SETTINGS_ROW_COUNT, "the view draws every settings row");
 
 static void open_keyboard(skiff_app *app, skiff_app_screen from) {
     app->keyboard_from = from;
@@ -27,6 +28,13 @@ void app_settings_update(skiff_app *app, unsigned actions) {
     }
     if (skiff_ui_list_apply(&app->settings_list, actions)) {
         app->dirty = 1;
+    }
+    /* Saves opens once Skiff is connected, whatever runs. */
+    if (app->settings_list.selected == SETTINGS_SAVES) {
+        if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->connect == CONNECT_DONE) {
+            app_saves_open(app);
+        }
+        return;
     }
     /* A new server or pairing replaces the browse client: not under a running request. */
     if (!(actions & SKIFF_UI_ACTION_CONFIRM) || app_call_busy(app)) {
@@ -134,7 +142,9 @@ static void apply_server(skiff_app *app, const char *url) {
         app_show_error(app, err, &issue, MESSAGE_BACK, MESSAGE_NONE, SKIFF_TEXT_OK, from);
         return;
     }
-    if (!app_stop_worker(app)) {
+    /* A request still running (a save call writes saves.json) ends first; the player tries again.
+     */
+    if (app_call_busy(app) || !app_stop_worker(app)) {
         app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, app_text(app, SKIFF_TEXT_STOP_FAILED),
                       MESSAGE_BACK, from);
         return;
@@ -142,6 +152,10 @@ static void apply_server(skiff_app *app, const char *url) {
     err = cancel_old_downloads(app);
     if (err == SKIFF_OK) {
         err = forget_installed(app);
+    }
+    /* The old server's baselines and ROM ids say nothing about the new one. */
+    if (err == SKIFF_OK) {
+        err = app_saves_forget(app, 1);
     }
     if (err == SKIFF_OK) {
         err = app_config_replace(app, text, length);

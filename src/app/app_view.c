@@ -220,6 +220,18 @@ static void set_title(skiff_app *app, const char *title) {
     snprintf(app->view.title, sizeof app->view.title, "%s", title);
 }
 
+void app_view_add_hint(skiff_app *app, unsigned action, skiff_text_id label) {
+    add_hint(app, action, label);
+}
+
+void app_view_add_wrapped(skiff_app *app, const char *text, float width) {
+    add_wrapped_within(app, text, width);
+}
+
+void app_view_set_status(skiff_app *app, const char *text) { set_status(app, text); }
+
+void app_view_set_title(skiff_app *app, const char *title) { set_title(app, title); }
+
 static void add_free_space_within(skiff_app *app, float width) {
     if (!app->free_known) {
         return;
@@ -562,9 +574,16 @@ static void details_view(skiff_app *app) {
     } else if (detail[0] != '\0') {
         add_wrapped_within(app, detail, width);
     }
+    char save[SKIFF_TEXT_MAX];
+    if (app_saves_details_line(app, save)) {
+        add_wrapped_within(app, save, width);
+    }
     add_free_space_within(app, width);
     if (refusal == SKIFF_TEXT_COUNT) {
         add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_DOWNLOAD);
+    }
+    if (app_saves_details_offered(app)) {
+        add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_SYNC_SAVE);
     }
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
 }
@@ -703,7 +722,7 @@ static void settings_view(skiff_app *app) {
         add_formatted(app, SKIFF_TEXT_SETTINGS_ROMM, romm, 1);
     }
     add_free_space(app);
-    skiff_ui_list_set_count(&app->settings_list, 2);
+    skiff_ui_list_set_count(&app->settings_list, APP_SETTINGS_ROW_COUNT);
     view->has_list = 1;
     view->list = app->settings_list;
     char text[SKIFF_TEXT_MAX];
@@ -717,7 +736,10 @@ static void settings_view(skiff_app *app) {
     app_fit(app, app_text(app, SKIFF_TEXT_PAIR_AGAIN), SKIFF_APP_LABEL_WIDTH, view->rows[1].label,
             sizeof view->rows[1].label);
     view->rows[1].dim = app->settings.server_url[0] == '\0';
-    view->row_count = 2;
+    app_fit(app, app_text(app, SKIFF_TEXT_TITLE_SAVES), SKIFF_APP_LABEL_WIDTH, view->rows[2].label,
+            sizeof view->rows[2].label);
+    view->rows[2].dim = app->connect != CONNECT_DONE;
+    view->row_count = APP_SETTINGS_ROW_COUNT;
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
 }
@@ -739,6 +761,7 @@ static skiff_text_id action_label(app_message_action action) {
     case MESSAGE_BACK:
     case MESSAGE_RESUME:
     case MESSAGE_NOTICE_SEEN:
+    case MESSAGE_START_CONTINUE:
     case MESSAGE_NONE:
         break;
     }
@@ -811,6 +834,22 @@ void app_view_build(skiff_app *app) {
     case SKIFF_APP_SCREEN_CONFIRM:
         confirm_view(app);
         break;
+    case SKIFF_APP_SCREEN_SAVES:
+        app_saves_view(app);
+        break;
+    case SKIFF_APP_SCREEN_SAVE_BACKUPS:
+        app_saves_backups_view(app);
+        break;
+    case SKIFF_APP_SCREEN_SAVE_CHOICE:
+        app_saves_choice_view(app);
+        break;
+    }
+    /* "Checking saves...", "Syncing ...": in the header while the browsing screens show. */
+    const int browsing =
+        app->screen == SKIFF_APP_SCREEN_LIBRARY || app->screen == SKIFF_APP_SCREEN_DETAILS ||
+        app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS;
+    if (browsing && app->saves->activity[0] != '\0' && app->batch.step == BATCH_NONE) {
+        set_status(app, app->saves->activity);
     }
     if (app->note[0] != '\0') {
         set_status(app, app->note);

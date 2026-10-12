@@ -373,14 +373,16 @@ static cJSON *state_json(const skiff_romm_save_state *state) {
     return item;
 }
 
-/* The negotiate request: device_id, rom_ids (only when the query names ROMs) and saves, and never
- * "emulators" (see skiff/romm_saves.h). NULL when out of memory; free it with cJSON_free(). */
+/* The negotiate request: device_id, rom_ids (only when the query names ROMs), saves and
+ * restore_unlisted when asked, and never "emulators" (see skiff/romm_saves.h). NULL when out of
+ * memory; free it with cJSON_free(). */
 static char *negotiate_body(const skiff_romm_sync_query *query) {
     cJSON *body = cJSON_CreateObject();
     cJSON *saves = cJSON_CreateArray();
     char *printed = NULL;
     int ok = body != NULL && saves != NULL &&
-             cJSON_AddStringToObject(body, FIELD_DEVICE_ID, query->device_id) != NULL;
+             cJSON_AddStringToObject(body, FIELD_DEVICE_ID, query->device_id) != NULL &&
+             (!query->restore_unlisted || cJSON_AddTrueToObject(body, "restore_unlisted") != NULL);
     if (ok && query->rom_count > 0) {
         cJSON *rom_ids = cJSON_AddArrayToObject(body, "rom_ids");
         ok = rom_ids != NULL;
@@ -653,7 +655,8 @@ static skiff_err send_upload(skiff_romm_client *client, const skiff_romm_upload 
     const skiff_romm_body body = {.read = read_upload,
                                   .read_ctx = stream,
                                   .size = (size_t)total,
-                                  .content_type = stream->content_type};
+                                  .content_type = stream->content_type,
+                                  .long_transfer = 1};
     long status = 0;
     cJSON *root = NULL;
     skiff_err err =
@@ -748,6 +751,7 @@ static skiff_err fetch(skiff_romm_client *client, const skiff_romm_download *dow
     request.headers = request.header_count > 0 ? &authorization : NULL;
     request.on_body = write_download;
     request.body_ctx = sink;
+    request.long_transfer = 1;
     const skiff_http_response *response = &sink->response;
     skiff_err err = skiff_transport_perform(client->transport, &request, &sink->response);
     if (err == SKIFF_OK) {
@@ -820,6 +824,34 @@ skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_
     }
     *size = sink.written;
     return SKIFF_OK;
+}
+
+/* ---- One save ---- */
+
+skiff_err skiff_romm_saves_get(skiff_romm_client *client, uint64_t save_id, const char *device_id,
+                               skiff_romm_save *out) {
+    if (out != NULL) {
+        memset(out, 0, sizeof *out);
+    }
+    if (!client_ready(client) || out == NULL || !id_valid(save_id) || !device_id_valid(device_id)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    char path[SKIFF_ROMM_URL_MAX];
+    snprintf(path, sizeof path, PATH_SAVES "/%llu?device_id=", (unsigned long long)save_id);
+    if (skiff_romm_append_encoded(path, sizeof path, device_id) != SKIFF_OK) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    cJSON *root = NULL;
+    int too_large = 0;
+    skiff_err err = skiff_romm_get_json(client, path, &root, &too_large);
+    if (err == SKIFF_OK && (!fill_save(root, out) || out->id != save_id)) {
+        err = SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    cJSON_Delete(root);
+    if (err != SKIFF_OK) {
+        memset(out, 0, sizeof *out);
+    }
+    return err;
 }
 
 /* ---- Recording what was synced ---- */

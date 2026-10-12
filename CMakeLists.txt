@@ -69,6 +69,9 @@ add_library(
   src/app/app_connect.c
   src/app/app_library.c
   src/app/app_queue.c
+  src/app/app_saves.c
+  src/app/app_saves_run.c
+  src/app/app_saves_view.c
   src/app/app_settings.c
   src/app/app_view.c
   src/config/config.c

@@ -715,6 +715,36 @@ static void test_the_total_timeout_ends_a_request_that_keeps_trickling(void) {
     TEST_ASSERT_TRUE(took_ms < TEST_STOP_DEADLINE_MS);
 }
 
+/* Past the total limit, still well under the stall limit. */
+#define TEST_LONG_TRANSFER_STOP_MS 1500L
+
+static void test_a_long_transfer_outlasts_the_total_timeout_until_its_stop_hook(void) {
+    static const local_http_reply REPLIES[] = {{"", 0, LOCAL_HTTP_STALL, 0},
+                                               {"", 0, LOCAL_HTTP_STALL, 0}};
+    serve(REPLIES, 2, "http");
+    skiff_curl_config config = TEST_CONFIG;
+    config.stall_timeout_s = TEST_LONG_STALL_TIMEOUT_S;
+    config.total_timeout_s = TEST_TOTAL_TIMEOUT_S;
+    create(&config);
+    TEST_PRINTF("a save's transfer: no total limit, so only its stop hook ends it");
+    request.long_transfer = 1;
+    use_stop_hook(TEST_LONG_TRANSFER_STOP_MS, SKIFF_ERR_CANCELLED);
+    long started_ms = milliseconds_now();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_CANCELLED, perform());
+    long took_ms = milliseconds_now() - started_ms;
+    TEST_PRINTF("stopped by its hook after %ld ms (total limit %ld s)", took_ms,
+                TEST_TOTAL_TIMEOUT_S);
+    TEST_ASSERT_TRUE(took_ms >= TEST_LONG_TRANSFER_STOP_MS);
+    TEST_PRINTF("the next request on the same handle is held to the limit again");
+    request.long_transfer = 0;
+    request.should_stop = NULL;
+    started_ms = milliseconds_now();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_NET_TIMEOUT, perform());
+    took_ms = milliseconds_now() - started_ms;
+    TEST_PRINTF("timed out after %ld ms", took_ms);
+    TEST_ASSERT_TRUE(took_ms < TEST_STOP_DEADLINE_MS);
+}
+
 static void test_create_validates_its_configuration(void) {
     static const skiff_http_header INJECTED[] = {{"X-Token", "a\r\nX-Evil: 1"}};
     skiff_curl_config config = TEST_CONFIG;
@@ -772,6 +802,7 @@ int main(void) {
     RUN_TEST(test_a_failed_request_looks_the_name_up_again);
     RUN_TEST(test_a_resolve_hook_never_sees_a_malformed_address);
     RUN_TEST(test_the_total_timeout_ends_a_request_that_keeps_trickling);
+    RUN_TEST(test_a_long_transfer_outlasts_the_total_timeout_until_its_stop_hook);
     RUN_TEST(test_create_validates_its_configuration);
     RUN_TEST(test_null_config_uses_the_defaults);
     const int failures = UNITY_END();

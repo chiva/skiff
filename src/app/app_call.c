@@ -75,6 +75,18 @@ static void run(void *arg) {
     case CALL_COLLECTIONS:
         call->err = skiff_romm_list_collections(call->romm, &call->collections);
         break;
+    case CALL_SAVES_CHECK:
+        call->err = app_saves_check_run(call);
+        break;
+    case CALL_SAVES_APPLY:
+        call->err = app_saves_apply_run(call);
+        break;
+    case CALL_SAVES_COMPLETE:
+        call->err = app_saves_complete_run(call);
+        break;
+    case CALL_SAVES_BACKUPS:
+        call->err = app_saves_backups_run(call);
+        break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
         break;
@@ -153,6 +165,18 @@ static void apply(skiff_app *app, app_call_kind kind) {
         break;
     case CALL_COLLECTIONS:
         app_collections_done(app);
+        break;
+    case CALL_SAVES_CHECK:
+        app_saves_checked(app);
+        break;
+    case CALL_SAVES_APPLY:
+        app_saves_applied(app);
+        break;
+    case CALL_SAVES_COMPLETE:
+        app_saves_completed(app);
+        break;
+    case CALL_SAVES_BACKUPS:
+        app_saves_backups_listed(app);
         break;
     case CALL_NONE:
         break;

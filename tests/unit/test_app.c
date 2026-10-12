@@ -832,6 +832,8 @@ static void test_the_first_free_space_count_runs_off_the_screen_while_the_wifi_j
     TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
     TEST_ASSERT_EQUAL_INT(CALL_FREE_SPACE, app->call.kind);
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, storage.free_space_queries, "not on the screen's thread");
+    TEST_ASSERT_NOT_NULL_MESSAGE(app->manifest,
+                                 "started after the files the starting screen reads itself");
     TEST_ASSERT_TRUE(app->free_pending);
     TEST_ASSERT_FALSE(app->free_known);
     TEST_PRINTF("a screen that shows free space meanwhile asks nothing more, and shows none yet");

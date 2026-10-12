@@ -378,7 +378,6 @@ static void start(skiff_app *app) {
                         app->settings.first_unknown.section, app->settings.first_unknown.key);
     }
     register_secrets(app);
-    app_free_space_start(app);
     app->profile = app->settings.network_profile;
     err = start_queue(app);
     if (err == SKIFF_OK) {
@@ -404,6 +403,12 @@ static void start(skiff_app *app) {
 }
 
 void app_start_continue(skiff_app *app) {
+    /* After start()'s own files: while the count holds the Memory Stick, this thread's reads wait
+     * behind it (S1 on 443d32d: the count off the screen's thread, but installed.json's read
+     * after it still held a frame for 3.3 s). */
+    if (!app->free_known && !app->free_pending) {
+        app_free_space_start(app);
+    }
     if (app->settings.server_url[0] == '\0') {
         app_set_screen(app, SKIFF_APP_SCREEN_SERVER);
         return;

@@ -29,7 +29,7 @@ as orders of magnitude.
 | Client certificate type | handshake 0.69 s with ECDSA P-256, 2.07 s with RSA-2048 | the guide recommends ECDSA P-256 ([TLS](#tls)) |
 | curl buffer, socket receive buffer | no effect beyond noise; a 128 KB receive buffer broke the network stack | defaults; never raise `SO_RCVBUF` to 128 KB |
 | How downloads write | while the Memory Stick writes, Wi-Fi data stops arriving; 64 MiB took 221 s with 128 KB writes, 160 s with 1 MiB writes, 211 s with a writer thread | 1 MiB writes on the download's thread, no writer thread ([download speed](#download-speed)) |
-| How save uploads read | S1.6: 8 MB in 68 s (123 KB/s) read 16 KB at a time, against 290 KB/s for a save download in the same session; the 0.1 s pick-up after each Memory Stick pause, 512 times, is about the 50 s lost | 1 MiB reads (`SKIFF_ROMM_UPLOAD_BUFFER_BYTES`); to measure again in S1 |
+| How save uploads read | S1.6: 8 MB in 68 s (123 KB/s) read 16 KB at a time, against 290 KB/s for a save download in the same session; the 0.1 s pick-up after each Memory Stick pause, 512 times, is about the 50 s lost | 1 MiB reads (`SKIFF_ROMM_UPLOAD_BUFFER_BYTES`); not measured again yet |
 | Integrity check | zlib CRC-32 33 MB/s, MD5 11 MB/s, SHA-1 8.2 MB/s | CRC-32 computed inline, against RomM's |
 | Warm-up after joining, WLAN Power Save | Power Save adds 100–200 ms jitter to some requests, no throughput loss | no warm-up; both settings supported |
 | Network picker | a saved profile joins without it in 7.3 s | join the profile; the picker is the fallback ([Wi-Fi](#wi-fi-and-memory)) |
@@ -397,10 +397,23 @@ PSP-1000 with ARK, RomM 5.4.0 on the LAN, the **debug** EBOOT (`scripts/memstick
 | Download, then restore | 8 MB in 29 s, then 39 s to restore: the unit read whole three times (RomM's hash, the restore's check, the extraction), each with CRC-32 and MD5 |
 | First free-space count at launch | 3.0 s, on the screen's thread |
 
-Since: MD5 is unrolled by round (2.4 times faster on the host at `-O2`) and built `-O2` in the debug
-EBOOTs too; hashing for RomM skips the CRC-32 a zip needs; the restore checks RomM's hash on its own
-first read (the unit is read twice, not three times); uploads read 1 MiB at a time; the launch's
-free-space count runs on the browsing thread while the Wi-Fi joins. To measure again in S1.
+Since (#100): MD5 is unrolled by round (2.4 times faster on the host at `-O2`) and built `-O2` in
+the debug EBOOTs too; hashing for RomM skips the CRC-32 a zip needs; the restore checks RomM's hash
+on its own first read (the unit is read twice, not three times); uploads read 1 MiB at a time; the
+launch's free-space count runs on the browsing thread.
+
+Measured again on the same PSP with #100's release EBOOT (443d32d), 2026-10-12, 8 MB save:
+
+| Item | Before | After |
+|---|---|---|
+| Hashing the save's folders | 7.8–8.3 s | 1.6 s |
+| Download (request) | 29 s | 25.4 s |
+| Restore | 39.4 s | 17.8 s: it writes about 16 MB (the stage, then the live copy) at about 1 MB/s |
+| Launch's free-space count | 3.0 s on the screen's thread | 3.1 s on the browsing thread, but the screen's own reads right after (`installed.json`) waited behind it: still a 3.3 s frame. The count now starts after those reads |
+
+The restore's writes are its cost now: writing the stage and then copying it into the live folder
+writes every byte twice. Renaming the staged files into place instead would halve that, but FAT
+renames across folders on the Memory Stick have not been measured or checked for crash safety.
 
 ## Open questions
 

@@ -215,6 +215,12 @@ static skiff_err net_poll(void *ctx, int *joined) {
     if (result == SKIFF_OK) {
         platform->net.joined_suspends = platform->join_suspends;
     }
+    /* A join that spans a suspend may report the address it had before it: not joined, so the
+     * app's retry joins again from scratch (begin_join() drops it first). */
+    if (result == SKIFF_OK && platform->join_suspends != skiff_psp_power_events_now().suspends) {
+        failed_call = "join spanned a suspend";
+        result = SKIFF_ERR_NET_WIFI_JOIN;
+    }
     give_network(platform);
     *joined = result == SKIFF_OK;
     if (result != SKIFF_OK) {

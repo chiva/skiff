@@ -765,7 +765,8 @@ and nothing else changes.
   when both sides hold different saves and both changed or there is no baseline (first sync, Pair
   again, new server), and always a
   question before an empty unit (a save deleted elsewhere) is restored or a save deleted on this
-  PSP comes back. Uploads carry `overwrite=false`, so RomM's 409 (212) stops one over a version
+  PSP comes back (once the player chose to leave it deleted, only a later change in RomM is
+  downloaded). Uploads carry `overwrite=false`, so RomM's 409 (212) stops one over a version
   this PSP has not synced, and the game is compared again; "Keep this PSP's" is the only
   `overwrite=true`. Skiff never deletes a save in RomM. Pairing again forgets the baselines (the
   ROMs' remembered IDs stay); a new server removes `saves.json`.
@@ -775,8 +776,8 @@ and nothing else changes.
   as a unit, a journal is written crash-safely, and only then are the live folders replaced, file
   by file, each synced; a folder the unit lacks is emptied and then removed (PPSSPP's rmdir removes
   a full one). At startup, before anything touches saves, `skiff_saves_recover()` redoes that last
-  step from the stage (308, a notice) or, with the stage gone or damaged, leaves the folders as
-  they are (309; the backup holds the old save). A recovery that fails otherwise blocks save sync
+  step from the stage (308, a notice) or, with a staged file missing or not its journalled size or
+  the journal unreadable, leaves the folders as they are (309; the backup holds the old save). A recovery that fails otherwise blocks save sync
   until a launch finishes it.
 - **Backups**: `app:/saves-backup/<save_target>/<n>.zip`, made by every restore that replaces saves
   (a download, "Remove this PSP's", a backup restored), three per game and 32 MiB in all (the one
@@ -795,8 +796,9 @@ ROMs (RomM answers for every slot of each, and Skiff reads at most 256 operation
 ROMs share takes a round of its own), keeping the
 `autosave` operations. It sets `restore_unlisted`, without which RomM leaves out a save this PSP
 synced and then deleted. A save belongs to the ROM its baseline names, else the only installed ROM
-with that ID, else the only PSP ROM with that ID holding a save in `autosave` (an ISO and a CSO of
-one game have separate saves in RomM); with several, the player syncs it from the game's details.
+with that ID, else the only PSP ROM with that ID RomM holds saves for (any slot), or of several
+such ROMs the only one with a save in `autosave` (an ISO and a CSO of one game have separate saves
+in RomM); otherwise the player syncs it from the game's details.
 
 Uploads and downloads are long transfers (`skiff_http_request.long_transfer`): the 60 s limit on
 the screen's requests does not apply; the connect timeout, the 30 s stall timeout and the stop

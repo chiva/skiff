@@ -116,7 +116,7 @@ RomM (one RomM had already received whole is found the same on both sides at the
 a download changes nothing on the PSP until it has arrived whole and matches RomM's checksum (error
 217 otherwise). A restore cut while it was replacing the game's folders is finished the next time
 Skiff starts, which says "A save restore was cut short; Skiff has now finished it" (308). Only if
-Skiff's copy of the save it was restoring is gone or damaged does it stop with error 309 and leave
+Skiff's copy of the save it was restoring is gone, cut short or unreadable does it stop with error 309 and leave
 the folders as they are; the backup it made first holds the save as it was.
 [Troubleshooting](troubleshooting.md) explains errors 212 to 217 and 306 to 309.
 

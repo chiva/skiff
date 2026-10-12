@@ -44,6 +44,8 @@ downloaded games are kept.
 
 ## Uninstall
 
-Delete the `PSP/GAME/Skiff` folder. Games you downloaded stay in `ISO/` until you delete them.
+Delete the `PSP/GAME/Skiff` folder. Games you downloaded stay in `ISO/` until you delete them, and
+your saves stay in `PSP/SAVEDATA/`; the save backups Skiff kept ([Sync saves](06-sync-saves.md#backups))
+go with the folder.
 
 Next: [Connect to RomM](04-connect-to-romm.md)

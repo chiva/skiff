@@ -5,7 +5,8 @@
 
 ## Prepare the RomM server
 
-- RomM **5.3 or newer** (shown under your profile → About in the RomM web UI).
+- RomM **5.3 or newer** (shown under your profile → About in the RomM web UI). Syncing saves needs
+  5.4 or newer.
 - The PSP must be able to reach the server's address. If RomM is only on your home network, the PSP
   must be on a network that can reach it (see [Wi-Fi](02-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
 - A RomM user that can see your PSP games. A dedicated user that can read the library and keep
@@ -43,8 +44,8 @@ address of RomM's pairing page with this PSP's code in it, for example
    - reading your platforms and ROMs, to browse and download. Skiff cannot work without them
      (error 209). Your favourites need nothing more;
    - reading your collections, for Skiff's **Collections** list (below);
-   - reading and writing your saves, and RomM's record of this PSP, for save sync, which arrives in
-     a later Skiff.
+   - reading and writing your saves, and RomM's record of this PSP, for
+     [save sync](06-sync-saves.md) (Skiff 0.4.0 or newer).
 
    You may untick all but the first: Skiff still browses and downloads, and the features that need
    the others ask you to pair again when you want them.

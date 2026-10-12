@@ -21,7 +21,7 @@
   ├──────────────────────────┬───────────────────────────────────┤
   │ ui/  GU + intraFont      │ installers/  platform plugins     │
   ├──────────────────────────┴───────────────────────────────────┤
-  │ jobs/    download/sync worker thread, job queue, persistence │
+  │ jobs/    download worker thread, job queue, persistence      │
   │ romm/    typed RomM API client      saves/  SAVEDATA archives│
   ├──────────────────────────────────────────────────────────────┤
   │ net/     transport interface, TLS config, entropy source     │
@@ -43,9 +43,8 @@ text), `net/` (transport, TLS entropy source), `romm/` (version check, platforms
 `storage/` (the storage seam, logical roots, free space, safe names), `cover/` (PNG covers decoded
 and scaled down for the screen, see [Covers](#covers)), `install/` (the PSP
 installer and `installed.json`), `jobs/` (resumable downloads, the download queue and its retry
-policy), `saves/` (the `PARAM.SFO` reader and save units: a game's folders collected, written as
-argosy-sigil's PSP unit byte for byte, units read back and checked, RomM's `content_hash` with
-Skiff's own MD5; see [Saves](#saves)), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
+policy), `saves/` (the `PARAM.SFO` reader, save units, RomM's `content_hash` with Skiff's own MD5,
+staged restores, backups and the sync baseline; see [Saves](#saves)), `ui/` (input, list, text fitting and progress models) and `platform/psp/` (lifecycle,
 network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other layers arrive with the
 [roadmap](roadmap.md) phases that need them.
 
@@ -68,7 +67,7 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   for (Back from a game's details, a pairing given up) drops its result and asks its transfer to
   stop. Settings that would replace the client (a new server, pairing again) wait for the call.
   It starts with the first request, at the worker's priority, with a 32 KB stack.
-- **Worker thread**: runs one job at a time (download, save sync) from a persistent queue
+- **Worker thread**: runs one job at a time (a download) from a persistent queue
   (`include/skiff/jobs.h`, `skiff_jobs_run_one()`), and posts progress and results to the UI as
   events: a small ring of state and recovery events, oldest dropped if the UI falls behind, and
   only the latest progress per job (bytes, size, speed). Both threads share the queue through lock
@@ -204,8 +203,8 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   the downloads and replaces the token, restarting the worker with it.
 - **Saves** (`src/app/app_saves*.c`, RomM 5.4 or newer and a token with the save scopes): once
   per connection, after the library's first page, a check on the browsing thread compares each
-  game's saves here and in RomM, then applies every transfer that needs no choice (a backup before
-  every download) while the header says "Checking saves..." and then "Saves: N synced, M need
+  game's saves here and in RomM, then applies every transfer that needs no choice (the saves a
+  download replaces are backed up first) while the header says "Checking saves..." and then "Saves: N synced, M need
   you". Conflicts and saves deleted on one side wait for the player: Settings → Saves lists every
   game with its state (Sync, Sync all, Backups), a game's details show its save and offer Sync
   save, and a choice screen shows both sides. Library pages and "Download all" always go first;
@@ -315,7 +314,7 @@ know and the player's order survive.
 | `[server]` | `url` | Explicit `http://` or `https://`, no blanks (the transport's own rule) |
 | `[server]` | `ca_file` | A file name in the Skiff folder; empty for the bundled Mozilla CAs (`cacert.pem`), which a set one replaces |
 | `[auth]` | `token` | Printable ASCII without blanks |
-| `[auth]` | `device_identifier`, `device_id` | Printable ASCII without blanks; written by pairing (below) |
+| `[auth]` | `device_identifier`, `device_id`, `scopes` | Printable ASCII without blanks; written by pairing (below), `scopes` as what RomM granted, comma-separated |
 | `[mtls]` | `cert_file`, `key_file` | File names in the Skiff folder; one without the other is 401 |
 | `[headers]` | any name | Sent on every request; not `Authorization`, `Host`, `Range` or `If-Range` |
 | `[log]` | `level` | `error`, `warn`, `info` or `debug` for `skiff.log`; `info` when unset |
@@ -728,52 +727,93 @@ is kept, so a retry only renames it once the player moves the other file.
 
 ## Saves
 
-PSP saves are folders under `PSP/SAVEDATA/` named after the game ID (e.g. `ULUS10064DATA00`).
-They are encrypted per game, not per console, so they move between PSPs and PPSSPP. RomM stores
-saves as single files. Skiff:
+PSP saves are folders under `PSP/SAVEDATA/` named after the game ID (`ULUS10064DATA00`,
+`ULUS10064SYSTEM`). They are encrypted per game, not per console. RomM keeps a save as one file
+per ROM and slot. Save sync needs RomM 5.4 (`skiff_romm_server_syncs_saves()`; browsing keeps 5.3)
+and a token with the four save scopes; without them the Saves screen says so (215, or Pair again)
+and nothing else changes.
 
-1. Takes the game ID from RomM: RomM 5.4 reads it from the disc when it scans (`save_target`,
-   layout `folder-prefix`, parsed on every ROM: `skiff_romm_rom_summary.save_target`). A game
-   RomM has no ID for (scanned before 5.4, a `.pbp`) is shown as not syncable, with the reason.
-2. Zips every `SAVEDATA` folder for that ID as argosy-sigil's PSP unit and uploads it to the slot
-   `autosave` as `emulator=psp_console`, the slot every PSP client uses, so a PPSSPP save there
-   (Argosy's, for example) pairs with this PSP's.
-3. Uses `/api/sync/negotiate` and never overwrites silently: when both sides changed, the player
-   chooses.
+- **The game ID comes from RomM.** RomM 5.4 reads each PSP disc's save ID when it scans
+  (`save_target`, layout `folder-prefix`, on every ROM of a list:
+  `skiff_romm_rom_summary.save_target`); Skiff reads no disc itself. Only a `folder-prefix` ID of 4
+  to 16 `[A-Z0-9]` is used (`skiff_saves_target_valid()`). A ROM without one (scanned before 5.4, a
+  `.pbp`, a file RomM cannot read as a disc) cannot sync, and says why. A game's saves are every
+  folder starting with its ID, matched ignoring case (a listing may give 8.3 names in capitals);
+  a folder whose `PARAM.SFO` has neither `SAVEDATA_PARAMS` nor `SAVEDATA_FILE_LIST` holds data a
+  game installed, and is never collected, replaced or removed.
+- **The unit** (`include/skiff/saves.h`): a game's folders travel together as one zip, since
+  `PARAM.SFO` holds hashes of its folder's files and a game's folders refer to each other. Skiff
+  writes argosy-sigil's PSP unit byte for byte (stored, files only, `<FOLDER>/<FILE>` in byte order,
+  dated 1980-01-01, no extra fields) as `<save_target>.zip`, and reads the deflated units with
+  folder entries that Argosy and grout write. It uploads to slot `autosave` as emulator
+  `psp_console`, asking RomM to keep 10 versions of that label. RomM pairs saves by ROM and slot,
+  whatever the emulator, and Skiff never sends negotiate's `emulators` filter, so a PPSSPP save
+  another client put in `autosave` meets this PSP's. A unit from RomM is untrusted: its names,
+  paths, counts (64 folders, 256 files, 64 MiB), methods and sizes are checked whole before
+  anything is extracted (306), and local folders no unit may hold are not synced (307).
+- **Hashes**: RomM's `content_hash`, the MD5 of the `name:md5` lines of a unit's files in name
+  order, which is the same however a zip is compressed or ordered. Skiff computes it with its own
+  RFC 1321 MD5 (`md5.h`), since Mbed TLS's PSA hashes need `psa_crypto_init()`, and so ARK, first.
+  At launch a game whose folder listing (names, sizes, dates) matches its baseline's summary is not
+  hashed again; Sync always hashes.
+- **Skiff keeps its own baseline.** RomM remembers what a device synced only for that one version:
+  once another device uploads, negotiate falls back to timestamps and may advise an upload over a
+  newer save. So `app:/saves.json` (`saves_sync.h`) holds, per game, what both sides held at the
+  last sync (RomM's save id and hash, the local hash, the folders' summary), and
+  `skiff_saves_decide()` picks the transfer from hashes alone, never from clocks or negotiate's
+  `action`: never a download over a local change, never an upload over a server change, a question
+  when both sides hold different saves and both changed or there is no baseline (first sync, Pair
+  again, new server), and always a
+  question before an empty unit (a save deleted elsewhere) is restored or a save deleted on this
+  PSP comes back (once the player chose to leave it deleted, only a later change in RomM is
+  downloaded). Uploads carry `overwrite=false`, so RomM's 409 (212) stops one over a version
+  this PSP has not synced, and the game is compared again; "Keep this PSP's" is the only
+  `overwrite=true`. Skiff never deletes a save in RomM. Pairing again forgets the baselines (the
+  ROMs' remembered IDs stay); a new server removes `saves.json`.
+- **Restores are staged and journalled** (`saves_restore.h`), since FAT cannot replace a folder in
+  one step. After a room check (stage, new folders, backup and journal, in whole clusters, plus the
+  8 MiB margin), the unit is extracted to `app:/saves-work/stage/`, the live folders are backed up
+  as a unit, a journal is written crash-safely, and only then are the live folders replaced, file
+  by file, each synced; a folder the unit lacks is emptied and then removed (PPSSPP's rmdir removes
+  a full one). At startup, before anything touches saves, `skiff_saves_recover()` redoes that last
+  step from the stage (308, a notice) or, with a staged file missing or not its journalled size or
+  the journal unreadable, leaves the folders as they are (309; the backup holds the old save). A
+  recovery that fails otherwise blocks save sync until a launch finishes it.
+- **Backups**: `app:/saves-backup/<save_target>/<n>.zip`, made by every restore that replaces saves
+  (a download, "Remove this PSP's", a backup restored), three per game and 32 MiB in all (the one
+  just made is always kept), numbered across games so the oldest goes first without a clock.
+  Settings → Saves → Backups restores one through the same restore.
 
-A game and Skiff never run at the same time, so a save is never synced while it is being written.
-
-The `saves/` layer (`include/skiff/saves.h`, `param_sfo.h`, `md5.h`) already reads and writes the
-unit a game's saves travel in: every folder of `saves:` starting with RomM's `save_target`, game-data
-installs left out, as a stored zip identical to argosy-sigil's (checked against sigil itself by
-`scripts/dev.sh sigil-check`), and refuses an unsafe or damaged unit whole (306) or a save folder it
-cannot represent (307). It computes RomM's `content_hash` with its own MD5 (RFC 1321), since Mbed
-TLS's PSA hashes need `psa_crypto_init()`, and so ARK, first.
-
-Restores, backups and the sync baseline live there too (`saves_restore.h`, `saves_sync.h`). A
-restore never changes a live folder before a crash-safe journal says how to finish it: the unit is
-checked and extracted to `app:/saves-work/stage/`, the live folders are backed up as a unit
-(`app:/saves-backup/<id>/<n>.zip`, three per game and 32 MiB in all, numbered across games so the
-oldest goes first without a clock), the journal is written, and only then are the live folders
-replaced, file by file, each synced. `skiff_saves_recover()` finishes a restore cut short from its
-stage at launch (notice 308), or leaves the saves alone when the stage is gone (309, the backup
-holds the old save). Installs are never touched, folders match ignoring case, and a folder reaches
-rmdir only once emptied. `app:/saves.json` keeps Skiff's own baseline per game, and
-`skiff_saves_decide()` picks each game's transfer from hashes alone: never a download over a local
-change, never an upload over a server change, and always a question before an empty unit is
-restored.
-
-The app (`src/app/app_saves*.c`, see [The app](#the-app)) runs it on the browsing thread. A check
-lists the PSP ROMs RomM holds saves for (one paged list, never the whole library), learns the IDs of
-games Skiff installed from their details (remembered in `saves.json`, so asked once), lists
-`PSP/SAVEDATA`, hashes each game (at launch only when its folders' summary changed; Sync always
-hashes), and makes one negotiate with `restore_unlisted`, so RomM also reports a save this PSP
+The app (`src/app/app_saves*.c`, see [The app](#the-app)) syncs on the browsing thread, as calls
+rather than jobs: `CALL_SAVES_CHECK`, `CALL_SAVES_APPLY` (one game's transfer), `CALL_SAVES_COMPLETE`
+(closes RomM's sync session with the counts) and `CALL_SAVES_BACKUPS`. Sync needs no persistent
+queue (the next check finds the same work, and the journal covers the one step that must finish),
+and a new job kind would change `queue.json`'s version, which an older build drops whole. A check
+lists the PSP ROMs RomM holds saves for (`has_saves`, paged, at most 128, never the whole library),
+learns the IDs of games Skiff installed from their details (16 a check, remembered in
+`saves.json`), lists `PSP/SAVEDATA`, hashes what changed, and negotiates in rounds of at most 32
+ROMs (RomM answers for every slot of each, and Skiff reads at most 256 operations; a save ID more
+ROMs share takes a round of its own), keeping the
+`autosave` operations. It sets `restore_unlisted`, without which RomM leaves out a save this PSP
 synced and then deleted. A save belongs to the ROM its baseline names, else the only installed ROM
-with that ID, else the only PSP ROM with that ID holding a save in `autosave`; with several, the
-player picks from the game's details. Uploads are long transfers (no 60 s limit, only the stall
-timeout); RomM's 409 means its save moved on, so the game is compared again and asks. A download is
-hash-checked before anything is restored (217), the local saves are hashed again just before (a
-change since the check stops it), and `downloaded` then records it in RomM.
+with that ID, else the only PSP ROM with that ID RomM holds saves for (any slot), or of several
+such ROMs the only one with a save in `autosave` (an ISO and a CSO of one game have separate saves
+in RomM); otherwise the player syncs it from the game's details.
+
+Uploads and downloads are long transfers (`skiff_http_request.long_transfer`): the 60 s limit on
+the screen's requests does not apply; the connect timeout, the 30 s stall timeout and the stop
+hook still do. An upload
+writes the unit to `app:/saves-work/` and streams it, provided it still hashes as the check saw. A
+download goes to `<save_target>.zip.part` there with `optimistic=false` and is checked against
+RomM's hash before anything is restored (217); the local saves are hashed again just before (a
+change since the check stops it), and `downloaded` then records it in RomM. A game and Skiff never
+run at the same time, so a save is never read while a game writes it.
+
+argosy-sigil is not linked: sigil has no PSP-only build (it compiles a second zlib, zstd and lzma
+in), its restore is not atomic, and reading a disc's ID already happens on RomM's server.
+`scripts/dev.sh sigil-check`, a step of CI's host tests job, builds sigil v1.0.0 at a pinned commit
+and checks that both write the same unit and hash from one synthetic Memory Stick and each restores
+the other's ([Testing](testing.md#sigil-cross-check)).
 
 ## Testing seams
 
@@ -941,5 +981,3 @@ the release zip ships all their licences in `third-party-licenses/`, collected b
 - **mbedtls (Apache-2.0)** requires its licence in the distribution.
 - **Mozilla's root certificates (MPL-2.0)** ship as `cacert.pem`, unmodified and so in their source
   form; `scripts/collect-licenses.sh` adds the MPL-2.0 text as `third-party-licenses/cacert/`.
-- **argosy-sigil (MPL-2.0)**, once adopted, requires its source to stay available, which the
-  pinned public submodule does.

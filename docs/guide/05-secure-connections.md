@@ -153,3 +153,5 @@ key_file = psp-fat.key
 If a PSP or its Memory Stick is lost: delete its RomM token, and stop trusting its certificate.
 The simplest way with a small setup is to create a new CA, re-issue certificates for your other
 devices, and replace `skiff-ca.crt` on the proxy.
+
+Next: [Sync saves](06-sync-saves.md)

@@ -140,11 +140,13 @@ All presets build with `-Werror` and a strict warning set (`cmake/SkiffWarnings.
 | Mozilla CA bundle (`cacert.pem`) | `docker/ca-bundle/fetch-ca-bundle.sh` | date + SHA256, manual (above) |
 | QR Code generator (Nayuki, C, MIT) | `docker/qrcodegen/build-qrcodegen.sh`, built into the toolchain and host images | version + SHA256, Renovate + manual verification |
 | Unity (C test framework) | `tests/CMakeLists.txt` FetchContent | commit, Renovate |
+| argosy-sigil and its two submodules (save unit cross-check, test only) | `tests/sigil/fetch-sigil.sh` | commit + SHA256, manual |
 | PPSSPP (emulator tests) | `docker/ppsspp.Dockerfile` | commit, Renovate; Debian base by digest and packages from a dated snapshot.debian.org archive (bump `SNAPSHOT` with the commit); one-line patch for `flash0:` reads, checked at build time |
 | GitHub Actions | workflows | commit SHA, Renovate |
 | pre-commit hooks | `.pre-commit-config.yaml` | commit SHA, Renovate |
 
-cJSON and intraFont come from pspdev's packages; argosy-sigil will be a pinned submodule.
+cJSON and intraFont come from pspdev's packages. argosy-sigil is never linked into an EBOOT: the
+sigil cross-check fetches it ([Testing](testing.md#sigil-cross-check)).
 
 ## Licences
 

@@ -89,8 +89,15 @@ on their own thread since (#67).
 
 ## Phase 4: Save sync
 
-PSP saves to and from RomM via argosy-sigil and `/api/sync/negotiate`, compatible with RomM's web
-player and PPSSPP. No silent overwrites.
+Built; waiting for hardware run S1 ([Testing](testing.md#the-app-on-a-psp)). PSP saves to and from
+RomM 5.4 through `/api/sync/negotiate`: each game's save folders travel as one unit, byte for byte
+argosy-sigil's (checked against sigil in CI, not linked), in the `autosave` slot where RomM clients
+such as Argosy keep PPSSPP's saves. Skiff keeps its own record of each sync and never overwrites
+silently: a save changed on both sides waits for the player, as does one deleted on this PSP or
+emptied in RomM, and every restore is staged, journalled and backs up the saves it replaces. The
+launch check applies the rest by itself. S1 also settles whether a real PSP and PPSSPP load each
+other's saves. RomM's in-browser player uploads no PSP saves (a game's own save data), so it takes
+no part. See [Architecture](architecture.md#saves) and the [guide](../guide/06-sync-saves.md).
 
 ## Phase 5: PS1
 

@@ -13,9 +13,10 @@
 </p>
 
 > [!WARNING]
-> **Early development.** The current build is a scaffold: it installs and starts on a PSP, but it
-> cannot talk to RomM yet. Follow the [roadmap](docs/development/roadmap.md) or watch releases to
-> know when the first usable version ships.
+> **Early development.** Skiff browses and downloads your RomM library on a real PSP, but expect
+> rough edges, and copy `PSP/SAVEDATA/` to your computer before you try save sync, which has not
+> been tested on a real PSP yet. Follow the [roadmap](docs/development/roadmap.md) or watch
+> releases.
 
 Today, getting a game onto a PSP means downloading it on a computer, plugging in a USB cable,
 copying the file to the right folder and unplugging again. Skiff does it from the PSP itself:
@@ -32,10 +33,15 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | Pair with RomM by approving a code in the web UI (no typing tokens) | ✅ | |
 | HTTPS, your own certificate authority, and client certificates (mTLS) | ✅ | |
 | Cover art beside each game's details, kept on the Memory Stick (0.3.0) | ✅ | |
-| Favourites, collections, "download all my favourites" | | ✅ |
-| Sync PSP saves with RomM (works with RomM's web player and PPSSPP) | | ✅ |
+| Favourites and collections from RomM, and "download all" for either (0.4.0) | ✅ | |
+| Sync PSP saves with RomM: one-sided changes sync on their own, and Skiff asks only when it cannot safely choose (0.4.0) | ✅ | |
 | PS1 games | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |
+
+Saves go to the same RomM slot where RomM clients such as Argosy keep PPSSPP's saves; whether a real
+PSP and PPSSPP load each other's saves is still to be checked on hardware. RomM's in-browser player
+uploads no PSP saves (a game's own save data) to RomM.
+See [Sync saves](docs/guide/06-sync-saves.md).
 
 ## What you need
 
@@ -43,7 +49,8 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
   6.61; installing custom firmware is up to you and not covered here.
 - A Wi-Fi network the PSP can join. The PSP is old: it needs 2.4 GHz, 802.11b and WPA (not
   WPA2-only or WPA3). The [Wi-Fi guide](docs/guide/02-wifi.md) shows how to set up a safe one.
-- A [RomM](https://github.com/rommapp/romm) server, version 5.3 or newer.
+- A [RomM](https://github.com/rommapp/romm) server, version 5.3 or newer (5.4 or newer to sync
+  saves).
 - Games you own. Skiff does not provide games.
 
 New to all this? Start with the **[step-by-step guide](docs/guide/README.md)**. It assumes no
@@ -58,7 +65,7 @@ technical background.
 ## Documentation
 
 - [User guide](docs/guide/README.md): firmware, Wi-Fi, installing, connecting to RomM, secure
-  connections, troubleshooting, FAQ.
+  connections, syncing saves, troubleshooting, FAQ.
 - [Developer docs](docs/development/README.md): architecture, toolchain, debugging over USB,
   testing, adding a platform, roadmap.
 

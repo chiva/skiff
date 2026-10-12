@@ -145,8 +145,51 @@ static void test_heartbeat_reads_the_recorded_version_without_the_token(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_heartbeat(&client, &server));
     TEST_ASSERT_EQUAL_STRING("5.4.0", server.version);
     TEST_ASSERT_EQUAL_INT(0, server.newer_than_tested);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, server.installs_enabled, "DEVICE_INSTALL.ENABLED is true");
     TEST_PRINTF("request headers: '%s'", fake.log[0].headers);
     TEST_ASSERT_NULL(strstr(fake.log[0].headers, TOKEN));
+}
+
+/* RomM 5.3 has no DEVICE_INSTALL; 5.4 can turn it off. Only a true turns sends on, and nothing
+ * there ever refuses the heartbeat. */
+static void test_a_heartbeat_says_whether_romm_takes_sends(void) {
+    static const struct {
+        const char *extra;
+        int enabled;
+    } CASES[] = {
+        {"", 0},
+        {",\"DEVICE_INSTALL\":{\"ENABLED\":true,\"EXCLUDED_PLATFORM_SLUGS\":[\"win\"]}", 1},
+        {",\"DEVICE_INSTALL\":{\"ENABLED\":false}", 0},
+        {",\"DEVICE_INSTALL\":{\"ENABLED\":\"true\"}", 0},
+        {",\"DEVICE_INSTALL\":{\"ENABLED\":1}", 0},
+        {",\"DEVICE_INSTALL\":{}", 0},
+        {",\"DEVICE_INSTALL\":null", 0},
+        {",\"DEVICE_INSTALL\":[true]", 0},
+        {",\"DEVICE_INSTALL\":true", 0},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char raw[RAW_MAX];
+        snprintf(raw, sizeof raw, JSON_OK "{\"SYSTEM\":{\"VERSION\":\"5.4.0\"}%s}", CASES[i].extra);
+        skiff_transport_destroy(&fake.base);
+        fake_transport_init(&fake);
+        serve_raw("/api/heartbeat", raw);
+        skiff_romm_server server;
+        const skiff_err err = skiff_romm_heartbeat(&client, &server);
+        TEST_PRINTF("heartbeat '%s' -> %s, installs enabled %d", CASES[i].extra,
+                    skiff_err_name(err), server.installs_enabled);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+        TEST_ASSERT_EQUAL_STRING("5.4.0", server.version);
+        TEST_ASSERT_EQUAL_INT(CASES[i].enabled, server.installs_enabled);
+    }
+    TEST_PRINTF("a version Skiff refuses says nothing about sends");
+    skiff_transport_destroy(&fake.base);
+    fake_transport_init(&fake);
+    serve_raw("/api/heartbeat", JSON_OK "{\"SYSTEM\":{\"VERSION\":\"5.0.2\"},\"DEVICE_INSTALL\":"
+                                        "{\"ENABLED\":true}}");
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_UNSUPPORTED_VERSION,
+                          skiff_romm_heartbeat(&client, &server));
+    TEST_ASSERT_EQUAL_INT(0, server.installs_enabled);
 }
 
 static void test_an_old_server_is_refused_and_still_named(void) {
@@ -1812,6 +1855,7 @@ int main(void) {
     RUN_TEST(test_the_version_policy);
     RUN_TEST(test_save_sync_needs_romm_5_4);
     RUN_TEST(test_heartbeat_reads_the_recorded_version_without_the_token);
+    RUN_TEST(test_a_heartbeat_says_whether_romm_takes_sends);
     RUN_TEST(test_an_old_server_is_refused_and_still_named);
     RUN_TEST(test_a_heartbeat_with_an_escaped_control_is_a_bad_response);
     RUN_TEST(test_a_heartbeat_without_a_version_is_a_bad_response);

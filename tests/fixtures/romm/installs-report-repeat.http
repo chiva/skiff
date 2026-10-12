@@ -1,0 +1,8 @@
+HTTP/1.1 404 Not Found
+Content-Length: 75
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"detail":"Install request fbff8d79-b3df-4492-a9a2-fe8d935b6513 not found"}

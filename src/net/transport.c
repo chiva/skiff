@@ -54,7 +54,7 @@ static int body_is_valid(const skiff_http_request *request) {
     return request->body != NULL || request->body_size == 0;
 }
 
-/* A body belongs to a POST and a range to a GET; a content type is one header line. */
+/* A body belongs to a POST or a PUT and a range to a GET; a content type is one header line. */
 static int method_is_valid(const skiff_http_request *request) {
     if (!body_is_valid(request)) {
         return 0;
@@ -67,6 +67,7 @@ static int method_is_valid(const skiff_http_request *request) {
     case SKIFF_HTTP_GET:
         return request->body == NULL && request->read_body == NULL && request->content_type == NULL;
     case SKIFF_HTTP_POST:
+    case SKIFF_HTTP_PUT:
         return !request->has_range && request->if_range == NULL;
     }
     return 0;

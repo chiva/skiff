@@ -4,7 +4,8 @@
 /*
  * What src/romm/ files share beyond skiff/romm.h: requests whose JSON body is read whatever the
  * status, for the pairing calls (src/romm/pairing.c), whose answers come as 400s with a JSON
- * "detail"; requests with the token and any body, for the save sync calls (src/romm/saves.c);
+ * "detail"; requests with the token and any body, for the save sync calls (src/romm/saves.c) and
+ * the install calls (src/romm/installs.c);
  * reads that tell a body too large for the caps from a broken one (src/romm/collections.c); and the
  * checks every response and field gets.
  */
@@ -78,6 +79,11 @@ int skiff_romm_read_display_name(const cJSON *object, const char *name, char *ou
 
 /* 1 if text holds no control character (C0, DEL or C1). */
 int skiff_romm_is_printable_text(const char *text);
+
+/* 1 if device_id can be RomM's id for this PSP as config.ini keeps it ([auth] device_id):
+ * non-empty printable ASCII without blanks, shorter than SKIFF_CONFIG_DEVICE_ID_MAX. A request
+ * sends it percent-encoded, in a query (save sync) or a path (installs). */
+int skiff_romm_device_id_valid(const char *device_id);
 
 /* Appends text to the string in out with every byte but letters, digits and "-._~"
  * percent-encoded. SKIFF_ERR_BUFFER_TOO_SMALL (out emptied) when it does not fit. */

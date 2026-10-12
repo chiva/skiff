@@ -29,6 +29,11 @@ UMD_DATA.BIN with the made-up game ID SKIF-00002 (no game, no EBOOT): RomM 5.4 r
 it (save_target SKIF00002, layout folder-prefix), which the app's save sync and the integration tests
 use.
 
+A game of another platform: unless SKIFF_FOREIGN_ROM is 0, a last scan adds one small synthetic
+file to a second platform (gba). RomM lets a player send any platform's game to the PSP ("Install on
+device"), so the install tests send it and Skiff refuses it. Scanned last, so the PSP's ROMs keep
+their ids.
+
 Collections, for the Collections screen: the admin keeps a regular collection holding both seeded
 ROMs (with SKIFF_LIBRARY_ROMS also the first LIBRARY_SHELF numbered ROMs and the three special
 files, two pages), an empty one, and a smart one RomM fills from a saved search (the extra ROM). A
@@ -37,7 +42,8 @@ admin too, and a private one, which it lists to nobody else. A second client tok
 collections; the first cannot (RomM answers it 403).
 
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
-SKIFF_LIBRARY_ROMS (optional), SKIFF_SAVE_DISC (optional, 1 by default).
+SKIFF_LIBRARY_ROMS (optional), SKIFF_SAVE_DISC (optional, 1 by default), SKIFF_FOREIGN_ROM
+(optional, 1 by default).
 """
 
 import asyncio
@@ -59,7 +65,8 @@ from PIL import Image, ImageDraw
 
 API = "http://localhost:8080"
 PLATFORM_SLUG = "psp"
-LIBRARY_DIR = Path("/romm/library/roms") / PLATFORM_SLUG
+ROMS_DIR = Path("/romm/library/roms")
+LIBRARY_DIR = ROMS_DIR / PLATFORM_SLUG
 PAYLOAD_NAME = "Skiff Test Payload.iso"
 DEFAULT_PAYLOAD_BYTES = 1024 * 1024
 # A second, small file: a second ROM for pagination, and a name that only downloads when every
@@ -98,6 +105,11 @@ ISO_ROOT_SECTOR = 20
 ISO_FILE_SECTOR = 21
 ISO_ROOT_RECORD_AT = 156
 ISO_DIRECTORY_FLAG = 2
+# The game of another platform (SKIFF_FOREIGN_ROM): synthetic bytes under a name of that platform.
+FOREIGN_SLUG = "gba"
+FOREIGN_NAME = "Skiff Foreign Game.gba"
+FOREIGN_BYTES = 2048
+FOREIGN_SEED = b"skiff-integration-foreign"
 # ROMs per listing page when the seed looks them up after the scan.
 LIST_LIMIT = 500
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
@@ -160,10 +172,10 @@ def log(message):
     print(f"seed: {message}", file=sys.stderr, flush=True)
 
 
-def write_payload(size, name=PAYLOAD_NAME, seed=PAYLOAD_SEED):
+def write_payload(size, name=PAYLOAD_NAME, seed=PAYLOAD_SEED, folder=LIBRARY_DIR):
     """Create a payload once and return its size and hashes (the ones RomM records)."""
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    path = LIBRARY_DIR / name
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
     sha1, md5, crc = hashlib.sha1(), hashlib.md5(), 0
     with path.open("wb") as out:
         written, counter = 0, 0
@@ -465,7 +477,7 @@ def session_cookie(auth):
     return "; ".join(cookie.split(";", 1)[0] for cookie in cookies)
 
 
-async def scan(cookie):
+async def scan(cookie, slug=PLATFORM_SLUG):
     client = socketio.AsyncClient()
     outcome = asyncio.get_running_loop().create_future()
 
@@ -484,7 +496,7 @@ async def scan(cookie):
         wait_timeout=REQUEST_TIMEOUT_SECONDS,
     )
     try:
-        await client.emit("scan", {"platform_fs_slugs": [PLATFORM_SLUG], "type": "quick", "apis": []})
+        await client.emit("scan", {"platform_fs_slugs": [slug], "type": "quick", "apis": []})
         stats = await asyncio.wait_for(outcome, SCAN_TIMEOUT_SECONDS)
         log(f"scan done: {stats}")
     finally:
@@ -505,13 +517,13 @@ def write_library(count):
     return names
 
 
-def find_roms(auth, names):
+def find_roms(auth, names, slug=PLATFORM_SLUG):
     """The platform's id and the ROM id of each file name, in order; every file in the platform's
     folder must have been scanned."""
     status, platforms = request("GET", "/api/platforms", auth)
-    platform = next((p for p in platforms or [] if p["fs_slug"] == PLATFORM_SLUG), None)
+    platform = next((p for p in platforms or [] if p["fs_slug"] == slug), None)
     if status != HTTP_OK or platform is None:
-        raise SystemExit(f"seed: platform {PLATFORM_SLUG} missing after the scan (HTTP {status})")
+        raise SystemExit(f"seed: platform {slug} missing after the scan (HTTP {status})")
     items = []
     while True:
         status, page = request(
@@ -524,7 +536,7 @@ def find_roms(auth, names):
         items += batch
         if status != HTTP_OK or not batch or len(items) >= (page or {}).get("total", 0):
             break
-    on_disk = sorted(path.name for path in LIBRARY_DIR.iterdir() if path.is_file())
+    on_disk = sorted(path.name for path in (ROMS_DIR / slug).iterdir() if path.is_file())
     scanned = sorted(rom["fs_name"] for rom in items)
     if status != HTTP_OK or scanned != on_disk:
         missing = sorted(set(on_disk) - set(scanned))
@@ -582,6 +594,12 @@ def main():
     if with_save_disc:
         write_save_disc()
         asyncio.run(scan(session_cookie(auth)))
+    foreign = None
+    if os.environ.get("SKIFF_FOREIGN_ROM", "1") != "0":
+        foreign = write_payload(FOREIGN_BYTES, FOREIGN_NAME, FOREIGN_SEED, ROMS_DIR / FOREIGN_SLUG)
+        asyncio.run(scan(session_cookie(auth), FOREIGN_SLUG))
+        foreign["platform_id"], (foreign["rom_id"],) = find_roms(auth, [FOREIGN_NAME], FOREIGN_SLUG)
+        log(f"foreign ROM {foreign['rom_id']} on platform {foreign['platform_id']} ({FOREIGN_SLUG})")
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
     if with_save_disc:
         save_disc = save_disc_rom(auth, platform_id)
@@ -607,6 +625,7 @@ def main():
                 "collections_token": create_token(auth, COLLECTIONS_TOKEN_NAME, COLLECTIONS_TOKEN_SCOPES),
                 "collections": collections,
                 "save_disc": save_disc,
+                "foreign": foreign,
             }
         )
     )

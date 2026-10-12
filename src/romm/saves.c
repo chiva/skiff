@@ -79,8 +79,7 @@ static int text_fits(const char *text, size_t max) {
     return text != NULL && text[0] != '\0' && strlen(text) < max;
 }
 
-/* RomM's id for this PSP, as config.ini keeps it. */
-static int device_id_valid(const char *device_id) {
+int skiff_romm_device_id_valid(const char *device_id) {
     return text_fits(device_id, SKIFF_CONFIG_DEVICE_ID_MAX) && is_printable_ascii(device_id) &&
            strchr(device_id, ' ') == NULL;
 }
@@ -335,7 +334,8 @@ static int state_valid(const skiff_romm_save_state *state) {
 }
 
 static int query_valid(const skiff_romm_sync_query *query) {
-    if (!device_id_valid(query->device_id) || query->rom_count > SKIFF_ROMM_SYNC_ROMS_MAX ||
+    if (!skiff_romm_device_id_valid(query->device_id) ||
+        query->rom_count > SKIFF_ROMM_SYNC_ROMS_MAX ||
         query->save_count > SKIFF_ROMM_SYNC_SAVES_MAX ||
         (query->rom_count > 0 && query->rom_ids == NULL) ||
         (query->save_count > 0 && query->saves == NULL)) {
@@ -477,7 +477,7 @@ typedef struct upload_stream {
 } upload_stream;
 
 static int upload_valid(const skiff_romm_upload *upload) {
-    return id_valid(upload->rom_id) && device_id_valid(upload->device_id) &&
+    return id_valid(upload->rom_id) && skiff_romm_device_id_valid(upload->device_id) &&
            emulator_valid(upload->emulator) && slot_valid(upload->slot) &&
            content_hash_valid(upload->content_hash) && upload->keep_versions >= 1 &&
            upload->keep_versions <= SKIFF_ROMM_SAVE_VERSIONS_MAX && upload->storage != NULL &&
@@ -802,7 +802,7 @@ skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_
         *size = 0;
     }
     if (!client_ready(client) || download == NULL || size == NULL || !id_valid(download->save_id) ||
-        !device_id_valid(download->device_id) || download->storage == NULL ||
+        !skiff_romm_device_id_valid(download->device_id) || download->storage == NULL ||
         download->path == NULL || download->path[0] == '\0') {
         return SKIFF_ERR_INVALID_ARG;
     }
@@ -844,7 +844,8 @@ skiff_err skiff_romm_saves_get(skiff_romm_client *client, uint64_t save_id, cons
     if (out != NULL) {
         memset(out, 0, sizeof *out);
     }
-    if (!client_ready(client) || out == NULL || !id_valid(save_id) || !device_id_valid(device_id)) {
+    if (!client_ready(client) || out == NULL || !id_valid(save_id) ||
+        !skiff_romm_device_id_valid(device_id)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     char path[SKIFF_ROMM_URL_MAX];
@@ -869,7 +870,7 @@ skiff_err skiff_romm_saves_get(skiff_romm_client *client, uint64_t save_id, cons
 
 skiff_err skiff_romm_saves_downloaded(skiff_romm_client *client, uint64_t save_id,
                                       const char *device_id, const char *content_hash) {
-    if (!client_ready(client) || !id_valid(save_id) || !device_id_valid(device_id) ||
+    if (!client_ready(client) || !id_valid(save_id) || !skiff_romm_device_id_valid(device_id) ||
         !content_hash_valid(content_hash)) {
         return SKIFF_ERR_INVALID_ARG;
     }

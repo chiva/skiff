@@ -14,8 +14,9 @@
 /* "Range: bytes=" plus a 64-bit offset, "-" and the terminator. */
 #define RANGE_HEADER_MAX 48
 #define HEADER_SEPARATOR ": "
-/* An empty header removes curl's own: no "Expect: 100-continue" before a POST body. */
+/* An empty header removes curl's own: no "Expect: 100-continue" before a POST or PUT body. */
 #define NO_EXPECT_HEADER "Expect:"
+#define HTTP_VERB_PUT "PUT"
 /* What a CURLOPT_RESOLVE entry adds to a host name: '-' or the ':' before the port, the port, and
  * the ':' before the address. */
 #define RESOLVE_PORT_MAX 16
@@ -183,7 +184,7 @@ static skiff_err build_headers(const curl_transport *transport, const skiff_http
     if (ok && request->content_type != NULL) {
         ok = append_header(&list, "Content-Type", request->content_type);
     }
-    if (ok && request->method == SKIFF_HTTP_POST) {
+    if (ok && request->method != SKIFF_HTTP_GET) {
         ok = append_line(&list, NO_EXPECT_HEADER);
     }
     if (!ok) {
@@ -214,8 +215,14 @@ static skiff_err describe_failure(curl_transport *transport, const skiff_http_re
 /* The handle is reused, so every request sets its method: a GET after a POST must not resend the
  * body. curl reads a body sent whole from request->body during the transfer and copies nothing;
  * with no CURLOPT_POSTFIELDS it asks on_read() for a streamed one instead. Either way the size is
- * set, so curl sends Content-Length and never chunks. */
+ * set, so curl sends Content-Length and never chunks. A PUT is sent as a POST under the other verb,
+ * so its body goes out the same way; the verb is set or cleared on every request, so a POST after a
+ * PUT is a POST again. */
 static int set_method(CURL *curl, const skiff_http_request *request) {
+    if (curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST,
+                         request->method == SKIFF_HTTP_PUT ? HTTP_VERB_PUT : NULL) != CURLE_OK) {
+        return 0;
+    }
     if (request->method == SKIFF_HTTP_GET) {
         return curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) == CURLE_OK;
     }

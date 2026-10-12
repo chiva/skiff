@@ -95,6 +95,10 @@ typedef struct skiff_romm_server {
     int patch;
     /* Newer release line than SKIFF_ROMM_TESTED_*: show the one-time notice. */
     int newer_than_tested;
+    /* The heartbeat's DEVICE_INSTALL.ENABLED is true: RomM takes games sent to devices
+     * (skiff/romm_installs.h). 0 for anything else, a RomM 5.3 without the key included, which
+     * never fails the heartbeat. */
+    int installs_enabled;
 } skiff_romm_server;
 
 typedef struct skiff_romm_platform {
@@ -285,7 +289,9 @@ skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out);
  * read). 0 for NULL. */
 int skiff_romm_server_syncs_saves(const skiff_romm_server *server);
 
-/* GET /api/heartbeat (no token sent): the server's version, through skiff_romm_check_version(). */
+/* GET /api/heartbeat (no token sent): the server's version, through skiff_romm_check_version(),
+ * and whether it takes games sent to devices (installs_enabled, read only for a version Skiff
+ * supports). */
 skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out);
 
 /* GET /api/platforms: the platform whose slug is slug (e.g. "psp"). SKIFF_ERR_ROMM_NOT_FOUND (202)

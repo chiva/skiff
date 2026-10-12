@@ -6,16 +6,27 @@
  * that brings back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched
  * without the token from the URL its ROM's details give.
  *
+ * Then games sent from RomM's web UI (skiff/romm_installs.h): a PSP paired with every scope Skiff
+ * asks for registers remote_install, the admin sends it the payload and the seed's game of another
+ * platform as the web UI does, and the PSP claims both (oldest first), finds the second is not on
+ * the PSP platform and reports it failed with its Spanish reason, reports the first done (a second
+ * report is SKIFF_ERR_ROMM_NOT_FOUND), finds nothing left to claim, and turns remote_install off,
+ * after which RomM refuses to send it anything.
+ *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh), with the server's
  * details in SKIFF_IT_* environment variables. Not a ctest test: it needs the server.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <zlib.h>
 
 #include "skiff/curl_transport.h"
+#include "skiff/i18n.h"
 #include "skiff/romm.h"
+#include "skiff/romm_installs.h"
+#include "skiff/romm_pairing.h"
 
 #include "unity.h"
 
@@ -28,7 +39,11 @@ enum {
     /* The payload (tests/integration/seed.py). */
     SEEDED_FAVOURITES = 1,
     HTTP_OK = 200,
+    HTTP_CREATED = 201,
+    HTTP_BAD_REQUEST = 400,
     HTTP_NOT_FOUND = 404,
+    BODY_MAX = 512,
+    POLLS_MAX = 6,
     /* The first bytes of a cover, enough to tell its format. */
     MAGIC_BYTES = 8,
 };
@@ -41,6 +56,11 @@ static const unsigned char PNG_MAGIC[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A,
 #define PLATFORM_SLUG "psp"
 #define TEST_CONNECT_TIMEOUT_S 5L
 #define TEST_STALL_TIMEOUT_S 10L
+/* Fixed, so every run pairs the same device: RomM keeps one record per identifier. */
+#define SENDS_IDENTIFIER "0000000000000000000000005e7d000d"
+#define ALL_SCOPES                                                                                 \
+    "[\"platforms.read\",\"roms.read\",\"assets.read\",\"assets.write\",\"devices.read\","         \
+    "\"devices.write\",\"collections.read\"]"
 
 typedef struct seeded_file {
     uint64_t rom_id;
@@ -71,6 +91,9 @@ static seeded_file extra;
 /* The synthetic PSP disc RomM reads a save ID from. */
 static uint64_t save_disc_rom_id;
 static const char *save_disc_target;
+/* The seed's game of another platform, which RomM lets a player send to the PSP. */
+static uint64_t foreign_rom_id;
+static const char *admin_authorization;
 static char ca_file[PATH_MAX_LENGTH];
 static skiff_transport *transport;
 static skiff_romm_client client;
@@ -363,6 +386,139 @@ static void test_a_cover_comes_without_the_token_from_its_rom_details(void) {
     TEST_ASSERT_EQUAL_INT(HTTP_NOT_FOUND, get_without_token(url, &got));
 }
 
+/* Sends a request as the admin, as RomM's web UI does; returns the HTTP status. */
+static long admin_request(skiff_http_method method, const char *path, const char *body) {
+    char url[PATH_MAX_LENGTH];
+    snprintf(url, sizeof url, TLS_SITE "%s", path);
+    const skiff_http_header authorization = {"Authorization", admin_authorization};
+    skiff_http_request request;
+    memset(&request, 0, sizeof request);
+    request.method = method;
+    request.url = url;
+    request.headers = &authorization;
+    request.header_count = 1;
+    if (body != NULL) {
+        request.body = body;
+        request.body_size = strlen(body);
+        request.content_type = "application/json";
+    }
+    skiff_http_response response;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_transport_perform(transport, &request, &response));
+    TEST_PRINTF("admin %s -> HTTP %ld", path, response.status);
+    return response.status;
+}
+
+/* Pairs a PSP as the app does, the admin approving every scope; its token goes to *out. */
+static void pair_psp(char *device_id, size_t device_id_size, skiff_romm_client *out) {
+    skiff_romm_client open_client;
+    skiff_romm_pairing pairing;
+    skiff_romm_pairing_result result;
+    char body[BODY_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_client_init(&open_client, transport, TLS_SITE, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_pairing_start(&open_client, SENDS_IDENTIFIER, &pairing));
+    snprintf(body, sizeof body, "{\"user_code\":\"%s\",\"approved_scopes\":%s}", pairing.user_code,
+             ALL_SCOPES);
+    TEST_ASSERT_EQUAL_INT64(HTTP_OK,
+                            admin_request(SKIFF_HTTP_POST, "/api/auth/device/approve", body));
+    for (int i = 0; i < POLLS_MAX; i++) {
+        const struct timespec wait = {.tv_sec = (time_t)pairing.interval_s, .tv_nsec = 0};
+        nanosleep(&wait, NULL);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_pairing_poll(&open_client, &pairing, &result));
+        if (result.state == SKIFF_ROMM_PAIRING_APPROVED) {
+            break;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_PAIRING_APPROVED, result.state);
+    TEST_PRINTF("paired as device %s with %s", result.device_id, result.scopes);
+    snprintf(device_id, device_id_size, "%s", result.device_id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_client_init(out, transport, TLS_SITE, result.token));
+    skiff_romm_pairing_clear(&pairing, &result);
+}
+
+/* What RomM's web UI sends when the player ticks the PSP in Install on device. */
+static long admin_send_game(const char *device_id, uint64_t rom_id) {
+    char path[PATH_MAX_LENGTH];
+    char body[BODY_MAX];
+    snprintf(path, sizeof path, "/api/devices/%s/installs", device_id);
+    snprintf(body, sizeof body, "{\"rom_id\":%llu}", (unsigned long long)rom_id);
+    return admin_request(SKIFF_HTTP_POST, path, body);
+}
+
+static skiff_romm_install_claim claim;
+
+static void claim_sends(skiff_romm_client *psp, const char *device_id) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_installs_claim(psp, device_id, &claim));
+    TEST_PRINTF("claim: %zu of %zu kept, %zu dropped", claim.count, claim.total, claim.dropped);
+    for (size_t i = 0; i < claim.count; i++) {
+        TEST_PRINTF("  %s: ROM %llu, %zu file(s)", claim.requests[i].id,
+                    (unsigned long long)claim.requests[i].rom_id, claim.requests[i].file_count);
+    }
+}
+
+static void test_a_psp_receives_the_games_the_web_ui_sends(void) {
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_heartbeat(&client, &server));
+    TEST_ASSERT_TRUE_MESSAGE(server.installs_enabled, "RomM 5.4 takes sends by default");
+    char device_id[SKIFF_CONFIG_DEVICE_ID_MAX];
+    skiff_romm_client psp;
+    pair_psp(device_id, sizeof device_id, &psp);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_installs_register(&psp, device_id, 1));
+    TEST_PRINTF("an earlier run that stopped half way may have left sends: end them first");
+    claim_sends(&psp, device_id);
+    for (size_t i = 0; i < claim.count; i++) {
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                              skiff_romm_installs_report(&psp, device_id, claim.requests[i].id,
+                                                         SKIFF_ROMM_INSTALL_FAILED, NULL));
+    }
+
+    TEST_ASSERT_EQUAL_INT64(HTTP_CREATED, admin_send_game(device_id, payload.rom_id));
+    TEST_ASSERT_EQUAL_INT64(HTTP_CREATED, admin_send_game(device_id, foreign_rom_id));
+    claim_sends(&psp, device_id);
+    TEST_ASSERT_EQUAL_size_t(2, claim.total);
+    TEST_ASSERT_EQUAL_size_t(2, claim.count);
+    TEST_ASSERT_EQUAL_size_t(0, claim.dropped);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(payload.rom_id, claim.requests[0].rom_id, "oldest first");
+    TEST_ASSERT_EQUAL_UINT64(foreign_rom_id, claim.requests[1].rom_id);
+    TEST_ASSERT_EQUAL_size_t(1, claim.requests[0].file_count);
+    const skiff_romm_install_claim first = claim;
+
+    TEST_PRINTF("RomM checks no platform: Skiff finds the second is not a PSP game");
+    skiff_romm_platform platform;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&psp, PLATFORM_SLUG, &platform));
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&psp, foreign_rom_id, &rom));
+    TEST_PRINTF("ROM %llu '%s' on platform %llu, the PSP's is %llu",
+                (unsigned long long)foreign_rom_id, rom.summary.fs_name,
+                (unsigned long long)rom.summary.platform_id, (unsigned long long)platform.id);
+    TEST_ASSERT_NOT_EQUAL_UINT64(platform.id, rom.summary.platform_id);
+    char reason[SKIFF_ROMM_INSTALL_REASON_MAX_BYTES + 1];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_error_line(SKIFF_LANGUAGE_SPANISH, SKIFF_ERR_ROMM_SEND_NOT_PSP,
+                                           reason, sizeof reason));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_installs_report(&psp, device_id, first.requests[1].id,
+                                                     SKIFF_ROMM_INSTALL_FAILED, reason));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_installs_report(&psp, device_id, first.requests[0].id,
+                                                     SKIFF_ROMM_INSTALL_DONE, NULL));
+    TEST_PRINTF("a report is once only");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_NOT_FOUND,
+                          skiff_romm_installs_report(&psp, device_id, first.requests[0].id,
+                                                     SKIFF_ROMM_INSTALL_DONE, NULL));
+    claim_sends(&psp, device_id);
+    TEST_ASSERT_EQUAL_size_t(0, claim.total);
+
+    TEST_PRINTF("turned off, the PSP can no longer be sent games");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_installs_register(&psp, device_id, 0));
+    TEST_ASSERT_EQUAL_INT64(HTTP_BAD_REQUEST, admin_send_game(device_id, payload.rom_id));
+    TEST_PRINTF("a token not bound to the PSP (the seed's API token) is refused the claim");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_SENDS_FORBIDDEN,
+                          skiff_romm_installs_claim(&client, device_id, &claim));
+    skiff_romm_client_clear(&psp);
+}
+
 static void test_a_wrong_token_is_refused_by_romm(void) {
     skiff_romm_client wrong;
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
@@ -387,6 +543,8 @@ int main(void) {
     extra = seeded("EXTRA_");
     save_disc_rom_id = env_number("SKIFF_IT_SAVE_DISC_ROM_ID");
     save_disc_target = required_env("SKIFF_IT_SAVE_DISC_TARGET");
+    foreign_rom_id = env_number("SKIFF_IT_FOREIGN_ROM_ID");
+    admin_authorization = required_env("SKIFF_IT_ADMIN_AUTHORIZATION");
     if (skiff_net_global_init() != SKIFF_OK) {
         printf("setup failed: TLS could not be seeded\n");
         return EXIT_FAILURE;
@@ -403,6 +561,7 @@ int main(void) {
     RUN_TEST(test_a_reserved_file_name_downloads_through_its_url);
     RUN_TEST(test_a_cover_comes_without_the_token_from_its_rom_details);
     RUN_TEST(test_a_wrong_token_is_refused_by_romm);
+    RUN_TEST(test_a_psp_receives_the_games_the_web_ui_sends);
     const int failures = UNITY_END();
 
     skiff_net_global_cleanup();

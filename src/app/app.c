@@ -47,6 +47,11 @@ static void refresh_free_space(skiff_app *app) {
 }
 
 void app_free_space_start(skiff_app *app) {
+    /* Never over a running call (its inputs are this struct): asked on this thread instead. */
+    if (app_call_busy(app)) {
+        refresh_free_space(app);
+        return;
+    }
     app->call.storage = app->config.storage;
     app->call.roots = app->config.roots;
     app->call.now_ms = app->env.now_ms;

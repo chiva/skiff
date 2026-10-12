@@ -777,8 +777,8 @@ and nothing else changes.
   by file, each synced; a folder the unit lacks is emptied and then removed (PPSSPP's rmdir removes
   a full one). At startup, before anything touches saves, `skiff_saves_recover()` redoes that last
   step from the stage (308, a notice) or, with a staged file missing or not its journalled size or
-  the journal unreadable, leaves the folders as they are (309; the backup holds the old save). A recovery that fails otherwise blocks save sync
-  until a launch finishes it.
+  the journal unreadable, leaves the folders as they are (309; the backup holds the old save). A
+  recovery that fails otherwise blocks save sync until a launch finishes it.
 - **Backups**: `app:/saves-backup/<save_target>/<n>.zip`, made by every restore that replaces saves
   (a download, "Remove this PSP's", a backup restored), three per game and 32 MiB in all (the one
   just made is always kept), numbered across games so the oldest goes first without a clock.

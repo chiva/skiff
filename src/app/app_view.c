@@ -289,6 +289,8 @@ skiff_app_table *app_view_add_table(skiff_app *app, size_t dim_from) {
         return NULL;
     }
     skiff_app_table *table = &view->tables[view->table_count++];
+    /* Whatever an earlier view left in the slot goes, outside app_view_build()'s reset too. */
+    memset(table, 0, sizeof *table);
     table->dim_from = dim_from;
     return table;
 }

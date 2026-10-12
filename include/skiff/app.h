@@ -305,6 +305,10 @@ typedef struct skiff_app_env {
     skiff_err (*call_start)(void *ctx, skiff_app_call_fn fn, void *arg);
     int (*call_done)(void *ctx);
     void (*call_cancel)(void *ctx);
+    /* How many times the PSP has suspended since Skiff started. A change means the Wi-Fi
+     * connection is gone and the Memory Stick's open files with it: the app joins again before its
+     * next request, and a call that failed across a suspend counts as a lost connection. */
+    uint32_t (*suspends)(void *ctx);
 } skiff_app_env;
 
 typedef void (*skiff_app_lock_fn)(void *ctx);

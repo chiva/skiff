@@ -173,12 +173,16 @@ static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
         give_network(platform);
         return err;
     }
-    if (skiff_psp_net_online(&platform->net) == SKIFF_OK) {
+    const int suspend_count = skiff_psp_power_events_now().suspends;
+    if (platform->net.joined_suspends == suspend_count &&
+        skiff_psp_net_online(&platform->net) == SKIFF_OK) {
         give_network(platform);
         *joined = 1;
         return SKIFF_OK;
     }
-    /* A connection half gone (out of range, after a suspend) is dropped before joining again. */
+    /* A connection half gone (out of range, or one a suspend took although the access point still
+     * reads as joined) is dropped before joining again. */
+    platform->join_suspends = suspend_count;
     (void)skiff_psp_net_disconnect(&platform->net, SKIFF_PSP_APP_DROP_TIMEOUT_US);
     err = skiff_psp_net_connect_start(&platform->net, platform->join_profile,
                                       SKIFF_PSP_APP_JOIN_TIMEOUT_US);
@@ -208,6 +212,15 @@ static skiff_err net_poll(void *ctx, int *joined) {
     /* Read before the lock goes: the worker's rejoin may overwrite them right after. */
     const char *failed_call = platform->net.failed_call != NULL ? platform->net.failed_call : "-";
     const int sce_result = platform->net.sce_result;
+    if (result == SKIFF_OK) {
+        platform->net.joined_suspends = platform->join_suspends;
+    }
+    /* A join that spans a suspend may report the address it had before it: not joined, so the
+     * app's retry joins again from scratch (begin_join() drops it first). */
+    if (result == SKIFF_OK && platform->join_suspends != skiff_psp_power_events_now().suspends) {
+        failed_call = "join spanned a suspend";
+        result = SKIFF_ERR_NET_WIFI_JOIN;
+    }
     give_network(platform);
     *joined = result == SKIFF_OK;
     if (result != SKIFF_OK) {
@@ -371,6 +384,11 @@ static void call_cancel(void *ctx) {
     skiff_psp_caller_cancel(&platform->caller);
 }
 
+static uint32_t suspends(void *ctx) {
+    (void)ctx;
+    return (uint32_t)skiff_psp_power_events_now().suspends;
+}
+
 static skiff_err random_bytes(void *ctx, unsigned char *out, size_t size) {
     (void)ctx;
     /* TLS's generator, seeded from KIRK (kirk_entropy.c); started by tls_start. */
@@ -418,6 +436,7 @@ skiff_app_env skiff_psp_app_env(skiff_psp_app *platform) {
         .call_start = call_start,
         .call_done = call_done,
         .call_cancel = call_cancel,
+        .suspends = suspends,
     };
     return env;
 }
@@ -653,6 +672,9 @@ static void dialog_ended(skiff_psp_app *platform, skiff_psp_dialog_state state) 
             state == SKIFF_PSP_DIALOG_ACCEPTED
                 ? skiff_psp_net_connected_profile(&platform->net, &platform->picked_profile)
                 : SKIFF_ERR_NET_UNAVAILABLE;
+        if (platform->picked_error == SKIFF_OK) {
+            platform->net.joined_suspends = platform->join_suspends;
+        }
         give_network(platform);
     }
     if (state == SKIFF_PSP_DIALOG_STUCK) {
@@ -705,6 +727,7 @@ static int open_dialog(skiff_psp_app *platform, const skiff_app_view *view) {
         }
         err = load_network(platform);
         if (err == SKIFF_OK) {
+            platform->join_suspends = skiff_psp_power_events_now().suspends;
             err = skiff_psp_dialog_start_network(dialog);
         }
         if (err != SKIFF_OK) {

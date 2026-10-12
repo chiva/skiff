@@ -137,7 +137,8 @@ int app_saves_busy(const skiff_app *app) {
     /* A session waits to close while its choice is on screen: nothing runs meanwhile. */
     const int closing = saves->batch_session != 0 && app->screen != SKIFF_APP_SCREEN_SAVE_CHOICE;
     return is_saves_call(app->call.kind) || saves->want_check || saves->want_one ||
-           saves->want_apply || saves->batch || closing || any_recheck(saves->shown);
+           saves->want_apply || saves->batch || closing || any_recheck(saves->shown) ||
+           saves->settle_pending;
 }
 
 /* Drops what waited to run, the list and what RomM refused: a new server or token. */
@@ -152,6 +153,7 @@ static void reset(skiff_app *app) {
     saves->want_check = 0;
     saves->want_one = 0;
     saves->want_apply = 0;
+    saves->apply_retry_pending = 0;
     saves->batch = 0;
     saves->batch_session = 0;
     saves->activity.text[0] = '\0';
@@ -369,6 +371,18 @@ static void start_apply(skiff_app *app, const app_save_game *game, app_saves_op 
     app_call_start(app, CALL_SAVES_APPLY);
 }
 
+/* Settles a restore a suspend cut (SAVES_OP_SETTLE), before any other save call. */
+static void start_settle(skiff_app *app) {
+    app_saves *saves = app->saves;
+    prepare(app);
+    app->call.saves.op = SAVES_OP_SETTLE;
+    memset(&app->call.saves.game, 0, sizeof app->call.saves.game);
+    snprintf(app->call.saves.game.save_target, sizeof app->call.saves.game.save_target, "%s",
+             saves->settle_target);
+    saves->settle_attempts++;
+    app_call_start(app, CALL_SAVES_APPLY);
+}
+
 static void start_complete(skiff_app *app) {
     app_saves *saves = app->saves;
     prepare(app);
@@ -466,6 +480,15 @@ void app_saves_resume(skiff_app *app) {
     app_set_screen(app, details ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES);
 }
 
+/* The player is still where they started the sync: its game's details, or the Saves screens. */
+static int still_there(const skiff_app *app, app_saves_origin origin, const app_save_game *game) {
+    if (origin == SAVES_FROM_DETAILS) {
+        return app->screen == SKIFF_APP_SCREEN_DETAILS && app->rom.summary.id == game->rom_id;
+    }
+    return origin == SAVES_FROM_LIST &&
+           (app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS);
+}
+
 /* The Wi-Fi went with a lost request: what the player asked for joins it again first (and goes on
  * after), what runs on its own waits for the next check. */
 static int wait_for_network(skiff_app *app) {
@@ -499,13 +522,27 @@ void app_saves_update(skiff_app *app) {
             app_note(app, app_text(app, SKIFF_TEXT_SAVES_PAIR_NOTE));
         }
     }
+    /* Nothing reads or writes saves before a restore a suspend cut is settled. It needs only the
+     * Memory Stick, so it runs while Skiff connects too (a rejoin after the wake takes seconds),
+     * but never under another call, a system dialog or a server change. */
+    if (saves->settle_pending) {
+        const int server_change =
+            app->screen == SKIFF_APP_SCREEN_CONFIRM && app->confirm == CONFIRM_SERVER_CHANGE;
+        if (!app_call_busy(app) && !server_change && app->dialog == SKIFF_APP_DIALOG_NONE &&
+            app_now(app) >= saves->settle_retry_ms) {
+            start_settle(app);
+        }
+        return;
+    }
     if (!may_run(app)) {
         return;
     }
     if (app_saves_blocked(app) != SAVES_OK) {
         saves->want_check = 0;
         saves->want_one = 0;
+        /* A retry dropped with its transfer: the next one the player starts gets its own. */
         saves->want_apply = 0;
+        saves->apply_retry_pending = 0;
         saves->batch = 0;
         saves->batch_session = 0;
         for (size_t i = 0; i < saves->shown->count; i++) {
@@ -514,6 +551,16 @@ void app_saves_update(skiff_app *app) {
         saves->activity.text[0] = '\0';
         return;
     }
+    /* An automatic retry is for the player who is still there (a settle may have taken a while):
+     * one who left is not brought back to it. */
+    if (saves->want_apply && saves->apply_retry_pending &&
+        !still_there(app, saves->apply_origin, &saves->apply_game)) {
+        skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                        "saves: %s not run again, the player left", saves->apply_game.save_target);
+        saves->want_apply = 0;
+        saves->apply_retry_pending = 0;
+        saves->apply_origin = SAVES_FROM_NONE;
+    }
     if (wait_for_network(app)) {
         return;
     }
@@ -521,6 +568,8 @@ void app_saves_update(skiff_app *app) {
         saves->want_apply = 0;
         start_apply(app, &saves->apply_game, saves->apply_op, saves->backups_pick,
                     saves->apply_origin);
+        saves->apply_retried = saves->apply_retry_pending;
+        saves->apply_retry_pending = 0;
         saves->apply_origin = SAVES_FROM_NONE;
         return;
     }
@@ -563,15 +612,6 @@ static void refused(skiff_app *app) {
 /* Where a player's sync goes back to. */
 static skiff_app_screen origin_screen(app_saves_origin origin) {
     return origin == SAVES_FROM_DETAILS ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES;
-}
-
-/* The player is still where they started the sync: its game's details, or the Saves screens. */
-static int still_there(const skiff_app *app, app_saves_origin origin, const app_save_game *game) {
-    if (origin == SAVES_FROM_DETAILS) {
-        return app->screen == SKIFF_APP_SCREEN_DETAILS && app->rom.summary.id == game->rom_id;
-    }
-    return origin == SAVES_FROM_LIST &&
-           (app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS);
 }
 
 static void show_failure(skiff_app *app, skiff_err err, app_saves_origin origin) {
@@ -721,9 +761,59 @@ void app_saves_checked(skiff_app *app) {
     saves->batch_session = saves->shown->session_id;
 }
 
+/* Whether a settle failed the way a Memory Stick does just after waking (try again soon). */
+static int stick_not_back(skiff_err err) {
+    return err == SKIFF_ERR_STORAGE_IO || err == SKIFF_ERR_STORAGE_NO_MEDIA ||
+           err == SKIFF_ERR_STORAGE_NOT_FOUND;
+}
+
+/* A settle (SAVES_OP_SETTLE) came back: save sync goes on, tries again soon, or stops for the
+ * session after APP_SAVES_SETTLE_ATTEMPTS (the Saves screen then offers one more). */
+static void settled(skiff_app *app) {
+    app_saves *saves = app->saves;
+    /* A settle that never ran (the call could not start, or found no memory) settled nothing. */
+    const skiff_err recovery = app->call.err != SKIFF_OK ? app->call.err : app->call.saves.recovery;
+    saves->activity.text[0] = '\0';
+    app->dirty = 1;
+    const int failed = recovery_failed(recovery);
+    skiff_log_write(app->log, failed ? SKIFF_LOG_WARN : SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "saves: settle %d of %d: %s (%d)", saves->settle_attempts,
+                    APP_SAVES_SETTLE_ATTEMPTS, skiff_err_name(recovery), (int)recovery);
+    if (!failed) {
+        saves->settle_pending = 0;
+        saves->settle_attempts = 0;
+        saves->recovered = recovery;
+        return;
+    }
+    if (saves->settle_attempts < APP_SAVES_SETTLE_ATTEMPTS &&
+        (stick_not_back(recovery) || app->call.err != SKIFF_OK)) {
+        saves->settle_retry_ms = app_now(app) + APP_SAVES_SETTLE_RETRY_MS;
+        return;
+    }
+    saves->settle_pending = 0;
+    saves->settle_attempts = 0;
+    saves->recovered = recovery;
+}
+
+void app_saves_settle_again(skiff_app *app) {
+    app_saves *saves = app->saves;
+    if (saves->settle_pending || app_call_busy(app)) {
+        return;
+    }
+    saves->settle_pending = 1;
+    saves->settle_attempts = 0;
+    saves->settle_retry_ms = 0;
+    saves->settle_target[0] = '\0';
+    app->dirty = 1;
+}
+
 void app_saves_applied(skiff_app *app) {
     app_saves *saves = app->saves;
     note_baseline(app);
+    if (app->call.saves.op == SAVES_OP_SETTLE) {
+        settled(app);
+        return;
+    }
     const skiff_err err = app->call.err;
     const app_saves_call *call = &app->call.saves;
     const app_saves_origin origin = saves->running_origin;
@@ -736,15 +826,24 @@ void app_saves_applied(skiff_app *app) {
                         "saves.json not saved: %s (%d)", skiff_err_name(call->baseline_error),
                         (int)call->baseline_error);
     }
-    if (recovery_failed(call->recovery)) {
+    if (recovery_failed(call->recovery) && app->call.suspended && stick_not_back(call->recovery)) {
+        /* Settled right after the wake, before the Memory Stick answered (S1.7): settled again
+         * soon, before anything else, instead of stopping save sync for the session. */
+        saves->settle_pending = 1;
+        saves->settle_attempts = 0;
+        saves->settle_retry_ms = app_now(app) + APP_SAVES_SETTLE_RETRY_MS;
+        snprintf(saves->settle_target, sizeof saves->settle_target, "%s", game.save_target);
+    } else if (recovery_failed(call->recovery)) {
         saves->recovered = call->recovery;
     }
     /* Left meanwhile: the row and a note say how it went, the player's screen stays. */
     const int there = origin != SAVES_FROM_NONE && still_there(app, origin, &game);
     const int again = err == SKIFF_ERR_ROMM_SAVE_CONFLICT || (err == SKIFF_OK && call->stale);
+    /* Only while the player is still there: one who left meanwhile is not brought back to it. */
+    const int retry = err != SKIFF_OK && app->call.suspended && there && !saves->apply_retried;
     if (err == SKIFF_OK && !call->stale) {
         saves->batch_completed++;
-    } else if (!again) {
+    } else if (!again && !retry) {
         saves->batch_failed++;
     }
     if (err == SKIFF_ERR_ROMM_FORBIDDEN) {
@@ -785,6 +884,20 @@ void app_saves_applied(skiff_app *app) {
                 row->recheck = 1;
             }
         }
+        return;
+    }
+    if (retry) {
+        /* The PSP slept under the player's transfer. Live saves change only in the restore, whose
+         * journal settled any cut (settle_restore()), so it runs again once the Wi-Fi is joined
+         * (wait_for_network()), back on the screen it started from. */
+        skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                        "saves: %s lost to a suspend, again after joining the Wi-Fi",
+                        game.save_target);
+        app_network_failed(app, err);
+        saves->apply_op = call->op;
+        saves->apply_origin = origin;
+        saves->apply_retry_pending = 1;
+        saves->want_apply = 1;
         return;
     }
     if (err != SKIFF_OK) {
@@ -876,6 +989,10 @@ void app_saves_screen_update(skiff_app *app, unsigned actions) {
         if (confirm && !app_call_busy(app)) {
             app_pair_begin(app);
         }
+        return;
+    }
+    if (block == SAVES_UNRECOVERED && confirm) {
+        app_saves_settle_again(app);
         return;
     }
     if (block != SAVES_OK) {

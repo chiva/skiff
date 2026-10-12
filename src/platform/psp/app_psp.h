@@ -92,6 +92,9 @@ typedef struct skiff_psp_app {
     /* net_start asked to join join_profile: net_poll begins it once it has the network lock. */
     int join_wanted;
     int join_profile;
+    /* The suspend count when the pending join began: a join that spans a suspend is recorded under
+     * this one, so it is not taken as standing afterwards (skiff_psp_net.joined_suspends). */
+    int join_suspends;
     /* The connection the network picker joined, read before net_lock is given back. */
     int picked_profile;
     skiff_err picked_error;

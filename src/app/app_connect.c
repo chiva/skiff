@@ -10,6 +10,32 @@ int app_is_network_error(skiff_err err) {
            err == SKIFF_ERR_NET_WIFI_JOIN || err == SKIFF_ERR_NET_CONNECTION_LOST;
 }
 
+int app_is_suspend_error(skiff_err err) {
+    return app_is_network_error(err) || err == SKIFF_ERR_NET_TLS_HANDSHAKE ||
+           err == SKIFF_ERR_NET_TLS_CLIENT_CERT || err == SKIFF_ERR_STORAGE_IO ||
+           err == SKIFF_ERR_STORAGE_NO_MEDIA || err == SKIFF_ERR_STORAGE_NOT_FOUND ||
+           err == SKIFF_ERR_CONFIG_INVALID_VALUE;
+}
+
+void app_notice_suspend(skiff_app *app) {
+    const uint32_t suspends = app->env.suspends(app->env.ctx);
+    if (suspends == app->suspends_seen) {
+        return;
+    }
+    app->suspends_seen = suspends;
+    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "woke from a suspend: the Wi-Fi joins again before the next request%s",
+                    app->net_joined ? "" : " (not joined)");
+    app->net_joined = 0;
+    /* A call that ran across it keeps its client until its result is taken: one that worked (a
+     * pairing approved just before) still reads it. The connection goes after (app_call.c). */
+    if (app_call_busy(app)) {
+        app->drop_after_call = 1;
+    } else {
+        app_drop_client(app);
+    }
+}
+
 void app_network_failed(skiff_app *app, skiff_err err) {
     if (!app_is_network_error(err)) {
         return;
@@ -277,12 +303,26 @@ void app_connect_update(skiff_app *app, unsigned actions) {
         return;
     case CONNECT_HEARTBEAT:
     case CONNECT_PLATFORM:
-        /* The step's request runs off this thread; its result moves the walk on. */
-        if (!app_call_busy(app)) {
-            app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT : CALL_PLATFORM);
+        /* The step's request in flight comes back first: its result moves the walk on. */
+        if (app_call_busy(app)) {
+            return;
         }
+        /* A suspend mid-walk took the Wi-Fi (app_notice_suspend()): join it again first, rather
+         * than send the step's request over a connection that is gone. */
+        if (!app->net_joined) {
+            app->connect = CONNECT_NETWORK;
+            app->dirty = 1;
+            return;
+        }
+        /* The step's request runs off this thread. */
+        app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT : CALL_PLATFORM);
         return;
     case CONNECT_PAIRING:
+        /* A pairing under way when the Wi-Fi had to be joined again goes on with its code. */
+        if (app->pairing.active) {
+            app_set_screen(app, SKIFF_APP_SCREEN_PAIR);
+            return;
+        }
         if (app->settings.token[0] == '\0' || app->pairing_requested) {
             app_pair_begin(app);
         } else {
@@ -487,11 +527,23 @@ void app_pair_update(skiff_app *app, unsigned actions) {
             return;
         }
         if (!app_call_busy(app)) {
+            if (!app->net_joined) {
+                /* Joined again first; the walk then asks for this new code (CONNECT_PAIRING). */
+                app->pairing_requested = 1;
+                app_connect_begin(app, CONNECT_NETWORK);
+                return;
+            }
             start_pairing(app);
         }
         return;
     }
     const int64_t now = app_now(app);
+    /* A suspend took the Wi-Fi (app_notice_suspend()): join again before the next poll; the walk
+     * comes back to this pairing (CONNECT_PAIRING). */
+    if (!app->net_joined && !app_call_busy(app)) {
+        app_connect_begin(app, CONNECT_NETWORK);
+        return;
+    }
     const int64_t expires_ms =
         app->pairing.started_ms + (int64_t)app->pairing.pairing.expires_in_s * APP_MS_PER_S;
     if (now >= expires_ms) {

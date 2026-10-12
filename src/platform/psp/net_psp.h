@@ -73,6 +73,12 @@ typedef struct skiff_psp_net {
     int join_handler;
     long long join_deadline_us;
     int join_progressed;
+    /* The power callback's suspend count (lifecycle.h) when this connection was last joined, kept
+     * by the callers that join (the app's join and network picker, the worker's rejoin and reload).
+     * After a suspend the access point can still read as joined (GOT_IP) for a while although the
+     * connection is gone (S1.7, 2026-10-12: a request 50 ms after "joining" failed with 102), so a
+     * connection joined before the last suspend is never taken as standing. */
+    int joined_suspends;
 } skiff_psp_net;
 
 /*

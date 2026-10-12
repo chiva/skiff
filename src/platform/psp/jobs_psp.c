@@ -98,9 +98,14 @@ static skiff_err rejoin(void *ctx) {
     const skiff_psp_worker *worker = ctx;
     skiff_psp_net *net = worker->config.net;
     lock_network(worker);
+    /* Taken before the join: one that spans a suspend is not recorded as joined after it. */
+    const int suspend_count = skiff_psp_power_events_now().suspends;
     skiff_err err = skiff_psp_net_disconnect(net, SKIFF_PSP_WORKER_DISCONNECT_TIMEOUT_US);
     if (err == SKIFF_OK) {
         err = skiff_psp_net_connect(net, worker->config.profile, SKIFF_PSP_WORKER_JOIN_TIMEOUT_US);
+    }
+    if (err == SKIFF_OK) {
+        net->joined_suspends = suspend_count;
     }
     unlock_network(worker);
     skiff_log_write(worker->config.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, LOG_TAG,
@@ -116,6 +121,7 @@ static skiff_err reload(void *ctx) {
     const skiff_psp_worker *worker = ctx;
     skiff_psp_net *net = worker->config.net;
     lock_network(worker);
+    const int suspend_count = skiff_psp_power_events_now().suspends;
     skiff_err err = net->stage == SKIFF_PSP_NET_APCTL
                         ? skiff_psp_net_disconnect(net, SKIFF_PSP_WORKER_DISCONNECT_TIMEOUT_US)
                         : SKIFF_OK;
@@ -127,6 +133,9 @@ static skiff_err reload(void *ctx) {
     }
     if (err == SKIFF_OK) {
         err = skiff_psp_net_connect(net, worker->config.profile, SKIFF_PSP_WORKER_JOIN_TIMEOUT_US);
+    }
+    if (err == SKIFF_OK) {
+        net->joined_suspends = suspend_count;
     }
     unlock_network(worker);
     skiff_log_write(worker->config.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, LOG_TAG,

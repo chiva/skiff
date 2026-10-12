@@ -1024,6 +1024,30 @@ static skiff_err restore_backup(app_call *call, apply_scratch *a) {
     return err;
 }
 
+/* A restore that failed across a suspend, settled once the Memory Stick answers again: its journal
+ * replayed or its stage removed (settle_restore()), then the unit it downloaded removed, which the
+ * transfer's next run downloads again. The settle's result is call->saves.recovery. */
+static skiff_err settle_again(app_call *call, apply_scratch *a) {
+    settle_restore(call);
+    const skiff_err settled = call->saves.recovery;
+    if (settled != SKIFF_OK && settled != SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED &&
+        settled != SKIFF_ERR_STORAGE_SAVE_RESTORE_UNFINISHED) {
+        return SKIFF_OK;
+    }
+    /* One the player asked for after a launch's recovery failed has no transfer behind it. */
+    if (call->saves.game.save_target[0] == '\0') {
+        return SKIFF_OK;
+    }
+    skiff_err removed = work_paths(call, a, call->saves.game.save_target);
+    if (removed == SKIFF_OK) {
+        removed = skiff_storage_remove(call->storage, a->real_path);
+    }
+    skiff_log_write(call->saves.log, SKIFF_LOG_DEBUG, SAVES_LOG_TAG,
+                    "%s: downloaded unit removed: %s (%d)", call->saves.game.save_target,
+                    skiff_err_name(removed), (int)removed);
+    return SKIFF_OK;
+}
+
 skiff_err app_saves_apply_run(app_call *call) {
     apply_scratch *a = calloc(1, sizeof *a);
     if (a == NULL) {
@@ -1047,13 +1071,17 @@ skiff_err app_saves_apply_run(app_call *call) {
     case SAVES_OP_RESTORE_BACKUP:
         err = restore_backup(call, a);
         break;
+    case SAVES_OP_SETTLE:
+        err = settle_again(call, a);
+        break;
     case SAVES_OP_CHECK:
     case SAVES_OP_CHECK_ONE:
         break;
     }
     free(a);
-    const int recorded =
-        err == SKIFF_OK && !call->saves.stale && call->saves.op != SAVES_OP_RESTORE_BACKUP;
+    const int recorded = err == SKIFF_OK && !call->saves.stale &&
+                         call->saves.op != SAVES_OP_RESTORE_BACKUP &&
+                         call->saves.op != SAVES_OP_SETTLE;
     if (recorded || call->saves.baseline_pending) {
         call->saves.baseline_error = save_baseline(call);
     }

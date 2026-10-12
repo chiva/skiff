@@ -106,6 +106,9 @@ existing ones.
 - A suspend invalidates files open on the Memory Stick: writes after waking fail, silently with
   stdio. Open files per job step (the download engine opens and closes them per attempt) and reopen
   on a write error, as `src/platform/psp/report.c` does.
+- After a suspend the access point can still read as joined (`GOT_IP`) although the connection is
+  gone: a connection joined before the last suspend is never taken as standing
+  (`skiff_psp_net.joined_suspends`, set by every caller that joins).
 - `time()` on the PSP returns only the time of day (the date is lost). Never use it for anything
   date-related: read `sceRtcGetCurrentTick` (UTC) instead.
 - ARK custom firmware functions are imported through hand-written stubs in

@@ -126,7 +126,11 @@ backups stay.
 When the Wi-Fi, sleep mode or a flat battery cuts a sync short, an upload leaves no partial save in
 RomM (one RomM had already received whole is found the same on both sides at the next check), and a
 download changes nothing on the PSP until it has arrived whole and matches RomM's checksum (error
-217 otherwise). A restore cut while it was replacing the game's folders is finished the next time
+217 otherwise). After sleep mode Skiff joins the Wi-Fi again before its next request; a sync you
+started that sleep mode cut short runs once more by itself once the Wi-Fi is back, and if sleep
+mode cuts that one too, Skiff says the connection was lost (111). A restore that sleep mode cut is
+settled first, as soon as the Memory Stick answers again (Skiff tries for a few seconds); if it
+still cannot be, the Saves screen says why and ✕ Retry tries again. A restore cut while it was replacing the game's folders is finished the next time
 Skiff starts, which says "A save restore was cut short; Skiff has now finished it" (308). If Skiff's
 copy of the save it was restoring, or its note of the restore, is gone, cut short or unreadable, it
 stops with error 309 and leaves the folders as they are; the backup it made first holds the save as

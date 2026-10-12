@@ -42,8 +42,9 @@ game's saves by slot, whichever emulator made them, which is how a PPSSPP save a
 ## Does Skiff ever delete saves in RomM?
 
 No. **Keep this PSP's** adds a new version, and RomM keeps the one it replaced in its history. Skiff
-asks RomM to keep the 10 newest saves it uploaded for each game, so RomM drops older ones of
-Skiff's own; saves other devices uploaded are not counted. On the PSP, a save is replaced or
+asks RomM to keep the 10 newest saves labelled `psp_console` for each game (every PSP's), so RomM
+drops older ones with that label; saves PPSSPP clients upload under their own label are not
+counted. On the PSP, a save is replaced or
 removed only by a download from RomM (**Use RomM's** and **Remove this PSP's** among them) or a
 backup you restore, and Skiff backs it up first.
 

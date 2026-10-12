@@ -6,8 +6,9 @@
 
 Skiff keeps each game's save the same on this PSP and in RomM. It uploads a save you made on the
 PSP, and downloads one made elsewhere: on another PSP, or in PPSSPP through a RomM client such as
-Argosy ([FAQ](faq.md#do-my-saves-work-with-ppsspp)). When both sides changed, or a save was deleted
-on one side, it asks you. It never replaces a save it cannot prove is already on the other side.
+Argosy ([FAQ](faq.md#do-my-saves-work-with-ppsspp)). On its own it never replaces a save it cannot
+prove is already on the other side: when both sides hold different saves and it cannot tell which
+is newer, or a save was deleted on this PSP or emptied in RomM, it asks you.
 
 ## What it needs
 
@@ -41,11 +42,11 @@ The games that need you wait in Settings → **Saves**.
 
 ## Settings → Saves
 
-The list holds every game with a save on this PSP or in RomM, with its state:
+The list holds every game with a save on this PSP or in RomM (up to 128), with its state:
 
 | State | What it means | Sync |
 |---|---|---|
-| Synced 11 Oct | The same save on both sides | Says the save is already in sync |
+| Synced 11 Oct | The same save on both sides, or a save deleted on this PSP that you chose to leave | Says the save is already in sync |
 | Changed on this PSP | You played since the last sync | Uploads it |
 | Newer in RomM | Another device saved since the last sync | Downloads it, after a backup |
 | Only in RomM | This PSP has no save for the game | Downloads it |
@@ -59,9 +60,9 @@ Under the list, the selected game's state in full and when it last synced ("Last
 18:15"). The buttons each screen uses are shown at its bottom:
 
 - **Sync** compares the selected game again, reading its save afresh, and uploads, downloads or
-  asks.
-- **Sync all** compares every game again, as at launch, also asking RomM again about installed
-  games it had no save ID for.
+  asks. On a game that can't sync, it says why.
+- **Sync all** compares every game again, as at launch, also asking RomM again, a few at a time,
+  about installed games it had no save ID for.
 - **Backups** lists the selected game's backups.
 
 A game's details in the library show its state too ("Save: Newer in RomM"), and offer **Sync save**
@@ -91,14 +92,15 @@ nothing on this PSP to lose.
 ## Backups
 
 Before it replaces or removes a game's saves on this PSP, Skiff zips them into
-`PSP/GAME/Skiff/saves-backup/`. It keeps the three newest backups of each game, and at most 32 MB
-of backups in all, dropping the oldest first. Deleting the `PSP/GAME/Skiff` folder deletes them
-too.
+`PSP/GAME/Skiff/saves-backup/`. It keeps the three newest backups of each game, and drops the
+oldest of all while the backups add up to more than 32 MB (never the one just made). Deleting the
+`PSP/GAME/Skiff` folder deletes them too.
 
 To put a backup back: Settings → **Saves**, select the game, choose **Backups**, pick a backup (each
 shows when it was made) and choose **Restore**. Skiff asks "Restore this backup? The saves on this
-PSP are backed up first." and says "Backup restored". The restored save then counts as changed on
-this PSP, so the next sync uploads it (or asks, if RomM's changed too).
+PSP are backed up first." and says "Backup restored". Skiff then compares the game again, as after
+you play: a restored save that differs from the one last synced counts as changed on this PSP, and
+the next sync uploads it (or asks, if RomM's changed too).
 
 ## Pairing again, or a new server
 
@@ -109,33 +111,36 @@ backups stay.
 
 ## If something interrupts a sync
 
-A sync cut short by the Wi-Fi, sleep mode or a flat battery never leaves half a save. An upload
-leaves nothing in RomM. A download changes nothing on the PSP until it has arrived whole and
-matches RomM's checksum (error 217 otherwise). A restore cut while it was replacing the game's
-folders is finished the next time Skiff starts, which says "A save restore was cut short; Skiff has
-now finished it" (308). [Troubleshooting](troubleshooting.md) explains errors 212 to 217 and 306
-to 309.
+When the Wi-Fi, sleep mode or a flat battery cuts a sync short, an upload leaves nothing in RomM,
+and a download changes nothing on the PSP until it has arrived whole and matches RomM's checksum
+(error 217 otherwise). A restore cut while it was replacing the game's folders is finished the next
+time Skiff starts, which says "A save restore was cut short; Skiff has now finished it" (308). Only
+if Skiff's copy of the save it was restoring is gone does it stop with error 309 and leave the
+folders as they are; the backup it made first holds the save as it was.
+[Troubleshooting](troubleshooting.md) explains errors 212 to 217 and 306 to 309.
 
 ## Saves you delete in RomM
 
 Skiff never deletes a save in RomM, and deleting one in RomM's web app does not delete it on the
 PSP. With no save left in RomM for the game, the next sync uploads this PSP's again. With an older
-save left, Skiff takes that one as RomM's newer save and downloads it, keeping a backup of this
-PSP's first.
+save left, Skiff takes that one as RomM's newer save: if this PSP's has not changed since the last
+sync, it downloads it, keeping a backup of this PSP's first; otherwise it asks.
 
 ## What is not synced
 
 A game that cannot sync shows **Can't sync**, with the reason under the list:
 
-- **"RomM has no save ID for this game. With RomM 5.4 or newer, rescan the platform."** RomM 5.3,
+- **"Can't sync: RomM has no save ID for this game. With RomM 5.4 or newer, rescan the
+  platform."** RomM 5.3,
   a game scanned before RomM 5.4, a game stored as a `.pbp`, or a file RomM cannot read as a disc.
   The game's details say "Save: no save ID in RomM".
-- **"Skiff does not know which game in RomM uses this save."** Save folders on this PSP for a game
-  Skiff did not install and RomM holds no save for yet; the row shows the game's ID, such as
-  `ULUS10064`. Open the game in the library and choose **Sync save**. A game that is not in RomM
-  at all cannot sync.
-- **"Several games in RomM use this save."** RomM has two copies of the game, for example an `.iso`
-  and a `.cso`, and keeps separate saves for each. Open the one you play and choose **Sync save**.
+- **"Can't sync: Skiff does not know which game in RomM uses this save. Open the game in the
+  library and choose Sync save."** Save folders on this PSP for a game Skiff did not install and
+  RomM holds no save for yet; the row shows the game's ID, such as `ULUS10064`. A game that is not
+  in RomM at all cannot sync.
+- **"Several games in RomM use this save. Open the one you play in the library and choose Sync
+  save."** RomM has two copies of the game, for example an `.iso` and a `.cso`, and keeps separate
+  saves for each.
 - **"Can't sync:" and an error**, for example 307: a save folder holds something a PSP save never
   does. [Troubleshooting](troubleshooting.md) says what to do; **Sync** tries again.
 

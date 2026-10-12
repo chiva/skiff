@@ -762,7 +762,8 @@ and nothing else changes.
   last sync (RomM's save id and hash, the local hash, the folders' summary), and
   `skiff_saves_decide()` picks the transfer from hashes alone, never from clocks or negotiate's
   `action`: never a download over a local change, never an upload over a server change, a question
-  when both changed or there is no baseline (first sync, Pair again, new server), and always a
+  when both sides hold different saves and both changed or there is no baseline (first sync, Pair
+  again, new server), and always a
   question before an empty unit (a save deleted elsewhere) is restored or a save deleted on this
   PSP comes back. Uploads carry `overwrite=false`, so RomM's 409 (212) stops one over a version
   this PSP has not synced, and the game is compared again; "Keep this PSP's" is the only
@@ -778,9 +779,9 @@ and nothing else changes.
   they are (309; the backup holds the old save). A recovery that fails otherwise blocks save sync
   until a launch finishes it.
 - **Backups**: `app:/saves-backup/<save_target>/<n>.zip`, made by every restore that replaces saves
-  (a download, "Remove this PSP's", a backup restored), three per game and 32 MiB in all, numbered
-  across games so the oldest goes first without a clock. Settings → Saves → Backups restores one
-  through the same restore.
+  (a download, "Remove this PSP's", a backup restored), three per game and 32 MiB in all (the one
+  just made is always kept), numbered across games so the oldest goes first without a clock.
+  Settings → Saves → Backups restores one through the same restore.
 
 The app (`src/app/app_saves*.c`, see [The app](#the-app)) syncs on the browsing thread, as calls
 rather than jobs: `CALL_SAVES_CHECK`, `CALL_SAVES_APPLY` (one game's transfer), `CALL_SAVES_COMPLETE`
@@ -790,14 +791,16 @@ and a new job kind would change `queue.json`'s version, which an older build dro
 lists the PSP ROMs RomM holds saves for (`has_saves`, paged, at most 128, never the whole library),
 learns the IDs of games Skiff installed from their details (16 a check, remembered in
 `saves.json`), lists `PSP/SAVEDATA`, hashes what changed, and negotiates in rounds of at most 32
-ROMs (RomM answers for every slot of each, and Skiff reads at most 256 operations), keeping the
+ROMs (RomM answers for every slot of each, and Skiff reads at most 256 operations; a save ID more
+ROMs share takes a round of its own), keeping the
 `autosave` operations. It sets `restore_unlisted`, without which RomM leaves out a save this PSP
 synced and then deleted. A save belongs to the ROM its baseline names, else the only installed ROM
 with that ID, else the only PSP ROM with that ID holding a save in `autosave` (an ISO and a CSO of
 one game have separate saves in RomM); with several, the player syncs it from the game's details.
 
 Uploads and downloads are long transfers (`skiff_http_request.long_transfer`): the 60 s limit on
-the screen's requests does not apply, only the 30 s stall timeout and the stop hook. An upload
+the screen's requests does not apply; the connect timeout, the 30 s stall timeout and the stop
+hook still do. An upload
 writes the unit to `app:/saves-work/` and streams it, provided it still hashes as the check saw. A
 download goes to `<save_target>.zip.part` there with `optimistic=false` and is checked against
 RomM's hash before anything is restored (217); the local saves are hashed again just before (a

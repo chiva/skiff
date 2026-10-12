@@ -756,7 +756,8 @@ static int stick_not_back(skiff_err err) {
  * session after APP_SAVES_SETTLE_ATTEMPTS (the Saves screen then offers one more). */
 static void settled(skiff_app *app) {
     app_saves *saves = app->saves;
-    const skiff_err recovery = app->call.saves.recovery;
+    /* A settle that never ran (the call could not start, or found no memory) settled nothing. */
+    const skiff_err recovery = app->call.err != SKIFF_OK ? app->call.err : app->call.saves.recovery;
     saves->activity.text[0] = '\0';
     app->dirty = 1;
     const int failed = recovery_failed(recovery);
@@ -769,7 +770,8 @@ static void settled(skiff_app *app) {
         saves->recovered = recovery;
         return;
     }
-    if (saves->settle_attempts < APP_SAVES_SETTLE_ATTEMPTS && stick_not_back(recovery)) {
+    if (saves->settle_attempts < APP_SAVES_SETTLE_ATTEMPTS &&
+        (stick_not_back(recovery) || app->call.err != SKIFF_OK)) {
         saves->settle_retry_ms = app_now(app) + APP_SAVES_SETTLE_RETRY_MS;
         return;
     }

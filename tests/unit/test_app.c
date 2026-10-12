@@ -4959,8 +4959,18 @@ static void test_a_settle_that_keeps_failing_stops_save_sync_until_one_works(voi
                                      "the transfer is not run again meanwhile");
     TEST_ASSERT_EQUAL_STRING(skiff_err_name(SKIFF_ERR_STORAGE_IO),
                              skiff_err_name(app->saves->recovered));
-    TEST_PRINTF("the Memory Stick is back: Retry settles it and save sync goes on");
+    TEST_PRINTF("a Retry whose settle cannot even start settles nothing: still stopped");
+    env_state.call_start_error = SKIFF_ERR_NO_MEMORY;
     memory_stick_back();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < 4 * FRAMES_MAX && app->saves->settle_pending; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(SAVES_UNRECOVERED, app_saves_blocked(app));
+    TEST_ASSERT_EQUAL_STRING(skiff_err_name(SKIFF_ERR_NO_MEMORY),
+                             skiff_err_name(app->saves->recovered));
+    env_state.call_start_error = SKIFF_OK;
+    TEST_PRINTF("the Memory Stick is back: Retry settles it and save sync goes on");
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_saves();
     storage.on_call = NULL;

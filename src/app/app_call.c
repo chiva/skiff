@@ -138,7 +138,9 @@ void app_call_start(skiff_app *app, app_call_kind kind) {
     call->romm = &app->romm;
     /* Kept apart from call->err: once started, the thread may write that before call_start()
      * returns. */
-    skiff_err launch = app_ensure_client(app);
+    const int settle = kind == CALL_SAVES_APPLY && call->saves.op == SAVES_OP_SETTLE;
+    /* A settle touches only the Memory Stick: no client (nor server) is needed for it. */
+    skiff_err launch = settle ? SKIFF_OK : app_ensure_client(app);
     if (launch == SKIFF_OK) {
         launch = app->env.call_start(app->env.ctx, run, call);
     }

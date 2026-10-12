@@ -6349,6 +6349,25 @@ static void test_switched_off_tells_romm_once_per_connection_and_never_claims(vo
     TEST_ASSERT_EQUAL_STRING("Games from RomM: Off", sends_row()->label);
 }
 
+static void test_an_unreachable_romm_on_a_joined_wifi_keeps_the_claim_interval(void) {
+    serve_register(1);
+    fake_route *down = serve_empty_claim();
+    down->fail_before_response = SKIFF_ERR_NET_CONNECT;
+    TEST_PRINTF("the access point stays joined while RomM cannot be reached");
+    env_state.online = 1;
+    open_sends_library();
+    wait_ms(3 * CLAIM_INTERVAL);
+    TEST_PRINTF("%zu claim(s) in three intervals", requests_to(CLAIM_PATH));
+    TEST_ASSERT_TRUE(requests_to(CLAIM_PATH) <= 4);
+    TEST_ASSERT_TRUE(requests_to(CLAIM_PATH) >= 3);
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    const char *first = strstr(log_text, "send: claim: SKIFF_ERR_NET_CONNECT");
+    TEST_ASSERT_NOT_NULL(first);
+    TEST_PRINTF("logged once");
+    TEST_ASSERT_NULL(strstr(first + 1, "send: claim: SKIFF_ERR_NET_CONNECT"));
+}
+
 static void test_claims_go_on_once_something_else_joins_the_wifi_again(void) {
     serve_register(1);
     fake_route *lost = serve_empty_claim();
@@ -6365,10 +6384,12 @@ static void test_claims_go_on_once_something_else_joins_the_wifi_again(void) {
     TEST_ASSERT_TRUE(env_state.online_asks <=
                      (int)(2 * CLAIM_INTERVAL / APP_SENDS_JOIN_PROBE_MS) + 1);
     TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
-    TEST_PRINTF("the download worker rejoins (a PSP left on Downloads): the claim follows");
+    TEST_PRINTF("the download worker rejoins (a PSP left on Downloads): the claim follows at its "
+                "interval");
     env_state.online = 1;
     wait_ms(APP_SENDS_JOIN_PROBE_MS + 100);
-    run_sends();
+    TEST_ASSERT_TRUE(app->net_joined);
+    wait_for_claim();
     TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
     TEST_ASSERT_TRUE(app->net_joined);
     TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
@@ -6980,6 +7001,7 @@ int main(void) {
     RUN_TEST(test_a_failed_switch_off_is_tried_again_on_the_next_connection);
     RUN_TEST(test_switched_off_tells_romm_once_per_connection_and_never_claims);
     RUN_TEST(test_claims_go_on_once_something_else_joins_the_wifi_again);
+    RUN_TEST(test_an_unreachable_romm_on_a_joined_wifi_keeps_the_claim_interval);
     RUN_TEST(test_download_all_waits_for_a_round_that_may_take_its_room);
     RUN_TEST(test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing);
     RUN_TEST(test_a_refusal_is_said_in_the_psps_language);

@@ -257,11 +257,11 @@ static void notice_join(skiff_app *app) {
     if (!app->env.net_online(app->env.ctx)) {
         return;
     }
-    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
-                    "send: the Wi-Fi is joined again, claims go on");
+    /* The claim keeps its interval: the access point may never have gone (RomM was out of reach),
+     * and an outage is not asked about every second. */
+    skiff_log_write(app->log, SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                    "send: the Wi-Fi is joined, claims go on at their interval");
     app->net_joined = 1;
-    sends->next_claim_ms = 0;
-    sends->last_error = SKIFF_OK;
 }
 
 void app_sends_update(skiff_app *app) {

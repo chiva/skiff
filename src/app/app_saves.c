@@ -744,8 +744,8 @@ void app_saves_applied(skiff_app *app) {
     /* Left meanwhile: the row and a note say how it went, the player's screen stays. */
     const int there = origin != SAVES_FROM_NONE && still_there(app, origin, &game);
     const int again = err == SKIFF_ERR_ROMM_SAVE_CONFLICT || (err == SKIFF_OK && call->stale);
-    const int retry = err != SKIFF_OK && app->call.suspended && origin != SAVES_FROM_NONE &&
-                      !saves->apply_retried;
+    /* Only while the player is still there: one who left meanwhile is not brought back to it. */
+    const int retry = err != SKIFF_OK && app->call.suspended && there && !saves->apply_retried;
     if (err == SKIFF_OK && !call->stale) {
         saves->batch_completed++;
     } else if (!again && !retry) {

@@ -368,8 +368,10 @@ struct skiff_app {
     int quit;
     int has_server;
     int net_joined;
-    /* env.suspends() when last looked at (app_notice_suspend()). */
+    /* env.suspends() when last looked at (app_notice_suspend()), and whether the browse client
+     * goes once the call running across that suspend has been taken. */
     uint32_t suspends_seen;
+    int drop_after_call;
     int tls_started;
     int profile;
     /* Waiting for the Wi-Fi switch before joining. */

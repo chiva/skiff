@@ -4647,6 +4647,73 @@ static void test_a_transfer_that_ends_after_leaving_keeps_the_players_screen(voi
     TEST_ASSERT_TRUE(requested_path(path));
 }
 
+static void test_a_transfer_cut_by_a_suspend_after_leaving_keeps_the_players_screen(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    fake_route *upload = serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    upload->fail_mid_upload = SKIFF_ERR_STORAGE_IO;
+    upload->fail_after_upload_bytes = 1;
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    for (int i = 0; i < FRAMES_MAX && app->call.kind != CALL_SAVES_APPLY; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_SAVES_APPLY, app->call.kind);
+    env_state.hold_calls = 1;
+    frame(0);
+    TEST_PRINTF("Back while the save uploads, then the PSP sleeps under it");
+    frame(SKIFF_UI_ACTION_BACK);
+    env_state.suspends++;
+    const int joins = env_state.net_starts;
+    env_state.hold_calls = 0;
+    run_saves();
+    TEST_PRINTF("not run again and not brought back: the library stays, the row says why");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    TEST_ASSERT_EQUAL_INT(1, upload->uses);
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    TEST_ASSERT_FALSE(app->net_joined);
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[111]"));
+}
+
+static void test_a_pairing_approved_across_a_suspend_still_pairs(void) {
+    write_config("[server]\nurl = " SERVER "\n[network]\nprofile = 1\n");
+    serve_heartbeat("5.3.1");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_INIT, "romm/device-init.http"));
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, PATH_TOKEN, "romm/device-token.http"));
+    serve_platforms();
+    serve_page(0, 3, 3);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_PAIR);
+    env_state.hold_calls = 1;
+    for (int i = 0;
+         i < FRAMES_MAX && !(env_state.call_pending && app->call.kind == CALL_PAIRING_POLL); i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_PAIRING_POLL, app->call.kind);
+    TEST_PRINTF("RomM approves; the PSP sleeps before the poll's answer is taken");
+    env_state.suspends++;
+    frame(0);
+    TEST_ASSERT_FALSE(app->net_joined);
+    TEST_ASSERT_NOT_NULL_MESSAGE(app->transport, "the client stays until the poll is taken");
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "token = " PAIRED_TOKEN));
+    TEST_ASSERT_EQUAL_STRING("Bearer " PAIRED_TOKEN, env_state.spec.romm->authorization);
+}
+
 static void test_a_restore_cut_mid_way_is_settled_and_stops_save_sync(void) {
     char extra[SAVE_PATH_MAX];
     snprintf(extra, sizeof extra, "%s/" GAME_ASK "EXTRA", roots.saves);
@@ -5371,6 +5438,8 @@ int main(void) {
     RUN_TEST(test_without_a_suspend_a_memory_stick_fault_stays_one);
     RUN_TEST(test_a_batch_upload_cut_by_a_suspend_counts_as_a_lost_connection);
     RUN_TEST(test_a_table_added_to_the_view_starts_empty);
+    RUN_TEST(test_a_transfer_cut_by_a_suspend_after_leaving_keeps_the_players_screen);
+    RUN_TEST(test_a_pairing_approved_across_a_suspend_still_pairs);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);

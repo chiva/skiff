@@ -26,7 +26,14 @@ void app_notice_suspend(skiff_app *app) {
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
                     "woke from a suspend: the Wi-Fi joins again before the next request%s",
                     app->net_joined ? "" : " (not joined)");
-    app_network_failed(app, SKIFF_ERR_NET_CONNECTION_LOST);
+    app->net_joined = 0;
+    /* A call that ran across it keeps its client until its result is taken: one that worked (a
+     * pairing approved just before) still reads it. The connection goes after (app_call.c). */
+    if (app_call_busy(app)) {
+        app->drop_after_call = 1;
+    } else {
+        app_drop_client(app);
+    }
 }
 
 void app_network_failed(skiff_app *app, skiff_err err) {

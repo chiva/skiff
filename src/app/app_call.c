@@ -223,6 +223,8 @@ void app_call_update(skiff_app *app) {
     /* Idle before the result is applied: applying may start the next call. */
     call->kind = CALL_NONE;
     app->dirty = 1;
+    const int drop_after = app->drop_after_call;
+    app->drop_after_call = 0;
     if (call->drop_client) {
         call->drop_client = 0;
         app_drop_client(app);
@@ -234,6 +236,9 @@ void app_call_update(skiff_app *app) {
         app_network_failed(app, call->err);
     } else {
         apply(app, kind);
+    }
+    if (drop_after) {
+        app_drop_client(app);
     }
     /* A pairing's codes and token are wiped whatever became of them. */
     if (kind == CALL_PAIRING_START || kind == CALL_PAIRING_POLL) {

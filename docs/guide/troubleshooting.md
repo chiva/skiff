@@ -15,6 +15,33 @@ Turn the PSP fully off (hold the power switch up for 3 seconds) and try again. I
 happening, [open a bug report](https://github.com/chiva/skiff/issues/new?template=bug_report.yml)
 with your PSP model and firmware.
 
+## The PSP is not listed in Install on device
+
+RomM's web UI lists a device under **Install on device** only once the device has told RomM it can
+receive games. For the PSP ("Skiff on PSP") to be listed:
+
+- RomM must be **5.4 or newer**, with Install on device turned on (it is unless the server's
+  administrator set `DEVICE_INSTALL_ENABLED=false`). Skiff's **Settings → Games from RomM** row says
+  **Needs RomM 5.4** or **Turned off in RomM** otherwise.
+- The PSP must be **paired with the device permissions** ticked, and you must be signed in to the
+  web UI as the RomM user that approved the pairing: RomM lists only your own devices. A PSP paired
+  by an older Skiff, with those permissions unticked, or with a token pasted by hand says **Pair
+  again to allow it** in that row: choose it and pair again.
+- **Skiff must have connected once since** you updated it to 0.5.0, paired it or turned the row on:
+  it tells RomM each time it connects. Open Skiff and wait for the library.
+- The **Games from RomM** row must say **On**.
+
+The PSP shows as online only while Skiff is open and connected. If you deleted the PSP's device in
+RomM, pair again. A game sent anyway waits in RomM until Skiff picks it up, for up to 2 days.
+
+## The PSP stays listed after changing user or server
+
+After you change the server in Skiff, or pair again as another RomM user, the PSP's old device
+("Skiff on PSP", on the old server or under the old RomM user) still says it can receive games, so
+RomM keeps listing it (offline), and games sent to it expire unseen after 2 days. Skiff no longer
+uses that device and cannot change it: sign in to that RomM as that user and delete the device
+under **Settings → Devices**.
+
 ## Not an error (5)
 
 | Code | Meaning | What to try |
@@ -60,8 +87,8 @@ with your PSP model and firmware.
 | 215 | Save sync needs RomM 5.4 or newer | Browsing and downloading work with RomM 5.3, but syncing saves relies on what RomM 5.4 added: a record of what each device synced, and the save ID it reads from each PSP game when it scans. Update RomM to 5.4 or newer, then rescan the PSP platform so RomM reads each game's save ID |
 | 216 | This PSP may not sync saves | RomM refused a save sync request with this PSP's token: your RomM user's role lacks the save permissions (reading and writing assets and devices), or the token no longer has them. In **Settings**, choose **Pair again** and leave save sync ticked; your downloads and installed games stay. If it keeps happening, check that your RomM user's role may read and write assets and devices. A PSP paired by an older Skiff, with save sync unticked on RomM's pairing page, or with a token pasted by hand shows no error: Settings → **Saves** offers **Pair again** ([Sync saves](06-sync-saves.md)) |
 | 217 | The save from RomM does not match its checksum | The save arrived whole, but its contents are not the ones RomM recorded for it, so Skiff did not restore it: the save on this PSP is untouched. This usually means the save file was changed on the server; sync again. If it keeps happening, upload the save again from the device that made it |
-| 218 | RomM did not let this PSP receive games | RomM refused this PSP's token when Skiff registered it to receive games sent from RomM's web UI (**Install on device**) or asked for them: the token lacks the device permissions (writing devices, reading ROMs), or it is not this PSP's own (a token pasted by hand). In **Settings**, choose **Pair again** and leave the device permissions ticked; your downloads and installed games stay. If it keeps happening, check that your RomM user's role may write devices |
-| 219 | That game is not a PSP game | Not shown on the PSP: it is the reason RomM shows for a game sent to this PSP from RomM's web UI that belongs to another platform. RomM offers **Install on device** for any game, but Skiff only installs PSP games. Send a game from RomM's PSP platform instead |
+| 218 | RomM did not let this PSP receive games | Only in `skiff.log`: RomM refused this PSP's token when Skiff told RomM it can receive games sent from RomM's web UI (**Install on device**), asked for them or reported one. The token lacks the device permissions (writing devices, reading ROMs), or it is not this PSP's own (a token pasted by hand). Skiff stops asking, and **Settings → Games from RomM** says **Pair again to allow it**: choose it and leave the device permissions ticked; your downloads and installed games stay. If it keeps happening, check that your RomM user's role may write devices ([Games sent from RomM](04-connect-to-romm.md#games-sent-from-romm)) |
+| 219 | That game is not a PSP game | Not shown on the PSP: it is the reason RomM shows ("That game is not a PSP game [219]", or "Ese juego no es de PSP [219]" on a PSP set to Spanish) for a game sent to this PSP from RomM's web UI that belongs to another platform. RomM offers **Install on device** for games of any platform but Windows ones, but Skiff only installs PSP games. Send a game from RomM's PSP platform instead |
 
 ## Memory Stick errors (300–309)
 

@@ -26,7 +26,9 @@ A Wi-Fi network the PSP can join. The PSP's Wi-Fi is from 2004 and modern router
 ## The RomM server
 
 A running [RomM](https://github.com/rommapp/romm) server, version **5.3 or newer** (**5.4 or
-newer** to [sync saves](06-sync-saves.md)), with your PSP games scanned into it. You need:
+newer** to [sync saves](06-sync-saves.md) and to get
+[games sent from RomM](04-connect-to-romm.md#games-sent-from-romm)), with your PSP games scanned
+into it. You need:
 
 - its address, as you type it in a browser (for example `http://192.168.1.20:8080` or
   `https://romm.example.com`);

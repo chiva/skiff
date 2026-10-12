@@ -503,11 +503,11 @@ skiff_err app_reset_server(skiff_app *app) {
 
 static int env_valid(const skiff_app_env *env) {
     return env->now_ms != NULL && env->measure != NULL && env->switch_on != NULL &&
-           env->net_start != NULL && env->net_poll != NULL && env->net_profile != NULL &&
-           env->net_profile_name != NULL && env->tls_start != NULL && env->open_transport != NULL &&
-           env->random != NULL && env->start_worker != NULL && env->stop_worker != NULL &&
-           env->call_start != NULL && env->call_done != NULL && env->call_cancel != NULL &&
-           env->suspends != NULL;
+           env->net_start != NULL && env->net_poll != NULL && env->net_online != NULL &&
+           env->net_profile != NULL && env->net_profile_name != NULL && env->tls_start != NULL &&
+           env->open_transport != NULL && env->random != NULL && env->start_worker != NULL &&
+           env->stop_worker != NULL && env->call_start != NULL && env->call_done != NULL &&
+           env->call_cancel != NULL && env->suspends != NULL;
 }
 
 static int locks_valid(const skiff_app_config *config) {

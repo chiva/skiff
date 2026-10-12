@@ -225,6 +225,9 @@ typedef struct app_batch {
     skiff_err plan_error;
 } app_batch;
 
+/* While claims wait for the Wi-Fi, the platform is asked this often whether something else joined
+ * it again (skiff_app_env.net_online). */
+#define APP_SENDS_JOIN_PROBE_MS 1000
 /* A round of games sent from RomM, from its claim to its reports (app_sends.c), on the heap. */
 typedef struct app_sends_round app_sends_round;
 
@@ -249,11 +252,14 @@ typedef struct app_sends {
     app_sends_round *round;
     /* The last failed claim's error, logged once until another result. */
     skiff_err last_error;
+    /* When the platform may next be asked whether the Wi-Fi is joined again (app_now()). */
+    int64_t next_probe_ms;
     /* remote_install true was sent on this connection. */
     int registered;
-    /* The player switched the setting off: remote_install false is sent at the next chance in this
-     * run. */
-    int unregister_pending;
+    /* Switched off: remote_install false was sent, or tried, on this connection (once per
+     * connection, so RomM stops listing this PSP even if an earlier run could not tell it; not
+     * again after a failure until the next connection). */
+    int unregistered;
     /* RomM refused the token (218): Settings offers Pair again until a new pairing or server. */
     int forbidden;
     /* RomM answered 404 (the device deleted, or sends turned off since the heartbeat): no claim

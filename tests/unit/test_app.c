@@ -86,6 +86,9 @@ typedef struct fake_env {
     skiff_err call_start_error;
     /* How many times the PSP has suspended (env.suspends()). */
     uint32_t suspends;
+    /* What env.net_online() says (something else joined the Wi-Fi), and how often it was asked. */
+    int online;
+    int online_asks;
 } fake_env;
 
 static char dir[TEMP_DIR_PATH_MAX];
@@ -136,6 +139,12 @@ static skiff_err env_net_poll(void *ctx, int *joined) {
     }
     *joined = e->join_polls-- <= 0;
     return SKIFF_OK;
+}
+
+static int env_net_online(void *ctx) {
+    fake_env *e = ctx;
+    e->online_asks++;
+    return e->online;
 }
 
 static skiff_err env_net_profile(void *ctx, int *profile) {
@@ -229,6 +238,7 @@ static skiff_app_env make_env(void) {
         .switch_on = env_switch_on,
         .net_start = env_net_start,
         .net_poll = env_net_poll,
+        .net_online = env_net_online,
         .net_profile = env_net_profile,
         .net_profile_name = env_profile_name,
         .tls_start = env_tls,
@@ -3289,6 +3299,9 @@ static void test_bad_arguments_and_locks(void) {
     env.suspends = NULL;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
     env = make_env();
+    env.net_online = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_app_create(&config, &env, &other));
+    env = make_env();
     int mutexes[4];
     config.lock = count_lock;
     config.unlock = no_unlock;
@@ -6310,8 +6323,67 @@ static void test_no_request_on_romm_5_3_turned_off_without_devices_write_or_swit
                     1);
     assert_no_sends(SAVES_ROMM, "true", BROWSE_SCOPES, "",
                     "Games from RomM: Pair again to allow it", 0);
-    assert_no_sends(SAVES_ROMM, "true", SENDS_SCOPES, "[downloads]\nfrom_romm = off\n",
-                    "Games from RomM: Off", 0);
+}
+
+static void test_switched_off_tells_romm_once_per_connection_and_never_claims(void) {
+    serve_register(0);
+    open_sends_library_on(SAVES_ROMM, "true", SENDS_SCOPES, "[downloads]\nfrom_romm = off\n");
+    TEST_PRINTF("an earlier run may have quit before telling RomM: false once per connection");
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":false}}",
+                             last_request_to(DEVICE_PATH)->body);
+    TEST_ASSERT_EQUAL_size_t(0, requests_to(CLAIM_PATH));
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_size_t(0, requests_to(CLAIM_PATH));
+    TEST_PRINTF("no probe of the Wi-Fi for it either: nothing left to do");
+    TEST_ASSERT_EQUAL_INT(0, env_state.online_asks);
+    TEST_PRINTF("the next connection tells RomM again, and still never claims");
+    env_state.suspends++;
+    open_details(1);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_size_t(0, requests_to(CLAIM_PATH));
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    open_sends_row();
+    TEST_ASSERT_EQUAL_STRING("Games from RomM: Off", sends_row()->label);
+}
+
+static void test_claims_go_on_once_something_else_joins_the_wifi_again(void) {
+    serve_register(1);
+    fake_route *lost = serve_empty_claim();
+    lost->fail_before_response = SKIFF_ERR_NET_CONNECT;
+    lost->max_uses = 1;
+    serve_empty_claim();
+    open_sends_library();
+    TEST_ASSERT_FALSE(app->net_joined);
+    const int joins = env_state.net_starts;
+    TEST_PRINTF("the platform is asked at most once a second; nobody has joined yet");
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_PRINTF("asked %d time(s)", env_state.online_asks);
+    TEST_ASSERT_GREATER_THAN_INT(0, env_state.online_asks);
+    TEST_ASSERT_TRUE(env_state.online_asks <=
+                     (int)(2 * CLAIM_INTERVAL / APP_SENDS_JOIN_PROBE_MS) + 1);
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    TEST_PRINTF("the download worker rejoins (a PSP left on Downloads): the claim follows");
+    env_state.online = 1;
+    wait_ms(APP_SENDS_JOIN_PROBE_MS + 100);
+    run_sends();
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
+    TEST_ASSERT_TRUE(app->net_joined);
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
+    TEST_PRINTF("same connection to RomM: remote_install is not sent again");
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(DEVICE_PATH));
+    const int asks = env_state.online_asks;
+    wait_ms(CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(CLAIM_PATH));
+    TEST_ASSERT_EQUAL_INT(asks, env_state.online_asks);
+    TEST_PRINTF("a suspend: a join the platform does not vouch for resumes nothing");
+    env_state.online = 0;
+    env_state.suspends++;
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(CLAIM_PATH));
+    TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);
 }
 
 static void test_sends_romm_cannot_describe_or_skiff_cannot_install_are_refused_with_why(void) {
@@ -6614,7 +6686,7 @@ static void test_switching_games_from_romm_off_tells_romm_and_stops_claims(void)
     TEST_ASSERT_NOT_NULL(strstr(config, "from_romm = on\n"));
 }
 
-static void test_a_failed_switch_off_is_tried_again_after_the_interval(void) {
+static void test_a_failed_switch_off_is_tried_again_on_the_next_connection(void) {
     serve_register(1)->max_uses = 1;
     serve_raw(DEVICE_PATH,
               "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n"
@@ -6629,17 +6701,23 @@ static void test_a_failed_switch_off_is_tried_again_after_the_interval(void) {
     frame(0);
     run_sends();
     TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
-    TEST_PRINTF("not again before the interval, then once");
-    wait_ms(CLAIM_INTERVAL - 200);
+    TEST_PRINTF("not again on this connection, and never a claim");
+    wait_ms(2 * CLAIM_INTERVAL);
     TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
-    wait_ms(400);
-    run_sends();
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+    static char log_text[SENDS_LOG_MAX];
+    read_log(log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text,
+                                "send: remote_install false: SKIFF_ERR_ROMM_SERVER (203), "
+                                "not again until the next connection"));
+    TEST_PRINTF("the next connection tries once more");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    env_state.suspends++;
+    open_details(1);
     TEST_ASSERT_EQUAL_size_t(3, requests_to(DEVICE_PATH));
     TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":false}}",
                              last_request_to(DEVICE_PATH)->body);
-    TEST_PRINTF("told: nothing more");
-    wait_ms(2 * CLAIM_INTERVAL);
-    TEST_ASSERT_EQUAL_size_t(3, requests_to(DEVICE_PATH));
     TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
 }
 
@@ -6899,7 +6977,9 @@ int main(void) {
     RUN_TEST(test_a_send_seen_again_finds_its_game_in_downloads);
     RUN_TEST(test_a_send_whose_game_is_lost_with_the_connection_stays_in_romm);
     RUN_TEST(test_switching_games_from_romm_off_tells_romm_and_stops_claims);
-    RUN_TEST(test_a_failed_switch_off_is_tried_again_after_the_interval);
+    RUN_TEST(test_a_failed_switch_off_is_tried_again_on_the_next_connection);
+    RUN_TEST(test_switched_off_tells_romm_once_per_connection_and_never_claims);
+    RUN_TEST(test_claims_go_on_once_something_else_joins_the_wifi_again);
     RUN_TEST(test_download_all_waits_for_a_round_that_may_take_its_room);
     RUN_TEST(test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing);
     RUN_TEST(test_a_refusal_is_said_in_the_psps_language);

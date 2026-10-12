@@ -115,6 +115,7 @@ static void end_round(skiff_app *app) {
 void app_sends_connected(skiff_app *app) {
     app_sends *sends = &app->sends;
     sends->registered = 0;
+    sends->unregistered = 0;
     sends->gone = 0;
     sends->next_claim_ms = 0;
     sends->last_error = SKIFF_OK;
@@ -123,7 +124,6 @@ void app_sends_connected(skiff_app *app) {
 void app_sends_reset(skiff_app *app) {
     app_sends_connected(app);
     app->sends.forbidden = 0;
-    app->sends.unregister_pending = 0;
     /* A round whose call still runs ends through app_sends_dropped() once it is done. */
     if (!is_sends_call(app->call.kind)) {
         end_round(app);
@@ -161,16 +161,17 @@ app_sends_block app_sends_blocked(const skiff_app *app) {
     return SENDS_OK;
 }
 
+/* Sends have something to do on this connection: claims (on), or remote_install false not sent
+ * yet (off: never a claim). */
+static int has_work(const skiff_app *app) {
+    const app_sends *sends = &app->sends;
+    return app_sends_blocked(app) == SENDS_OK && !sends->gone && sends->round == NULL &&
+           (app->settings.from_romm || !sends->unregistered);
+}
+
 /* A sends call is wanted now: a claim that is due, or remote_install false still to send. */
 static int wanted(const skiff_app *app) {
-    const app_sends *sends = &app->sends;
-    if (app_sends_blocked(app) != SENDS_OK || sends->gone || !app->net_joined ||
-        sends->round != NULL) {
-        return 0;
-    }
-    /* One that failed waits for the interval, as a claim does. */
-    const int due = app_now(app) >= sends->next_claim_ms;
-    return app->settings.from_romm ? due : sends->unregister_pending && due;
+    return has_work(app) && app->net_joined && app_now(app) >= app->sends.next_claim_ms;
 }
 
 /* Sends wait for any other call and the library's requests, "Download all", and never run while
@@ -195,10 +196,11 @@ int app_sends_taking_room(const skiff_app *app) {
     return app->sends.round != NULL && app->call.kind != CALL_SENDS_REPORT;
 }
 
-/* A claim that did not happen: tried again after the interval, unless RomM refused the token or no
- * longer knows the device, or the connection went (claims then wait for the next join). Logged
- * once while the same error repeats. */
-static void claim_failed(skiff_app *app, skiff_err err) {
+/* A claim (or remote_install, what) that did not happen: tried again after the interval, unless
+ * RomM refused the token or no longer knows the device, the connection went (claims then wait for
+ * the next join), or it was remote_install false (tried once per connection). Logged once while
+ * the same error repeats. */
+static void claim_failed(skiff_app *app, const char *what, skiff_err err) {
     app_sends *sends = &app->sends;
     sends->next_claim_ms = app_now(app) + SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS;
     if (err == SKIFF_ERR_ROMM_SENDS_FORBIDDEN) {
@@ -207,10 +209,11 @@ static void claim_failed(skiff_app *app, skiff_err err) {
         sends->gone = 1;
     }
     if (err != sends->last_error) {
-        skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG, "send: claim: %s (%d)%s",
+        skiff_log_write(app->log, SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG, "send: %s: %s (%d)%s", what,
                         skiff_err_name(err), (int)err,
                         sends->forbidden            ? ", Settings offers Pair again"
                         : sends->gone               ? ", no claim until the next connection"
+                        : !app->settings.from_romm  ? ", not again until the next connection"
                         : app_is_network_error(err) ? ", waiting for the Wi-Fi to be joined"
                                                     : "");
     }
@@ -223,7 +226,7 @@ static void start_claim(skiff_app *app) {
     app_sends *sends = &app->sends;
     app_sends_round *round = calloc(1, sizeof *round);
     if (round == NULL) {
-        claim_failed(app, SKIFF_ERR_NO_MEMORY);
+        claim_failed(app, "claim", SKIFF_ERR_NO_MEMORY);
         return;
     }
     snprintf(round->device_id, sizeof round->device_id, "%s", app->settings.device_id);
@@ -240,7 +243,29 @@ static void start_claim(skiff_app *app) {
     app_call_start(app, CALL_SENDS_CLAIM);
 }
 
+/* Claims that wait for the Wi-Fi ask the platform, at most every APP_SENDS_JOIN_PROBE_MS, whether
+ * something else joined it again (the download worker rejoins on its own, and a PSP left on
+ * Downloads overnight makes no request of the player's). Skiff never joins for sends, and the
+ * platform never counts a join made before the last suspend. */
+static void notice_join(skiff_app *app) {
+    app_sends *sends = &app->sends;
+    if (app->net_joined || app->connect != CONNECT_DONE || app->dialog != SKIFF_APP_DIALOG_NONE ||
+        !has_work(app) || app_now(app) < sends->next_probe_ms) {
+        return;
+    }
+    sends->next_probe_ms = app_now(app) + APP_SENDS_JOIN_PROBE_MS;
+    if (!app->env.net_online(app->env.ctx)) {
+        return;
+    }
+    skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
+                    "send: the Wi-Fi is joined again, claims go on");
+    app->net_joined = 1;
+    sends->next_claim_ms = 0;
+    sends->last_error = SKIFF_OK;
+}
+
 void app_sends_update(skiff_app *app) {
+    notice_join(app);
     if (wanted(app) && may_run(app)) {
         start_claim(app);
     }
@@ -599,18 +624,23 @@ void app_sends_claimed(skiff_app *app) {
     if (round == NULL) {
         return;
     }
+    if (round->register_first && !round->on) {
+        sends->unregistered = 1;
+    }
     if (round->registered) {
         sends->registered = round->on;
-        if (!round->on) {
-            sends->unregister_pending = 0;
-        }
         skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
                         "send: RomM %s games to this PSP",
                         round->on ? "may send" : "sends no more");
     }
     if (!round->claimed) {
         if (err != SKIFF_OK) {
-            claim_failed(app, err);
+            const int register_failed = round->register_first && !round->registered;
+            claim_failed(app,
+                         !register_failed ? "claim"
+                         : round->on      ? "remote_install true"
+                                          : "remote_install false",
+                         err);
         }
         end_round(app);
         return;
@@ -690,8 +720,8 @@ void app_sends_row(const skiff_app *app, char *label, size_t size, int *dim) {
     app_fit(app, text, SKIFF_APP_LABEL_WIDTH, label, size);
 }
 
-/* The player switches the setting: saved in config.ini; off tells RomM at the next chance (it
- * may still offer this PSP from an earlier run), on claims at once. */
+/* The player switches the setting: saved in config.ini; off tells RomM at once, on claims at
+ * once. */
 static void toggle(skiff_app *app) {
     const int on = !app->settings.from_romm;
     const skiff_err err =
@@ -705,7 +735,7 @@ static void toggle(skiff_app *app) {
                        SKIFF_APP_SCREEN_SETTINGS);
         return;
     }
-    app->sends.unregister_pending = !on;
+    app->sends.unregistered = 0;
     app->sends.next_claim_ms = 0;
     app->dirty = 1;
 }

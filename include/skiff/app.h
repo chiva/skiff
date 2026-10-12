@@ -284,6 +284,10 @@ typedef struct skiff_app_env {
      * join's error (SKIFF_ERR_NET_UNAVAILABLE, SKIFF_ERR_NET_WIFI_JOIN). */
     skiff_err (*net_start)(void *ctx, int profile);
     skiff_err (*net_poll)(void *ctx, int *joined);
+    /* 1 when the Wi-Fi is joined now by a join made after the last suspend, whoever made it (the
+     * download worker rejoins on its own); 0 otherwise, or while the network is busy (a join under
+     * way). Never joins, never waits. */
+    int (*net_online)(void *ctx);
     /* After the network picker connected: the connection it joined, for config.ini. */
     skiff_err (*net_profile)(void *ctx, int *profile);
     /* The name the player gave a Network Settings connection, shown while joining it. */

@@ -192,6 +192,21 @@ static skiff_err begin_join(skiff_psp_app *platform, int *joined) {
     return err;
 }
 
+/* Read under the network lock without waiting for it: while the worker holds it (a rejoin under
+ * way) or the app's own join does, the answer is "not yet". A join from before the last suspend
+ * never counts, though the access point may still read as joined. */
+static int net_online(void *ctx) {
+    skiff_psp_app *platform = ctx;
+    if (platform->join_wanted || platform->holds_net ||
+        !skiff_psp_mutex_try_lock(&platform->net_lock)) {
+        return 0;
+    }
+    const int online = platform->net.joined_suspends == skiff_psp_power_events_now().suspends &&
+                       skiff_psp_net_online(&platform->net) == SKIFF_OK;
+    skiff_psp_mutex_unlock(&platform->net_lock);
+    return online;
+}
+
 static skiff_err net_start(void *ctx, int profile) {
     skiff_psp_app *platform = ctx;
     platform->join_profile = profile;
@@ -427,6 +442,7 @@ skiff_app_env skiff_psp_app_env(skiff_psp_app *platform) {
         .switch_on = switch_on,
         .net_start = net_start,
         .net_poll = net_poll,
+        .net_online = net_online,
         .net_profile = net_profile,
         .net_profile_name = net_profile_name,
         .tls_start = tls_start,

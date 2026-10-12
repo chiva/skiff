@@ -121,7 +121,7 @@ computer, and send it to the PSP: Skiff adds it to **Downloads** by itself, with
    and choose **Install on device**.
 2. Tick **Skiff on PSP**. RomM lists only your own devices that can receive games; a dot shows the
    PSP online while Skiff is open and connected.
-3. With Skiff open, the game is in Downloads within about 20 seconds, also while Skiff sits on
+3. With Skiff open, the game is in Downloads within about 10 seconds, also while Skiff sits on
    the Downloads screen.
    Skiff's header says "From RomM: 1 added to Downloads" ("Desde RomM: 1 añadidos a Descargas" on a
    PSP set to Spanish), and RomM says **Added to downloads** and sends you a notification.

@@ -110,7 +110,7 @@ Built (#103, #105) for the next release; waiting for hardware run I1 before it i
 
 A player picks the PSP in RomM 5.4's web UI (**Install on device**), on a phone or computer, and
 Skiff adds the game to Downloads without asking. Skiff holds no socket, so it claims sends right
-after connecting and then every 20 s while connected (RomM shows the PSP online for 90 s after a
+after connecting and then every 10 s while connected (RomM shows the PSP online for 90 s after a
 claim); a send made while Skiff is closed waits in RomM, two days by default. Skiff reports each
 send to RomM once it is queued ("Added to downloads"), already installed, or refused with its
 reason in the PSP's language: a game of another platform (219), one Skiff cannot install, a
@@ -118,9 +118,9 @@ changed installed copy, or no room. A Settings switch (on by default) tells RomM
 the PSP. See [Architecture](architecture.md#the-app) and the
 [guide](../guide/04-connect-to-romm.md#games-sent-from-romm).
 
-I1 checks on a PSP-1000 that the PSP shows online, sends land within 20 s, also those made while
+I1 checks on a PSP-1000 that the PSP shows online, sends land on the next claim (about one interval), also those made while
 Skiff was closed and while it sits on Downloads after the Wi-Fi came back, refusals reach RomM
-with their reason, and the 20 s claims cost no download speed or frames
+with their reason, and the claims cost no download speed or frames
 ([Testing](testing.md#the-app-on-a-psp)).
 
 ## Phase 5: PS1

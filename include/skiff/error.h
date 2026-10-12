@@ -47,6 +47,11 @@
     X(SKIFF_ERR_ROMM_SAVE_TOO_LARGE, 213, "The save is too large for the RomM server to accept")   \
     X(SKIFF_ERR_ROMM_COLLECTIONS_TOO_LARGE, 214,                                                   \
       "RomM has too many collections, or too large ones, for the PSP to list")                     \
+    X(SKIFF_ERR_ROMM_SAVES_UNSUPPORTED, 215, "Save sync needs RomM 5.4 or newer")                  \
+    X(SKIFF_ERR_ROMM_SAVES_FORBIDDEN, 216,                                                         \
+      "This PSP may not sync saves with RomM; pair it again and allow save sync")                  \
+    X(SKIFF_ERR_ROMM_SAVE_MISMATCH, 217,                                                           \
+      "The save from RomM does not match RomM's checksum; sync it again")                          \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, 300, "No Memory Stick found")                                    \
     X(SKIFF_ERR_STORAGE_NO_SPACE, 301, "Not enough free space on the Memory Stick")                \
     X(SKIFF_ERR_STORAGE_IO, 302, "Could not read or write the Memory Stick")                       \

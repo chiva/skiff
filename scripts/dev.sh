@@ -262,6 +262,7 @@ romm_up() {
     compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
       ${SKIFF_PAYLOAD_BYTES:+-e SKIFF_PAYLOAD_BYTES="$SKIFF_PAYLOAD_BYTES"} \
       ${SKIFF_LIBRARY_ROMS:+-e SKIFF_LIBRARY_ROMS="$SKIFF_LIBRARY_ROMS"} \
+      ${SKIFF_SAVE_DISC:+-e SKIFF_SAVE_DISC="$SKIFF_SAVE_DISC"} \
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
@@ -386,8 +387,9 @@ run_command() {
   romm-record)
     # The server exists only for the recording: stop it even when starting or recording fails.
     trap romm_down EXIT
-    # Never the A1 library: the fixtures record the default seed.
-    SKIFF_LIBRARY_ROMS="" SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
+    # Never the A1 library nor the save disc: the fixtures record the two seeded ROMs.
+    SKIFF_LIBRARY_ROMS="" SKIFF_SAVE_DISC=0 SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" \
+      romm_up 127.0.0.1
     run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
     trap - EXIT
     romm_down

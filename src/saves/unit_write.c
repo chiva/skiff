@@ -209,6 +209,52 @@ static int writable(const skiff_saves_unit *unit) {
     return total <= SKIFF_SAVES_UNIT_BYTES_MAX;
 }
 
+/* The unit's files' MD5s, empty again after a failure. */
+static void forget_md5s(skiff_saves_unit *unit) {
+    for (size_t i = 0; i < unit->file_count; i++) {
+        unit->files[i].md5[0] = '\0';
+    }
+}
+
+skiff_err skiff_saves_hash_unit(skiff_storage *storage, const skiff_storage_roots *roots,
+                                skiff_saves_unit *unit) {
+    if (unit != NULL) {
+        unit->content_hash[0] = '\0';
+    }
+    if (storage == NULL || roots == NULL || unit == NULL || !writable(unit)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    writer *w = calloc(1, sizeof *w);
+    if (w == NULL) {
+        return SKIFF_ERR_NO_MEMORY;
+    }
+    w->storage = storage;
+    w->roots = roots;
+    w->unit = unit;
+    skiff_err err = SKIFF_OK;
+    for (size_t i = 0; err == SKIFF_OK && i < unit->file_count; i++) {
+        skiff_md5 md5;
+        skiff_md5_init(&md5);
+        file_pass pass;
+        err = read_file(w, i, NULL, &md5, &pass);
+        if (err == SKIFF_OK && pass.size != unit->files[i].size) {
+            err = SKIFF_ERR_STORAGE_IO;
+        }
+        if (err == SKIFF_OK) {
+            unsigned char digest[SKIFF_MD5_DIGEST_BYTES];
+            skiff_md5_final(&md5, digest);
+            skiff_md5_hex(digest, unit->files[i].md5);
+        }
+    }
+    free(w);
+    if (err == SKIFF_OK) {
+        saves_content_hash(unit);
+    } else {
+        forget_md5s(unit);
+    }
+    return err;
+}
+
 skiff_err skiff_saves_write_unit(skiff_storage *storage, const skiff_storage_roots *roots,
                                  skiff_saves_unit *unit, const char *unit_path) {
     if (unit != NULL) {
@@ -243,9 +289,7 @@ skiff_err skiff_saves_write_unit(skiff_storage *storage, const skiff_storage_roo
     if (err == SKIFF_OK) {
         saves_content_hash(unit);
     } else {
-        for (size_t i = 0; i < unit->file_count; i++) {
-            unit->files[i].md5[0] = '\0';
-        }
+        forget_md5s(unit);
     }
     return err;
 }

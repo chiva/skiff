@@ -22,6 +22,10 @@
  *   5. skiff_romm_saves_complete() (POST /api/sync/sessions/{id}/complete): closes the session
  *      with the counts.
  *
+ * skiff_romm_saves_get() (GET /api/saves/{id}) reads one save, for the device that uploaded it.
+ * An upload and a download are long transfers (skiff_http_request.long_transfer): a save can be a
+ * few MB, which a PSP's Wi-Fi may take longer to move than the limit on the screen's requests.
+ *
  * The token needs assets.read, assets.write, devices.read and devices.write (RomM's default user
  * group grants them; pairing asks for them as optional scopes): RomM refuses a token without them
  * with 403, SKIFF_ERR_ROMM_FORBIDDEN. Every call returns what skiff/romm.h's calls return (the
@@ -38,6 +42,13 @@
 #include "skiff/error.h"
 #include "skiff/romm.h"
 #include "skiff/storage.h"
+
+/* The scopes save sync needs (config.ini's [auth] scopes holds them when RomM granted them): the
+ * player's own saves, and RomM's record of what this PSP synced. */
+#define SKIFF_ROMM_SCOPE_ASSETS_READ "assets.read"
+#define SKIFF_ROMM_SCOPE_ASSETS_WRITE "assets.write"
+#define SKIFF_ROMM_SCOPE_DEVICES_READ "devices.read"
+#define SKIFF_ROMM_SCOPE_DEVICES_WRITE "devices.write"
 
 /* RomM's limits: a slot of up to 255 bytes, an emulator name of up to 50, 500 ROMs a negotiate.
  * Buffer sizes include the terminator. */
@@ -95,6 +106,10 @@ typedef struct skiff_romm_sync_query {
     size_t rom_count;
     const skiff_romm_save_state *saves;
     size_t save_count;
+    /* RomM's restore_unlisted: also report the slots this PSP synced before and no longer lists
+     * (its save was deleted here), which RomM otherwise leaves out as deliberately deleted. Skiff
+     * decides those itself (it asks), so it sets this. */
+    int restore_unlisted;
 } skiff_romm_sync_query;
 
 typedef struct skiff_romm_sync_operation {
@@ -223,6 +238,13 @@ skiff_err skiff_romm_saves_upload(skiff_romm_client *client, const skiff_romm_up
  */
 skiff_err skiff_romm_saves_download(skiff_romm_client *client, const skiff_romm_download *download,
                                     uint64_t *size);
+
+/* GET /api/saves/{save_id}?device_id=: the save as RomM keeps it, with the name of the device that
+ * uploaded it (for "from <device>"). An answer that is not that save (skiff_romm_parse_save()'s
+ * rules, and its id) is SKIFF_ERR_ROMM_BAD_RESPONSE; SKIFF_ERR_INVALID_ARG for a save id of 0 or a
+ * device id RomM would refuse. out is empty on error. */
+skiff_err skiff_romm_saves_get(skiff_romm_client *client, uint64_t save_id, const char *device_id,
+                               skiff_romm_save *out);
 
 /* The suffix of a download that is not whole yet. */
 #define SKIFF_ROMM_DOWNLOAD_PART_SUFFIX ".part"

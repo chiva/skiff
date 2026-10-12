@@ -127,6 +127,11 @@ static void test_the_decision_table_row_by_row(void) {
          SKIFF_SAVES_REASON_ONLY_SERVER},
         {"only server, baseline of an empty local", NULL, HASH_B, EMPTY, HASH_C,
          SKIFF_SAVES_DOWNLOAD, SKIFF_SAVES_REASON_ONLY_SERVER},
+        /* A save the player chose to leave deleted stays so while RomM's is the one it was. */
+        {"left deleted on this PSP, server unchanged", NULL, HASH_C, EMPTY, HASH_C,
+         SKIFF_SAVES_IN_SYNC, SKIFF_SAVES_REASON_UNCHANGED},
+        {"left deleted, an empty local unit", EMPTY, HASH_C, EMPTY, HASH_C, SKIFF_SAVES_IN_SYNC,
+         SKIFF_SAVES_REASON_UNCHANGED},
         /* ... but a save deleted on this PSP since the last sync asks. */
         {"deleted on this PSP, server unchanged", NULL, HASH_B, HASH_A, HASH_B,
          SKIFF_SAVES_ASK_DELETED_LOCAL, SKIFF_SAVES_REASON_DELETED_LOCAL},
@@ -404,6 +409,126 @@ static void test_the_baseline_holds_512_games_and_saves_them_all(void) {
                           skiff_saves_baseline_format(baseline, text, 16, &length));
 }
 
+/* ---- Remembered ROMs ---- */
+
+#define ROM_A 11U
+#define ROM_B 12U
+#define ROM_C 13U
+
+static void test_remembered_roms_round_trip_and_outlive_forget_all(void) {
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(baseline, ROM_A));
+    int changed = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_baseline_remember_rom(baseline, ROM_A, GAME, &changed));
+    TEST_ASSERT_EQUAL_INT(1, changed);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_remember_rom(baseline, ROM_B, "", NULL));
+    TEST_PRINTF("the same again changes nothing");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_baseline_remember_rom(baseline, ROM_A, GAME, &changed));
+    TEST_ASSERT_EQUAL_INT(0, changed);
+    const skiff_saves_baseline_entry entry = make_entry(GAME, HASH_A, HASH_B);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_record(baseline, &entry));
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_format(baseline, text, TEXT_MAX, &length));
+    TEST_PRINTF("saves.json: %.*s", (int)length, text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "\"roms\":[{\"rom_id\":11,\"save_target\":\"" GAME
+                                      "\"},{\"rom_id\":12,\"save_target\":\"\"}]"));
+    skiff_saves_baseline *parsed = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_create(&parsed));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_parse(parsed, text, length));
+    TEST_ASSERT_EQUAL_STRING(GAME, skiff_saves_baseline_rom_target(parsed, ROM_A));
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(parsed, ROM_B));
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(parsed, ROM_C));
+    TEST_PRINTF("pairing again forgets the games, not the server's ROMs");
+    skiff_saves_baseline_forget_all(parsed);
+    TEST_ASSERT_EQUAL_size_t(0, parsed->count);
+    TEST_ASSERT_EQUAL_STRING(GAME, skiff_saves_baseline_rom_target(parsed, ROM_A));
+    TEST_PRINTF("a new server forgets them too");
+    skiff_saves_baseline_forget_roms(parsed);
+    skiff_saves_baseline_forget_roms(NULL);
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(parsed, ROM_A));
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(NULL, ROM_A));
+    skiff_saves_baseline_destroy(parsed);
+}
+
+static void test_remember_rom_replaces_refuses_and_forgets_the_oldest(void) {
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_remember_rom(baseline, ROM_A, "", NULL));
+    int changed = 0;
+    TEST_PRINTF("RomM read the save ID since: the new answer replaces the old");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_baseline_remember_rom(baseline, ROM_A, GAME, &changed));
+    TEST_ASSERT_EQUAL_INT(1, changed);
+    TEST_ASSERT_EQUAL_size_t(1, baseline->rom_count);
+    TEST_ASSERT_EQUAL_STRING(GAME, skiff_saves_baseline_rom_target(baseline, ROM_A));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_baseline_remember_rom(baseline, 0, GAME, &changed));
+    TEST_ASSERT_EQUAL_INT(0, changed);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_saves_baseline_remember_rom(
+                                                     baseline, SKIFF_SAVES_ID_MAX + 1, GAME, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_baseline_remember_rom(baseline, ROM_B, "../x", NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_baseline_remember_rom(baseline, ROM_B, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_saves_baseline_remember_rom(NULL, ROM_B, GAME, NULL));
+    TEST_PRINTF("a full list forgets its oldest ROM for a new one");
+    for (uint64_t id = 100; baseline->rom_count < SKIFF_SAVES_BASELINE_ROMS_MAX; id++) {
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                              skiff_saves_baseline_remember_rom(baseline, id, OTHER_GAME, NULL));
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_remember_rom(baseline, ROM_C, GAME, NULL));
+    TEST_ASSERT_EQUAL_size_t(SKIFF_SAVES_BASELINE_ROMS_MAX, baseline->rom_count);
+    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(baseline, ROM_A));
+    TEST_ASSERT_EQUAL_STRING(GAME, skiff_saves_baseline_rom_target(baseline, ROM_C));
+}
+
+/* The largest baseline: every game and every ROM, the longest values, within the file's cap. */
+static void test_a_full_baseline_with_every_rom_fits_saves_json(void) {
+    for (size_t i = 0; i < SKIFF_SAVES_BASELINE_GAMES_MAX; i++) {
+        char save_target[SKIFF_SAVES_TARGET_SIZE];
+        snprintf(save_target, sizeof save_target, "ULUS1%04zuABCDEFG", i);
+        skiff_saves_baseline_entry entry = make_entry(save_target, HASH_A, HASH_B);
+        entry.rom_id = SKIFF_SAVES_ID_MAX;
+        entry.server_save_id = SKIFF_SAVES_ID_MAX;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_record(baseline, &entry));
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_remember_rom(
+                                            baseline, SKIFF_SAVES_ID_MAX - i, save_target, NULL));
+    }
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_format(
+                                        baseline, text, SKIFF_SAVES_BASELINE_BYTES_MAX, &length));
+    TEST_PRINTF("512 games and 512 ROMs: %zu bytes of %zu", length, SKIFF_SAVES_BASELINE_BYTES_MAX);
+    skiff_saves_baseline *parsed = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_create(&parsed));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_parse(parsed, text, length));
+    TEST_ASSERT_EQUAL_size_t(SKIFF_SAVES_BASELINE_ROMS_MAX, parsed->rom_count);
+    skiff_saves_baseline_destroy(parsed);
+}
+
+/* One ROM remembered twice. */
+static const char TWICE[] = "{\"version\":1,\"games\":[],\"roms\":[{\"rom_id\":1,"
+                            "\"save_target\":\"\"},{\"rom_id\":1,\"save_target\":\"" GAME "\"}]}";
+
+static void test_saves_json_without_roms_loads_and_bad_roms_are_damage(void) {
+    static const char WITHOUT[] = "{\"version\":1,\"games\":[]}";
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_baseline_parse(baseline, WITHOUT, strlen(WITHOUT)));
+    TEST_ASSERT_EQUAL_size_t(0, baseline->rom_count);
+    static const char *const BAD[] = {
+        "{\"version\":1,\"games\":[],\"roms\":{}}",
+        "{\"version\":1,\"games\":[],\"roms\":[1]}",
+        "{\"version\":1,\"games\":[],\"roms\":[{\"rom_id\":0,\"save_target\":\"\"}]}",
+        "{\"version\":1,\"games\":[],\"roms\":[{\"rom_id\":1,\"save_target\":\"a/b\"}]}",
+        "{\"version\":1,\"games\":[],\"roms\":[{\"rom_id\":1}]}",
+        TWICE,
+    };
+    for (size_t i = 0; i < sizeof BAD / sizeof BAD[0]; i++) {
+        TEST_PRINTF("%s", BAD[i]);
+        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                              skiff_saves_baseline_parse(baseline, BAD[i], strlen(BAD[i])));
+        TEST_ASSERT_EQUAL_size_t(0, baseline->rom_count);
+    }
+}
+
 static void put_baseline_text(const char *path, const char *content, size_t length) {
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_replace_whole(posix, path, content, length));
 }
@@ -634,6 +759,10 @@ int main(void) {
     RUN_TEST(test_forget_all_makes_every_difference_ask);
     RUN_TEST(test_record_refuses_entries_it_could_not_save);
     RUN_TEST(test_the_baseline_holds_512_games_and_saves_them_all);
+    RUN_TEST(test_remembered_roms_round_trip_and_outlive_forget_all);
+    RUN_TEST(test_remember_rom_replaces_refuses_and_forgets_the_oldest);
+    RUN_TEST(test_a_full_baseline_with_every_rom_fits_saves_json);
+    RUN_TEST(test_saves_json_without_roms_loads_and_bad_roms_are_damage);
     RUN_TEST(test_a_damaged_saves_json_starts_empty_and_is_set_aside);
     RUN_TEST(test_an_oversized_saves_json_is_damaged);
     RUN_TEST(test_a_failed_load_refuses_to_save);

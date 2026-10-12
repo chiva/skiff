@@ -83,6 +83,11 @@ typedef struct skiff_http_request {
     /* NULL never stops the transfer. */
     skiff_http_stop_fn should_stop;
     void *stop_ctx;
+    /* A transfer whose length is the network's, not the server's: a save's upload or download,
+     * which on a PSP's slow Wi-Fi can outlast the limit a transport sets on a whole request
+     * (skiff_curl_config.total_timeout_s, the screen's 60 s). It gets no such limit: it ends when
+     * it completes, stalls (the transport's stall timeout) or the stop hook ends it. */
+    int long_transfer;
 } skiff_http_request;
 
 typedef struct skiff_transport skiff_transport;

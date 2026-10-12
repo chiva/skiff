@@ -26,6 +26,9 @@
 #define ROM_LIST_COLLECTION "&collection_id="
 #define ROM_LIST_SMART_COLLECTION "&smart_collection_id="
 #define ROM_LIST_WITH_FILES "&with_files=true"
+#define ROM_LIST_WITH_SAVES "&has_saves=true"
+/* RomM's save_target_layout for a PSP game's folders (its SaveTargetLayout.FOLDER_PREFIX). */
+#define SAVE_LAYOUT_FOLDER_PREFIX "folder-prefix"
 #define UNRESERVED_SYMBOLS "-._~"
 /* Kept as they are in a cover URL besides the unreserved ones: they separate the path's segments
  * and its query. */
@@ -247,6 +250,23 @@ static void read_only_file(const cJSON *item, skiff_romm_rom_summary *out) {
     out->has_file = 1;
 }
 
+/* save_target and save_target_layout: decoration for the saves layer, so anything Skiff would not
+ * keep reads as no save ID rather than refusing the ROM. */
+static void read_save_target(const cJSON *item, skiff_romm_rom_summary *out) {
+    char layout[sizeof SAVE_LAYOUT_FOLDER_PREFIX + 1];
+    const cJSON *layout_item = cJSON_GetObjectItemCaseSensitive(item, "save_target_layout");
+    if (!read_text(item, "save_target", out->save_target, sizeof out->save_target) ||
+        out->save_target[0] == '\0' || !cJSON_IsString(layout_item)) {
+        out->save_target[0] = '\0';
+        out->save_layout = SKIFF_ROMM_SAVE_LAYOUT_NONE;
+        return;
+    }
+    out->save_layout = read_text(item, "save_target_layout", layout, sizeof layout) &&
+                               strcmp(layout, SAVE_LAYOUT_FOLDER_PREFIX) == 0
+                           ? SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX
+                           : SKIFF_ROMM_SAVE_LAYOUT_OTHER;
+}
+
 static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     memset(out, 0, sizeof *out);
     if (!cJSON_IsObject(item) || !read_count(item, "id", &out->id) ||
@@ -259,6 +279,7 @@ static int parse_summary(const cJSON *item, skiff_romm_rom_summary *out) {
     }
     out->multiple_files = read_flag(item, "has_multiple_files");
     read_only_file(item, out);
+    read_save_target(item, out);
     return 1;
 }
 
@@ -597,6 +618,15 @@ static int parse_version(const char *text, skiff_romm_server *out) {
     return 1;
 }
 
+int skiff_romm_server_syncs_saves(const skiff_romm_server *server) {
+    if (server == NULL) {
+        return 0;
+    }
+    return !server->version_known || server->major > SKIFF_ROMM_SAVES_MIN_MAJOR ||
+           (server->major == SKIFF_ROMM_SAVES_MIN_MAJOR &&
+            server->minor >= SKIFF_ROMM_SAVES_MIN_MINOR);
+}
+
 skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out) {
     if (out == NULL) {
         return SKIFF_ERR_INVALID_ARG;
@@ -727,6 +757,7 @@ static skiff_err send_json(skiff_romm_client *client, skiff_http_method method, 
         request.body_size = body->size;
         request.content_type = body->content_type;
     }
+    request.long_transfer = body != NULL && body->long_transfer;
     request.on_body = collect_body;
     request.body_ctx = &sink;
     const skiff_err err = skiff_transport_perform(client->transport, &request, &response);
@@ -964,6 +995,9 @@ skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_
         break;
     case SKIFF_ROMM_LIST_FAVOURITES:
         snprintf(filter, sizeof filter, "%s", ROM_LIST_FAVOURITES);
+        break;
+    case SKIFF_ROMM_LIST_WITH_SAVES:
+        snprintf(filter, sizeof filter, "%s", ROM_LIST_WITH_SAVES);
         break;
     case SKIFF_ROMM_LIST_COLLECTION:
     case SKIFF_ROMM_LIST_SMART_COLLECTION:

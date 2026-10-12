@@ -137,7 +137,7 @@ static skiff_romm_save_state unit_state(void) {
 }
 
 static skiff_err negotiate(const skiff_romm_save_state *saves, size_t count, const char *device) {
-    const skiff_romm_sync_query query = {device, ROMS, 1, saves, count};
+    const skiff_romm_sync_query query = {device, ROMS, 1, saves, count, 0};
     const skiff_err err = skiff_romm_saves_negotiate(&client, &query, &plan);
     TEST_PRINTF("negotiate -> %s: session %llu, %zu operation(s)", skiff_err_name(err),
                 (unsigned long long)plan.session_id, plan.count);
@@ -180,6 +180,17 @@ static void test_negotiate_sends_this_psps_save_and_reads_an_upload(void) {
     TEST_ASSERT_EQUAL_STRING(EMULATOR, op->emulator);
     TEST_ASSERT_EQUAL_STRING("", op->server_content_hash);
     TEST_ASSERT_EQUAL_STRING("", op->server_updated_at);
+    TEST_ASSERT_FALSE_MESSAGE(fake.log[0].long_transfer, "a negotiate keeps the screen's limit");
+}
+
+static void test_negotiate_asks_back_the_saves_this_psp_stopped_listing(void) {
+    serve(PATH_NEGOTIATE, "romm/saves-negotiate-download.http");
+    const skiff_romm_sync_query query = {DEVICE_B, ROMS, 1, NULL, 0, 1};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&client, &query, &plan));
+    TEST_PRINTF("sent: %s", fake.log[0].body);
+    TEST_ASSERT_EQUAL_STRING("{\"device_id\":\"" DEVICE_B
+                             "\",\"restore_unlisted\":true,\"rom_ids\":[1],\"saves\":[]}",
+                             fake.log[0].body);
 }
 
 static void test_negotiate_offers_a_second_psp_the_download(void) {
@@ -241,7 +252,7 @@ static void test_negotiate_returns_every_slot_and_action(void) {
 
 static void test_negotiate_without_roms_asks_for_the_whole_library(void) {
     serve(PATH_NEGOTIATE, "romm/saves-negotiate-download.http");
-    const skiff_romm_sync_query query = {DEVICE_B, NULL, 0, NULL, 0};
+    const skiff_romm_sync_query query = {DEVICE_B, NULL, 0, NULL, 0, 0};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&client, &query, &plan));
     TEST_ASSERT_EQUAL_STRING("{\"device_id\":\"" DEVICE_B "\",\"saves\":[]}", fake.log[0].body);
     TEST_ASSERT_EQUAL_size_t(1, plan.count);
@@ -387,14 +398,15 @@ static void test_negotiate_refuses_what_romm_would_and_sends_nothing(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, negotiate(&state, 1, ""));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, negotiate(&state, 1, "a b"));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, negotiate(&state, 1, NULL));
-    const skiff_romm_sync_query no_list = {DEVICE_A, NULL, 1, NULL, 0};
+    const skiff_romm_sync_query no_list = {DEVICE_A, NULL, 1, NULL, 0, 0};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_saves_negotiate(&client, &no_list, &plan));
-    const skiff_romm_sync_query too_many = {DEVICE_A, ROMS, SKIFF_ROMM_SYNC_ROMS_MAX + 1, NULL, 0};
+    const skiff_romm_sync_query too_many = {DEVICE_A, ROMS, SKIFF_ROMM_SYNC_ROMS_MAX + 1,
+                                            NULL,     0,    0};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_saves_negotiate(&client, &too_many, &plan));
     const uint64_t zero[] = {0};
-    const skiff_romm_sync_query zero_rom = {DEVICE_A, zero, 1, NULL, 0};
+    const skiff_romm_sync_query zero_rom = {DEVICE_A, zero, 1, NULL, 0, 0};
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_romm_saves_negotiate(&client, &zero_rom, &plan));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_saves_negotiate(NULL, &no_list, &plan));
@@ -464,6 +476,8 @@ static void test_upload_streams_the_unit_as_multipart_and_reads_the_save(void) {
     TEST_ASSERT_EQUAL_STRING("Skiff fixture A", save.origin_device_name);
     TEST_ASSERT_EQUAL_INT(1, storage.opens);
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, storage.closes, "the file is closed");
+    TEST_ASSERT_TRUE_MESSAGE(sent->long_transfer,
+                             "an upload is not held to the screen's limit on a request");
 }
 
 static void test_a_second_psps_upload_names_its_own_device(void) {
@@ -794,6 +808,8 @@ static void test_download_writes_the_save_whole(void) {
     TEST_ASSERT_FALSE_MESSAGE(exists(part), "no part file left");
     TEST_ASSERT_EQUAL_STRING(BASE_URL PATH_CONTENT, fake.log[0].url);
     TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_GET, fake.log[0].method);
+    TEST_ASSERT_TRUE_MESSAGE(fake.log[0].long_transfer,
+                             "a download is not held to the screen's limit on a request");
     assert_token_only_in_headers();
     TEST_PRINTF("a second download replaces the file");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, download(&spec, &size));
@@ -926,6 +942,41 @@ static void test_download_refuses_bad_arguments(void) {
 
 /* ---- Downloaded and complete ---- */
 
+#define PATH_GET_2 "/api/saves/2?device_id=" DEVICE_A
+
+static void test_a_save_names_the_device_that_uploaded_it(void) {
+    serve(PATH_GET_2, "romm/saves-get.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_get(&client, SAVE_2, DEVICE_A, &save));
+    TEST_PRINTF("save %llu from '%s' (%s), hash %s", (unsigned long long)save.id,
+                save.origin_device_name, save.origin_device_id, save.content_hash);
+    TEST_ASSERT_EQUAL_STRING(BASE_URL PATH_GET_2, fake.log[0].url);
+    TEST_ASSERT_EQUAL_INT(SKIFF_HTTP_GET, fake.log[0].method);
+    assert_token_only_in_headers();
+    TEST_ASSERT_EQUAL_UINT64(SAVE_2, save.id);
+    TEST_ASSERT_EQUAL_STRING(HASH_2, save.content_hash);
+    TEST_ASSERT_EQUAL_STRING(DEVICE_B, save.origin_device_id);
+    TEST_ASSERT_EQUAL_STRING("Skiff fixture B", save.origin_device_name);
+    TEST_PRINTF("another save under the id confirms nothing");
+    reset_fake();
+    serve(PATH_GET_2, "romm/saves-upload.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE,
+                          skiff_romm_saves_get(&client, SAVE_2, DEVICE_A, &save));
+    TEST_ASSERT_EQUAL_UINT64(0, save.id);
+    TEST_PRINTF("a token without the save scopes is forbidden");
+    reset_fake();
+    serve_raw(PATH_GET_2, "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n"
+                          "{\"detail\":\"Forbidden\"}");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_FORBIDDEN,
+                          skiff_romm_saves_get(&client, SAVE_2, DEVICE_A, &save));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_saves_get(&client, 0, DEVICE_A, &save));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_saves_get(&client, SAVE_2, "bad device", &save));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_saves_get(NULL, SAVE_2, DEVICE_A, &save));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_romm_saves_get(&client, SAVE_2, DEVICE_A, NULL));
+}
+
 static void test_downloaded_tells_romm_the_hash_this_psp_holds(void) {
     serve(PATH_DOWNLOADED, "romm/saves-downloaded.http");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_downloaded(&client, SAVE_1, DEVICE_B, HASH_1));
@@ -985,6 +1036,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_negotiate_sends_this_psps_save_and_reads_an_upload);
     RUN_TEST(test_negotiate_offers_a_second_psp_the_download);
+    RUN_TEST(test_negotiate_asks_back_the_saves_this_psp_stopped_listing);
     RUN_TEST(test_negotiate_finds_nothing_to_do_once_in_step);
     RUN_TEST(test_a_token_without_the_save_scopes_is_forbidden);
     RUN_TEST(test_negotiate_returns_every_slot_and_action);
@@ -1015,6 +1067,7 @@ int main(void) {
     RUN_TEST(test_a_file_reported_lost_while_removed_is_still_replaced);
     RUN_TEST(test_a_failed_replacement_keeps_the_only_copy_left);
     RUN_TEST(test_download_refuses_bad_arguments);
+    RUN_TEST(test_a_save_names_the_device_that_uploaded_it);
     RUN_TEST(test_downloaded_tells_romm_the_hash_this_psp_holds);
     RUN_TEST(test_complete_closes_the_session_with_its_counts);
     return UNITY_END();

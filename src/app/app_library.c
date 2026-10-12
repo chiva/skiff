@@ -85,6 +85,9 @@ void app_list_name(skiff_romm_list_filter filter, uint64_t collection_id, char *
                  filter == SKIFF_ROMM_LIST_SMART_COLLECTION ? "smart " : "",
                  (unsigned long long)collection_id);
         return;
+    case SKIFF_ROMM_LIST_WITH_SAVES:
+        snprintf(out, size, "games with saves");
+        return;
     case SKIFF_ROMM_LIST_ALL:
         break;
     }
@@ -206,6 +209,7 @@ void app_rom_done(skiff_app *app) {
     }
     app->rom = *fetched;
     app->has_rom = 1;
+    app_saves_rom_loaded(app);
     /* The cover after the details: they decide whether the game downloads, it is decoration. */
     if (app->rom.cover_path[0] != '\0' && !app_cover_shown(app)) {
         app->request = REQUEST_COVER;
@@ -688,5 +692,9 @@ void app_details_update(skiff_app *app, unsigned actions) {
     }
     if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->has_rom) {
         download(app);
+        return;
+    }
+    if (actions & SKIFF_UI_ACTION_EXTRA) {
+        app_saves_details_sync(app);
     }
 }

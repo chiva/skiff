@@ -35,6 +35,11 @@
 /* The newest RomM release line Skiff was tested against; a newer one gets a one-time notice. */
 #define SKIFF_ROMM_TESTED_MAJOR 5
 #define SKIFF_ROMM_TESTED_MINOR 4
+/* The oldest RomM that syncs saves (skiff/romm_saves.h): RomM's record of what each device synced,
+ * the content_hash an upload carries and the save ID its scans read from PSP discs arrived in 5.4.
+ * Browsing and downloading keep SKIFF_ROMM_MIN_*. */
+#define SKIFF_ROMM_SAVES_MIN_MAJOR 5
+#define SKIFF_ROMM_SAVES_MIN_MINOR 4
 
 /* ROMs per page. An unidentified ROM is about 2.6 KB of JSON and one with metadata (summary,
  * alternative names, screenshots) several times that, so 25 keeps a page well under the body cap
@@ -128,6 +133,21 @@ typedef struct skiff_romm_file {
     skiff_romm_name_status name_status;
 } skiff_romm_file;
 
+/* A save_target's buffer, terminator included: RomM's is the 9-character disc id (ULUS10064); a
+ * longer one is read as none. */
+#define SKIFF_ROMM_SAVE_TARGET_MAX 33
+
+/* Where a game keeps its saves, as RomM's scan read it from the disc (save_target_layout). */
+typedef enum skiff_romm_save_layout {
+    /* RomM has no save ID for the game: RomM 5.3, a ROM scanned before 5.4, a .pbp, or a disc RomM
+     * could not read. */
+    SKIFF_ROMM_SAVE_LAYOUT_NONE,
+    /* "folder-prefix": every save folder whose name starts with save_target (a PSP game's). */
+    SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX,
+    /* Another layout RomM knows (another console's): not a PSP's save folders. */
+    SKIFF_ROMM_SAVE_LAYOUT_OTHER,
+} skiff_romm_save_layout;
+
 /* A ROM as a list shows it. size and crc32 are the whole ROM's (one file for a PSP game). */
 typedef struct skiff_romm_rom_summary {
     uint64_t id;
@@ -149,6 +169,13 @@ typedef struct skiff_romm_rom_summary {
      * files listed, several, or one that cannot be read); the ROM is listed all the same. */
     int has_file;
     skiff_romm_file file;
+    /* The game's save ID and its layout (RomM 5.4 scans), e.g. "ULUS10064" and
+     * SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX. Read as RomM sends it, only checked to be printable
+     * text that fits: the saves layer validates it (skiff_saves_target_valid()) before it names a
+     * folder. Empty with SKIFF_ROMM_SAVE_LAYOUT_NONE when RomM has none, or one Skiff would not
+     * keep (too long, a control character, not a string): it never refuses the ROM. */
+    char save_target[SKIFF_ROMM_SAVE_TARGET_MAX];
+    skiff_romm_save_layout save_layout;
 } skiff_romm_rom_summary;
 
 /* Which of a platform's ROMs a list holds. */
@@ -162,6 +189,10 @@ typedef enum skiff_romm_list_filter {
      * (RomM 5.4 checks the owner). */
     SKIFF_ROMM_LIST_COLLECTION,
     SKIFF_ROMM_LIST_SMART_COLLECTION,
+    /* The ones holding saves the RomM user can see (RomM 5.4's has_saves: their own, and other
+     * users' public ones), whatever slot or emulator: what save sync reads instead of the whole
+     * library. Needs only roms.read. */
+    SKIFF_ROMM_LIST_WITH_SAVES,
 } skiff_romm_list_filter;
 
 typedef struct skiff_romm_list_query {
@@ -248,6 +279,11 @@ size_t skiff_romm_auth_header(const skiff_romm_client *client, skiff_http_header
  * with a control character (it is shown and logged).
  */
 skiff_err skiff_romm_check_version(const char *version, skiff_romm_server *out);
+
+/* Whether the server syncs saves: a release of SKIFF_ROMM_SAVES_MIN_* or newer, or a version that
+ * does not start with major.minor (a development build, allowed like any version Skiff cannot
+ * read). 0 for NULL. */
+int skiff_romm_server_syncs_saves(const skiff_romm_server *server);
 
 /* GET /api/heartbeat (no token sent): the server's version, through skiff_romm_check_version(). */
 skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out);

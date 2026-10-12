@@ -7,6 +7,8 @@
 #include "skiff/install.h"
 #include "skiff/romm_pairing.h"
 
+#include "app_saves.h"
+
 #define APP_QUEUE_FILE "app:/" SKIFF_JOBS_FILE_NAME
 #define APP_CONFIG_FILE "app:/" SKIFF_CONFIG_FILE_NAME
 #define APP_LOG_FILE "app:/" SKIFF_APP_LOG_FILE_NAME
@@ -23,6 +25,8 @@
 #define APP_QUEUE_ROWS SKIFF_APP_ROWS_FIT(APP_QUEUE_DETAIL_LINES, 1)
 #define APP_SETTINGS_LINES 3
 #define APP_SETTINGS_ROWS SKIFF_APP_ROWS_FIT(APP_SETTINGS_LINES, 0)
+/* Settings' rows: the server, Pair again, Saves. */
+#define APP_SETTINGS_ROW_COUNT 3
 /* Lines a game's title and its file name each take at most on the details screen, beside the
  * cover: the size, the download state and the free space always fit under them. */
 #define APP_DETAILS_NAME_LINES 3
@@ -65,6 +69,8 @@ typedef enum app_message_action {
     MESSAGE_NEW_PAIRING,
     MESSAGE_SETTINGS,
     MESSAGE_QUIT,
+    /* Go on from the starting screen (after the notice of a save restore finished at launch). */
+    MESSAGE_START_CONTINUE,
     /* No second choice. */
     MESSAGE_NONE,
 } app_message_action;
@@ -75,6 +81,8 @@ typedef enum app_confirm_action {
     CONFIRM_SERVER_CHANGE,
     /* "Download all": the confirmation lists what the batch found (app->batch). */
     CONFIRM_DOWNLOAD_ALL,
+    /* A save backup over the game's saves on this PSP. */
+    CONFIRM_RESTORE_BACKUP,
 } app_confirm_action;
 
 /* A request to RomM, made on the frame after the one that said it was coming. */
@@ -109,6 +117,12 @@ typedef enum app_call_kind {
     CALL_BATCH_QUEUE,
     /* The RomM user's collections, regular and smart. */
     CALL_COLLECTIONS,
+    /* Save sync (app_saves.h): a check of every game or of one, one game's transfer, the session
+     * closed, a game's backups. */
+    CALL_SAVES_CHECK,
+    CALL_SAVES_APPLY,
+    CALL_SAVES_COMPLETE,
+    CALL_SAVES_BACKUPS,
 } app_call_kind;
 
 /* The most games one "Download all" queues: the queue holds no more unfinished ones. */
@@ -211,6 +225,8 @@ typedef struct app_call {
      * none of them changes while a call runs). */
     uint64_t free_bytes;
     skiff_app *app;
+    /* Save sync's inputs and results. */
+    app_saves_call saves;
     skiff_err err;
     app_call_kind kind;
     /* It could not start: err says why, and the next update applies it as the request's error. */
@@ -297,6 +313,8 @@ struct skiff_app {
     app_message message;
     app_pairing pairing;
     app_batch batch;
+    /* Save sync (app_saves.c), on the heap. */
+    app_saves *saves;
 
     /* The library. */
     skiff_romm_platform platform;
@@ -406,6 +424,8 @@ int app_stop_worker(skiff_app *app);
 skiff_err app_start_worker(skiff_app *app);
 /* Drops what was loaded from the old server, and the queue, so they are made again. */
 skiff_err app_reset_server(skiff_app *app);
+/* Goes on from the starting screen: the server's address, or connecting. */
+void app_start_continue(skiff_app *app);
 
 /* ---- app_connect.c ---- */
 
@@ -542,9 +562,73 @@ void app_settings_update(skiff_app *app, unsigned actions);
 void app_server_entered(skiff_app *app, const char *url);
 void app_server_change_confirmed(skiff_app *app);
 
+/* ---- app_saves.c ---- */
+
+skiff_err app_saves_create(app_saves **out);
+void app_saves_destroy(app_saves *saves);
+/* At startup: loads saves.json and finishes a restore cut short (skiff_saves_recover()'s result:
+ * SKIFF_OK, or the notice 308 or 309 to show). */
+skiff_err app_saves_start(skiff_app *app);
+/* The token holds every scope save sync needs. */
+int app_saves_has_scopes(const skiff_config *settings);
+app_saves_block app_saves_blocked(const skiff_app *app);
+/* A save call runs or waits to. */
+int app_saves_busy(const skiff_app *app);
+/* Forgets every game's baseline (pairing again), and the ROMs' save IDs too after a new server
+ * (server_changed), and saves saves.json; backups and the saves themselves stay. */
+void app_saves_forget(skiff_app *app, int server_changed);
+/* Once a frame, after app_call_update(): starts the next save call when nothing else waits. */
+void app_saves_update(skiff_app *app);
+/* What a finished save call returned, applied on the screen's thread. */
+void app_saves_checked(skiff_app *app);
+void app_saves_applied(skiff_app *app);
+void app_saves_completed(skiff_app *app);
+void app_saves_backups_listed(skiff_app *app);
+/* The screens' buttons. */
+void app_saves_open(skiff_app *app);
+void app_saves_screen_update(skiff_app *app, unsigned actions);
+void app_saves_backups_update(skiff_app *app, unsigned actions);
+void app_saves_choice_update(skiff_app *app, unsigned actions);
+void app_saves_restore_confirmed(skiff_app *app);
+/* The name a game shows: RomM's title, or its save ID without one. */
+const char *app_saves_title(const app_save_game *game);
+const app_save_game *app_saves_game_of_rom(const skiff_app *app, uint64_t rom_id);
+/* The player must choose for this game, or a transfer of it failed. */
+int app_saves_needs_player(const app_save_game *game);
+void app_saves_problem_text(const skiff_app *app, const app_save_game *game, char *out);
+/* The details screen's ROM as a game to sync (1), or 0 when RomM has no save ID Skiff syncs. */
+int app_saves_rom_game(const skiff_app *app, app_save_game *out);
+/* The details screen's ROM came in: its save ID is remembered for the next check. */
+void app_saves_rom_loaded(skiff_app *app);
+/* The details screen offers "Sync save", and the button. */
+int app_saves_details_offered(const skiff_app *app);
+void app_saves_details_sync(skiff_app *app);
+
+/* ---- app_saves_run.c (on the browsing thread) ---- */
+
+skiff_err app_saves_check_run(app_call *call);
+skiff_err app_saves_apply_run(app_call *call);
+skiff_err app_saves_complete_run(app_call *call);
+skiff_err app_saves_backups_run(app_call *call);
+
+/* ---- app_saves_view.c ---- */
+
+void app_saves_view(skiff_app *app);
+void app_saves_backups_view(skiff_app *app);
+void app_saves_choice_view(skiff_app *app);
+/* The details screen's "Save: ..." line into out (SKIFF_TEXT_MAX); 0 when it has none. */
+int app_saves_details_line(const skiff_app *app, char *out);
+/* A game's state, short (a row's detail) or whole, into out (SKIFF_TEXT_MAX); "" for none. */
+void app_saves_state_text(const skiff_app *app, const app_save_game *game, int whole, char *out);
+
 /* ---- app_view.c ---- */
 
 void app_view_build(skiff_app *app);
+/* Pieces of a view, shared with app_saves_view.c. */
+void app_view_add_hint(skiff_app *app, unsigned action, skiff_text_id label);
+void app_view_add_wrapped(skiff_app *app, const char *text, float width);
+void app_view_set_status(skiff_app *app, const char *text);
+void app_view_set_title(skiff_app *app, const char *title);
 const char *app_text(const skiff_app *app, skiff_text_id id);
 /* Fills template with args into out (SKIFF_TEXT_MAX). */
 void app_format(const skiff_app *app, skiff_text_id id, const char *const *args, size_t count,

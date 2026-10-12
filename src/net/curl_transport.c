@@ -32,6 +32,8 @@ typedef struct curl_transport {
     char resolved_host[SKIFF_CURL_HOST_MAX];
     long resolved_port;
     struct curl_slist *resolve_list;
+    /* skiff_curl_config.total_timeout_s, which every request but a long transfer gets. */
+    long total_timeout_s;
 } curl_transport;
 
 /* State of one request, shared with curl's callbacks. */
@@ -303,6 +305,8 @@ static skiff_err curl_perform(skiff_transport *base, const skiff_http_request *r
     CURLcode code = CURLE_OK;
     if (!set_method(transport->curl, request) ||
         curl_easy_setopt(transport->curl, CURLOPT_URL, request->url) != CURLE_OK ||
+        curl_easy_setopt(transport->curl, CURLOPT_TIMEOUT,
+                         request->long_transfer ? 0L : transport->total_timeout_s) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_HEADERDATA, &current) != CURLE_OK ||
         curl_easy_setopt(transport->curl, CURLOPT_WRITEDATA, &current) != CURLE_OK ||
@@ -406,6 +410,7 @@ skiff_err skiff_curl_transport_create(const skiff_curl_config *config, skiff_tra
     transport->client_cert_configured = config->client_cert != NULL;
     transport->resolve = config->resolve;
     transport->resolve_ctx = config->resolve_ctx;
+    transport->total_timeout_s = config->total_timeout_s;
     transport->curl = curl_easy_init();
     if (transport->curl == NULL || !configure(transport, config) ||
         !copy_default_headers(transport, config)) {

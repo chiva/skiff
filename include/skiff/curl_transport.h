@@ -54,7 +54,8 @@ typedef struct skiff_curl_config {
     /* 0 selects SKIFF_CURL_CONNECT_TIMEOUT_S and SKIFF_CURL_STALL_TIMEOUT_S. */
     long connect_timeout_s;
     long stall_timeout_s;
-    /* The most a whole request may take, in seconds, or 0 for no limit (downloads). */
+    /* The most a whole request may take, in seconds, or 0 for no limit (downloads). A request
+     * marked long_transfer (skiff_http_request) is never held to it. */
     long total_timeout_s;
     /* NULL lets curl resolve names itself (host builds, whose resolver times out). The address is
      * kept for the next requests to the same host and port until one fails on the network. */

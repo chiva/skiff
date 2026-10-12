@@ -7,6 +7,12 @@
  * A token that only browses is left to the recorded fixtures and test_pairing_romm.c: RomM limits
  * how many pairings an address may start, and each one counts.
  *
+ * Then a save folder makes the whole trip on the seed's synthetic PSP disc, whose save ID RomM read
+ * when it scanned it (SKIF00002): A collects and uploads it as the saves layer writes a unit, RomM
+ * lists the disc among the ROMs with saves and names A as the save's device, and B downloads,
+ * checks and restores it byte for byte; negotiate's restore_unlisted brings back a save B synced
+ * and no longer lists.
+ *
  * Every run uses a slot of its own, so it can run again against the same server: negotiate reports
  * every slot, and the test keeps its own, as the app does. The units are the recorder's synthetic
  * zips (tests/fixtures/romm/save-unit-*.zip). Run by `scripts/dev.sh romm-test`
@@ -22,6 +28,8 @@
 #include "skiff/romm.h"
 #include "skiff/romm_pairing.h"
 #include "skiff/romm_saves.h"
+#include "skiff/saves.h"
+#include "skiff/saves_restore.h"
 
 #include "storage_posix.h"
 #include "temp_dir.h"
@@ -56,7 +64,16 @@ enum {
 #define SLOT_MAX 32
 #define MS_PER_SECOND 1000LL
 
+/* The save disc's game: a save folder of it, and what the folder holds. */
+#define DISC_FOLDER "PSP/SAVEDATA/SKIF00002DATA00"
+#define DISC_DATA "synthetic save of the Skiff save disc"
+#define DISC_PARAM "\x00PSF synthetic SKIF00002"
+#define DISC_UNIT_NAME "SKIF00002.zip"
+#define PLATFORM_SLUG "psp"
+
 static char ca_file[PATH_MAX_LENGTH];
+static uint64_t disc_rom_id;
+static const char *disc_target;
 static const char *admin_authorization;
 static uint64_t rom_id;
 static char slot[SLOT_MAX];
@@ -142,7 +159,7 @@ static skiff_romm_save_state unit_state(const char *hash, uint64_t size) {
 static const skiff_romm_sync_operation *negotiate(paired_psp *psp,
                                                   const skiff_romm_save_state *state) {
     const uint64_t roms[] = {rom_id};
-    const skiff_romm_sync_query query = {psp->device_id, roms, 1, state, state != NULL ? 1 : 0};
+    const skiff_romm_sync_query query = {psp->device_id, roms, 1, state, state != NULL ? 1 : 0, 0};
     TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&psp->client, &query, &plan));
     const skiff_romm_sync_operation *mine = NULL;
     for (size_t i = 0; i < plan.count; i++) {
@@ -251,10 +268,158 @@ static void test_a_save_goes_from_one_psp_to_another_and_back(void) {
     TEST_ASSERT_EQUAL_STRING(HASH_2, op->server_content_hash);
 }
 
+/* A PSP's Memory Stick under dir/<name>: its saves and Skiff's folder. */
+static void psp_roots(const char *name, skiff_storage_roots *out) {
+    char root[TEMP_DIR_PATH_MAX];
+    char app[TEMP_DIR_PATH_MAX];
+    char sub[PATH_MAX_LENGTH];
+    snprintf(sub, sizeof sub, "%s", name);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, sub, root, sizeof root));
+    snprintf(sub, sizeof sub, "%s/PSP/GAME/Skiff", name);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, sub, app, sizeof app));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_roots_init(root, app, out));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, out->app));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, out->saves));
+}
+
+static void write_bytes(const char *path, const char *data, size_t size) {
+    FILE *file = fopen(path, "wb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(file, path);
+    TEST_ASSERT_EQUAL_size_t(size, fwrite(data, 1, size, file));
+    TEST_ASSERT_EQUAL_INT(0, fclose(file));
+}
+
+/* The operation for this run's slot in the last plan, or NULL. */
+static const skiff_romm_sync_operation *slot_operation(uint64_t id) {
+    for (size_t i = 0; i < plan.count; i++) {
+        const skiff_romm_sync_operation *op = &plan.operations[i];
+        if (op->rom_id == id && op->has_slot && strcmp(op->slot, slot) == 0) {
+            return op;
+        }
+    }
+    return NULL;
+}
+
+static void test_a_save_folder_travels_through_the_save_disc(void) {
+    skiff_storage_roots a_roots;
+    skiff_storage_roots b_roots;
+    psp_roots("psp-a", &a_roots);
+    psp_roots("psp-b", &b_roots);
+    char path[TEMP_DIR_PATH_MAX];
+    char folder[PATH_MAX_LENGTH];
+    snprintf(folder, sizeof folder, "psp-a/" DISC_FOLDER);
+    TEST_ASSERT_TRUE(temp_dir_path(dir, folder, path, sizeof path));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, path));
+    snprintf(folder, sizeof folder, "psp-a/" DISC_FOLDER "/DATA.BIN");
+    TEST_ASSERT_TRUE(temp_dir_path(dir, folder, path, sizeof path));
+    write_bytes(path, DISC_DATA, sizeof DISC_DATA - 1);
+    snprintf(folder, sizeof folder, "psp-a/" DISC_FOLDER "/PARAM.SFO");
+    TEST_ASSERT_TRUE(temp_dir_path(dir, folder, path, sizeof path));
+    write_bytes(path, DISC_PARAM, sizeof DISC_PARAM - 1);
+
+    TEST_PRINTF("A collects the disc's save folders into a unit, as the app does");
+    skiff_saves_unit *unit = NULL;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_unit_create(&unit));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_collect(storage, &a_roots, SKIFF_STORAGE_ROOT_SAVES,
+                                                        disc_target, unit));
+    TEST_ASSERT_EQUAL_size_t(2, unit->file_count);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_write_unit(storage, &a_roots, unit, "app:/" DISC_UNIT_NAME));
+    char hash[SKIFF_SAVES_HASH_SIZE];
+    snprintf(hash, sizeof hash, "%s", unit->content_hash);
+    TEST_PRINTF("unit hash %s, %llu bytes of saves", hash, (unsigned long long)unit->total_bytes);
+    char unit_path[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&a_roots, "app:/" DISC_UNIT_NAME,
+                                                          unit_path, sizeof unit_path));
+    const skiff_romm_upload spec = {
+        disc_rom_id, psp_a.device_id, EMULATOR, slot,      hash,
+        0,           KEEP_VERSIONS,   storage,  unit_path, DISC_UNIT_NAME};
+    skiff_romm_save uploaded;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_upload(&psp_a.client, &spec, &uploaded));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(hash, uploaded.content_hash, "RomM hashes the unit as Skiff");
+
+    TEST_PRINTF("RomM lists the disc among the PSP ROMs with saves");
+    skiff_romm_platform platform;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_find_platform(&psp_a.client, PLATFORM_SLUG, &platform));
+    const skiff_romm_list_query with_saves = {.platform_id = platform.id,
+                                              .filter = SKIFF_ROMM_LIST_WITH_SAVES};
+    static skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_romm_list_roms(&psp_a.client, &with_saves, 0, SKIFF_ROMM_PAGE_SIZE, &page));
+    int listed = 0;
+    for (size_t i = 0; i < page.count; i++) {
+        TEST_PRINTF("with saves: ROM %llu %s, save ID '%s'", (unsigned long long)page.items[i].id,
+                    page.items[i].fs_name, page.items[i].save_target);
+        listed +=
+            page.items[i].id == disc_rom_id && strcmp(page.items[i].save_target, disc_target) == 0;
+    }
+    TEST_ASSERT_EQUAL_INT(1, listed);
+
+    TEST_PRINTF("B reads the save: A's device uploaded it");
+    skiff_romm_save read;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_saves_get(&psp_b.client, uploaded.id, psp_b.device_id, &read));
+    TEST_ASSERT_EQUAL_UINT64(uploaded.id, read.id);
+    TEST_ASSERT_EQUAL_STRING(psp_a.device_id, read.origin_device_id);
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_PAIRING_NAME, read.origin_device_name);
+
+    TEST_PRINTF("B downloads, checks and restores it byte for byte");
+    const uint64_t roms[] = {disc_rom_id};
+    skiff_romm_sync_query query = {psp_b.device_id, roms, 1, NULL, 0, 1};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&psp_b.client, &query, &plan));
+    const skiff_romm_sync_operation *op = slot_operation(disc_rom_id);
+    TEST_ASSERT_NOT_NULL(op);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SYNC_DOWNLOAD, op->action);
+    TEST_ASSERT_EQUAL_STRING(hash, op->server_content_hash);
+    char work[SKIFF_STORAGE_PATH_MAX];
+    char work_folder[SKIFF_STORAGE_PATH_MAX];
+    char logical[SKIFF_STORAGE_PATH_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_work_unit_path(disc_target, logical, sizeof logical));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&b_roots, logical, work, sizeof work));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_resolve(&b_roots, SKIFF_SAVES_WORK_FOLDER,
+                                                          work_folder, sizeof work_folder));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(storage, work_folder));
+    const skiff_romm_download download = {op->save_id, psp_b.device_id, storage, work,
+                                          SKIFF_SAVES_UNIT_FILE_BYTES_MAX};
+    uint64_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_download(&psp_b.client, &download, &size));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_saves_read_unit(storage, &b_roots, logical, disc_target, NULL, unit));
+    TEST_ASSERT_EQUAL_STRING(hash, unit->content_hash);
+    skiff_saves_restore_report report;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_saves_restore(storage, &b_roots, logical, disc_target, &report));
+    TEST_ASSERT_EQUAL_size_t(1, report.folders_replaced);
+    static unsigned char got[UNIT_MAX];
+    snprintf(folder, sizeof folder, "psp-b/" DISC_FOLDER "/DATA.BIN");
+    TEST_ASSERT_TRUE(temp_dir_path(dir, folder, path, sizeof path));
+    TEST_ASSERT_EQUAL_size_t(sizeof DISC_DATA - 1, read_file(path, got, sizeof got));
+    TEST_ASSERT_EQUAL_MEMORY(DISC_DATA, got, sizeof DISC_DATA - 1);
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_romm_saves_downloaded(&psp_b.client, op->save_id, psp_b.device_id, hash));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_saves_complete(&psp_b.client, plan.session_id, 1, 0));
+
+    TEST_PRINTF("B no longer lists the save it synced: RomM leaves it out unless asked back");
+    query.restore_unlisted = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&psp_b.client, &query, &plan));
+    TEST_ASSERT_NULL(slot_operation(disc_rom_id));
+    query.restore_unlisted = 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_saves_negotiate(&psp_b.client, &query, &plan));
+    op = slot_operation(disc_rom_id);
+    TEST_ASSERT_NOT_NULL(op);
+    TEST_ASSERT_EQUAL_STRING(hash, op->server_content_hash);
+    skiff_saves_unit_destroy(unit);
+}
+
 int main(void) {
     snprintf(ca_file, sizeof ca_file, "%s/ca.crt", required_env("SKIFF_IT_CERTS"));
     admin_authorization = required_env("SKIFF_IT_ADMIN_AUTHORIZATION");
     rom_id = strtoull(required_env("SKIFF_IT_ROM_ID"), NULL, DECIMAL_BASE);
+    disc_rom_id = strtoull(required_env("SKIFF_IT_SAVE_DISC_ROM_ID"), NULL, DECIMAL_BASE);
+    disc_target = required_env("SKIFF_IT_SAVE_DISC_TARGET");
     snprintf(slot, sizeof slot, "it-%lld", (long long)time(NULL));
     if (skiff_net_global_init() != SKIFF_OK || temp_dir_create(dir, sizeof dir) != 0 ||
         skiff_posix_storage_create(&storage) != SKIFF_OK) {
@@ -274,6 +439,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_two_psps_pair_with_the_save_scopes);
     RUN_TEST(test_a_save_goes_from_one_psp_to_another_and_back);
+    RUN_TEST(test_a_save_folder_travels_through_the_save_disc);
     const int failures = UNITY_END();
     skiff_romm_client_clear(&psp_a.client);
     skiff_romm_client_clear(&psp_b.client);

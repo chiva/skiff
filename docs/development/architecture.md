@@ -58,7 +58,7 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   two calls. The profile to join is the one the network picker last connected through, found by
   its name (`skiff_psp_net_connected_profile()`; with two profiles of the same name, the first).
 - **Browsing thread**: runs the app's requests to RomM (connection check, platform, library pages,
-  a game's details, pairing), one at a time (`src/platform/psp/call_psp.h`), so a slow network
+  a game's details, pairing, save sync), one at a time (`src/platform/psp/call_psp.h`), so a slow network
   never freezes the screen. The app copies a request's inputs into its call before it starts and
   reads the results once the UI sees it done (`src/app/app_call.c`); the thread touches nothing
   else but the browse client, which is not replaced while a call runs. The one exception is
@@ -202,6 +202,16 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   save `config.ini`, then rebuild the queue and the client. A worker that will not stop in time changes nothing; a failed cancel or
   save keeps the old server and starts a new worker for it. "Pair again" keeps the address and
   the downloads and replaces the token, restarting the worker with it.
+- **Saves** (`src/app/app_saves*.c`, RomM 5.4 or newer and a token with the save scopes): once
+  per connection, after the library's first page, a check on the browsing thread compares each
+  game's saves here and in RomM, then applies every transfer that needs no choice (a backup before
+  every download) while the header says "Checking saves..." and then "Saves: N synced, M need
+  you". Conflicts and saves deleted on one side wait for the player: Settings → Saves lists every
+  game with its state (Sync, Sync all, Backups), a game's details show its save and offer Sync
+  save, and a choice screen shows both sides. Library pages and "Download all" always go first;
+  save calls wait for them. A token without the save scopes (or one RomM answers 403) shows "Pair
+  again", a RomM before 5.4 that save sync needs 5.4 (215); browsing works either way. Pairing
+  again or a new server forgets every baseline (backups and saves stay).
 - **installed.json is saved off the lock the UI reads**: the worker records a finished download
   under the manifest lock, copies the manifest, and saves the copy without it, so drawing the
   library never waits for the Memory Stick.
@@ -377,7 +387,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Collections | `GET /api/collections` and `GET /api/collections/smart` (`collections.read`); a collection's games are the same list with `collection_id=` or `smart_collection_id=` |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
-| Saves | `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
+| Saves | The PSP ROMs with saves (the ROM list with `has_saves=true`), `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}` (its device), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
 
 Custom headers: `config.ini` may define extra HTTP headers sent on every request. This covers
 proxy access schemes the PSP cannot otherwise satisfy — notably Cloudflare Access service tokens
@@ -722,12 +732,12 @@ PSP saves are folders under `PSP/SAVEDATA/` named after the game ID (e.g. `ULUS1
 They are encrypted per game, not per console, so they move between PSPs and PPSSPP. RomM stores
 saves as single files. Skiff:
 
-1. Gets the game ID from the ISO using [argosy-sigil](https://github.com/rommapp/argosy-sigil),
-   the library RomM's own clients use. Its memory use and dependencies on the PSP are checked
-   before adoption.
-2. Zips every `SAVEDATA` folder for that ID in the layout RomM's in-browser PPSSPP player expects,
-   and uploads it with `emulator=ppsspp`, so saves move between the PSP, PPSSPP and RomM's web
-   player.
+1. Takes the game ID from RomM: RomM 5.4 reads it from the disc when it scans (`save_target`,
+   layout `folder-prefix`, parsed on every ROM: `skiff_romm_rom_summary.save_target`). A game
+   RomM has no ID for (scanned before 5.4, a `.pbp`) is shown as not syncable, with the reason.
+2. Zips every `SAVEDATA` folder for that ID as argosy-sigil's PSP unit and uploads it to the slot
+   `autosave` as `emulator=psp_console`, the slot every PSP client uses, so a PPSSPP save there
+   (Argosy's, for example) pairs with this PSP's.
 3. Uses `/api/sync/negotiate` and never overwrites silently: when both sides changed, the player
    chooses.
 
@@ -752,6 +762,18 @@ rmdir only once emptied. `app:/saves.json` keeps Skiff's own baseline per game, 
 `skiff_saves_decide()` picks each game's transfer from hashes alone: never a download over a local
 change, never an upload over a server change, and always a question before an empty unit is
 restored.
+
+The app (`src/app/app_saves*.c`, see [The app](#the-app)) runs it on the browsing thread. A check
+lists the PSP ROMs RomM holds saves for (one paged list, never the whole library), learns the IDs of
+games Skiff installed from their details (remembered in `saves.json`, so asked once), lists
+`PSP/SAVEDATA`, hashes each game (at launch only when its folders' summary changed; Sync always
+hashes), and makes one negotiate with `restore_unlisted`, so RomM also reports a save this PSP
+synced and then deleted. A save belongs to the ROM its baseline names, else the only installed ROM
+with that ID, else the only PSP ROM with that ID holding a save in `autosave`; with several, the
+player picks from the game's details. Uploads are long transfers (no 60 s limit, only the stall
+timeout); RomM's 409 means its save moved on, so the game is compared again and asks. A download is
+hash-checked before anything is restored (217), the local saves are hashed again just before (a
+change since the check stops it), and `downloaded` then records it in RomM.
 
 ## Testing seams
 

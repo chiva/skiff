@@ -27,6 +27,9 @@ typedef struct skiff_romm_body {
     void *read_ctx;
     size_t size;
     const char *content_type;
+    /* A save's upload: free of the transport's limit on a whole request
+     * (skiff_http_request.long_transfer). */
+    int long_transfer;
 } skiff_romm_body;
 
 /*

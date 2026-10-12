@@ -78,9 +78,14 @@ static skiff_saves_decision decide(const char *local, const char *server,
         return decision(SKIFF_SAVES_UPLOAD, SKIFF_SAVES_REASON_ONLY_LOCAL);
     }
     if (local == NULL) {
-        return baseline != NULL && !is_empty(baseline->local_hash)
-                   ? decision(SKIFF_SAVES_ASK_DELETED_LOCAL, SKIFF_SAVES_REASON_DELETED_LOCAL)
-                   : decision(SKIFF_SAVES_DOWNLOAD, SKIFF_SAVES_REASON_ONLY_SERVER);
+        if (baseline != NULL && !is_empty(baseline->local_hash)) {
+            return decision(SKIFF_SAVES_ASK_DELETED_LOCAL, SKIFF_SAVES_REASON_DELETED_LOCAL);
+        }
+        /* Left deleted on this PSP by the player's choice, and RomM still holds that save. */
+        if (baseline != NULL && strcmp(server, baseline->server_hash) == 0) {
+            return decision(SKIFF_SAVES_IN_SYNC, SKIFF_SAVES_REASON_UNCHANGED);
+        }
+        return decision(SKIFF_SAVES_DOWNLOAD, SKIFF_SAVES_REASON_ONLY_SERVER);
     }
     return decide_both(local, server, baseline);
 }

@@ -23,7 +23,8 @@ enum {
     PATH_MAX_LENGTH = 256,
     HEX_BASE = 16,
     DECIMAL_BASE = 10,
-    SEEDED_ROMS = 2,
+    /* The payload, the extra file and the save disc (tests/integration/seed.py). */
+    SEEDED_ROMS = 3,
     /* The payload (tests/integration/seed.py). */
     SEEDED_FAVOURITES = 1,
     HTTP_OK = 200,
@@ -67,6 +68,9 @@ static uint64_t viewer_private_id;
 static skiff_romm_collection_list collections;
 static seeded_file payload;
 static seeded_file extra;
+/* The synthetic PSP disc RomM reads a save ID from. */
+static uint64_t save_disc_rom_id;
+static const char *save_disc_target;
 static char ca_file[PATH_MAX_LENGTH];
 static skiff_transport *transport;
 static skiff_romm_client client;
@@ -143,12 +147,43 @@ static void test_every_rom_is_listed_page_by_page(void) {
     }
     TEST_ASSERT_EQUAL_INT(1, seen_payload);
     TEST_ASSERT_EQUAL_INT(1, seen_extra);
-    TEST_PRINTF("a full page holds both, in name order");
+    TEST_PRINTF("a full page holds all three, in name order");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_romm_list_roms(&client, &all, 0, SKIFF_ROMM_PAGE_SIZE, &page));
     TEST_ASSERT_EQUAL_size_t(SEEDED_ROMS, page.count);
     TEST_ASSERT_EQUAL_UINT64(extra.rom_id, page.items[0].id);
-    TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[1].id);
+    TEST_ASSERT_EQUAL_UINT64(save_disc_rom_id, page.items[1].id);
+    TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[2].id);
+}
+
+static void test_romm_reads_the_save_id_of_a_psp_disc(void) {
+    skiff_romm_platform platform;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_find_platform(&client, PLATFORM_SLUG, &platform));
+    const skiff_romm_list_query all = {.platform_id = platform.id, .filter = SKIFF_ROMM_LIST_ALL};
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_romm_list_roms(&client, &all, 0, SKIFF_ROMM_PAGE_SIZE, &page));
+    for (size_t i = 0; i < page.count; i++) {
+        const skiff_romm_rom_summary *item = &page.items[i];
+        TEST_PRINTF("ROM %llu %s: save_target \"%s\", layout %d", (unsigned long long)item->id,
+                    item->fs_name, item->save_target, (int)item->save_layout);
+        if (item->id == save_disc_rom_id) {
+            TEST_ASSERT_EQUAL_STRING(save_disc_target, item->save_target);
+            TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX, item->save_layout);
+        } else {
+            TEST_PRINTF("  not a disc RomM could read: no save ID");
+            TEST_ASSERT_EQUAL_STRING("", item->save_target);
+            TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_NONE, item->save_layout);
+        }
+    }
+    TEST_PRINTF("and in the disc's details");
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, save_disc_rom_id, &rom));
+    TEST_ASSERT_EQUAL_STRING(save_disc_target, rom.summary.save_target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX, rom.summary.save_layout);
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_heartbeat(&client, &server));
+    TEST_ASSERT_TRUE(skiff_romm_server_syncs_saves(&server));
 }
 
 static void test_the_favourites_hold_the_seeded_favourite_with_its_file(void) {
@@ -350,6 +385,8 @@ int main(void) {
     viewer_private_id = env_number("SKIFF_IT_VIEWER_PRIVATE_ID");
     payload = seeded("");
     extra = seeded("EXTRA_");
+    save_disc_rom_id = env_number("SKIFF_IT_SAVE_DISC_ROM_ID");
+    save_disc_target = required_env("SKIFF_IT_SAVE_DISC_TARGET");
     if (skiff_net_global_init() != SKIFF_OK) {
         printf("setup failed: TLS could not be seeded\n");
         return EXIT_FAILURE;
@@ -358,6 +395,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_the_server_version_is_supported);
     RUN_TEST(test_every_rom_is_listed_page_by_page);
+    RUN_TEST(test_romm_reads_the_save_id_of_a_psp_disc);
     RUN_TEST(test_the_favourites_hold_the_seeded_favourite_with_its_file);
     RUN_TEST(test_a_token_with_collections_read_lists_every_visible_collection);
     RUN_TEST(test_a_token_without_collections_read_is_refused_the_collections);

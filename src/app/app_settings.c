@@ -4,7 +4,8 @@
 #include "app_internal.h"
 
 /* The rows of the settings screen, in order. */
-enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_ROWS };
+enum { SETTINGS_SERVER, SETTINGS_PAIR, SETTINGS_SAVES, SETTINGS_ROWS };
+_Static_assert(SETTINGS_ROWS == APP_SETTINGS_ROW_COUNT, "the view draws every settings row");
 
 static void open_keyboard(skiff_app *app, skiff_app_screen from) {
     app->keyboard_from = from;
@@ -27,6 +28,13 @@ void app_settings_update(skiff_app *app, unsigned actions) {
     }
     if (skiff_ui_list_apply(&app->settings_list, actions)) {
         app->dirty = 1;
+    }
+    /* Saves opens once Skiff is connected, whatever runs. */
+    if (app->settings_list.selected == SETTINGS_SAVES) {
+        if ((actions & SKIFF_UI_ACTION_CONFIRM) && app->connect == CONNECT_DONE) {
+            app_saves_open(app);
+        }
+        return;
     }
     /* A new server or pairing replaces the browse client: not under a running request. */
     if (!(actions & SKIFF_UI_ACTION_CONFIRM) || app_call_busy(app)) {
@@ -150,6 +158,8 @@ static void apply_server(skiff_app *app, const char *url) {
         keep_old_server(app, err, &issue);
         return;
     }
+    /* The old server's baselines and ROM ids say nothing about the new one. */
+    app_saves_forget(app, 1);
     err = app_reset_server(app);
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "server address changed: %s (%d)", skiff_err_name(err), (int)err);

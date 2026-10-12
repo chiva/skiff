@@ -399,6 +399,10 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     char text[SKIFF_TEXT_MAX];
     app_format(app, SKIFF_TEXT_PAIR_DONE, args, 1, text);
     app_note(app, text);
+    /* Perhaps another RomM user: without a baseline, any difference asks the player. */
+    if (had_token) {
+        app_saves_forget(app, 0);
+    }
     if (had_token || app->worker_running) {
         /* A new token for a running app: the worker and the queue start again with it. */
         if (!app_stop_worker(app)) {

@@ -175,6 +175,17 @@ skiff_err skiff_saves_write_unit(skiff_storage *storage, const skiff_storage_roo
                                  skiff_saves_unit *unit, const char *unit_path);
 
 /*
+ * Fills each file's md5 and unit->content_hash from unit's files in unit->root (a collect's), as
+ * skiff_saves_write_unit() would, reading each file once and writing nothing: RomM's hash of the
+ * game's saves without the cost of a unit on the Memory Stick. SKIFF_ERR_STORAGE_IO when a file is
+ * no longer the size the collect saw, otherwise the storage's error; the files' md5 and
+ * unit->content_hash are empty then. SKIFF_ERR_INVALID_ARG for a NULL argument, a unit without a
+ * root, or one over its caps.
+ */
+skiff_err skiff_saves_hash_unit(skiff_storage *storage, const skiff_storage_roots *roots,
+                                skiff_saves_unit *unit);
+
+/*
  * Reads the unit at the logical path unit_path, checks it as a unit of save_target's saves, and
  * fills unit (root set to staging, or empty), each file's md5 and unit->content_hash. With a
  * staging folder (a logical path, created if missing; give an empty one), the unit's folders and

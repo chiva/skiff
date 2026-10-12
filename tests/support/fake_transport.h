@@ -31,7 +31,7 @@
 #include "skiff/transport.h"
 
 #define FAKE_TRANSPORT_MAX_ROUTES 16
-#define FAKE_TRANSPORT_MAX_LOG 16
+#define FAKE_TRANSPORT_MAX_LOG 64
 #define FAKE_TRANSPORT_URL_MAX 256
 #define FAKE_TRANSPORT_HEADERS_MAX 512
 /* Request body bytes kept in the log (more are counted and hashed only). */
@@ -90,6 +90,8 @@ typedef struct fake_request {
     size_t body_size;
     int body_streamed;
     char content_type[FAKE_TRANSPORT_CONTENT_TYPE_MAX];
+    /* The request asked to be free of the transport's limit on a whole request. */
+    int long_transfer;
 } fake_request;
 
 typedef struct fake_transport {

@@ -4,6 +4,7 @@
 
 #include "skiff/http.h"
 #include "skiff/romm_pairing.h"
+#include "skiff/romm_saves.h"
 #include "skiff/version.h"
 
 #include "romm_internal.h"
@@ -37,10 +38,10 @@ enum {
 static const char *const REQUESTED_SCOPES[] = {
     "platforms.read",
     "roms.read",
-    "assets.read",
-    "assets.write",
-    "devices.read",
-    "devices.write",
+    SKIFF_ROMM_SCOPE_ASSETS_READ,
+    SKIFF_ROMM_SCOPE_ASSETS_WRITE,
+    SKIFF_ROMM_SCOPE_DEVICES_READ,
+    SKIFF_ROMM_SCOPE_DEVICES_WRITE,
     SKIFF_ROMM_SCOPE_COLLECTIONS_READ,
 };
 enum {

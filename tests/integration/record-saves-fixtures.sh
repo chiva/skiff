@@ -3,8 +3,8 @@
 # PSPs paired through the device-code flow with every scope Skiff asks for, as the app pairs:
 # PSP A negotiates against an empty server (upload), uploads, closes its session; PSP B negotiates
 # with nothing local (download), downloads, confirms it, negotiates again (no_op) and uploads its own
-# version; A's upload without overwrite is then refused (409). A third pairing that only browses is
-# refused negotiate (403).
+# version; A's upload without overwrite is then refused (409), and A reads B's save (its device). A
+# third pairing that only browses is refused negotiate (403).
 #
 # The save units are synthetic stored zips (save-unit-1.zip, save-unit-2.zip, made folders under
 # the game ID SKIF00001, never a real save), written next to the fixtures for the unit and
@@ -213,9 +213,13 @@ keep saves-negotiate-no-op
 sleep 1
 upload "$TOKEN_B" "$DEVICE_B" "$UNIT_2" "$HASH_2" false
 keep saves-upload-second-device
+SAVE_2="$(jq -r .id "$WORK/body")"
 
 upload "$TOKEN_A" "$DEVICE_A" "$UNIT_1" "$HASH_1" false
 keep saves-upload-conflict
+# What A's conflict screen shows of B's save: the device that uploaded it.
+call GET "/api/saves/$SAVE_2?device_id=$DEVICE_A" -H "Authorization: Bearer $TOKEN_A"
+keep saves-get
 
 negotiate "$TOKEN_C" "$DEVICE_C"
 keep saves-negotiate-forbidden

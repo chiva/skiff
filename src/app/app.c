@@ -351,6 +351,19 @@ static void start(skiff_app *app) {
     }
     start_manifest(app);
     app_queue_refresh(app);
+    const skiff_err recovered = app_saves_start(app);
+    if (recovered == SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED ||
+        recovered == SKIFF_ERR_STORAGE_SAVE_RESTORE_UNFINISHED) {
+        char line[SKIFF_TEXT_MAX];
+        (void)skiff_error_line(app->config.language, recovered, line, sizeof line);
+        app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, line, MESSAGE_START_CONTINUE,
+                      SKIFF_APP_SCREEN_STARTING);
+        return;
+    }
+    app_start_continue(app);
+}
+
+void app_start_continue(skiff_app *app) {
     if (app->settings.server_url[0] == '\0') {
         app_set_screen(app, SKIFF_APP_SCREEN_SERVER);
         return;
@@ -494,6 +507,12 @@ skiff_err skiff_app_create(const skiff_app_config *config, const skiff_app_env *
         free(app);
         return SKIFF_ERR_NO_MEMORY;
     }
+    if (app_saves_create(&app->saves) != SKIFF_OK) {
+        free(app->cover);
+        free(app->cover_spare);
+        free(app);
+        return SKIFF_ERR_NO_MEMORY;
+    }
     app->config = *config;
     app->env = *env;
     app->installer = skiff_install_find_installer(SKIFF_APP_PLATFORM_SLUG);
@@ -518,6 +537,7 @@ void skiff_app_destroy(skiff_app *app) {
     skiff_jobs_destroy(app->jobs);
     skiff_install_manifest_destroy(app->manifest);
     skiff_log_destroy(app->log);
+    app_saves_destroy(app->saves);
     free(app->cover);
     free(app->cover_spare);
     free(app);
@@ -609,6 +629,9 @@ static void message_update(skiff_app *app, unsigned actions) {
     case MESSAGE_QUIT:
         app->quit = 1;
         break;
+    case MESSAGE_START_CONTINUE:
+        app_start_continue(app);
+        break;
     case MESSAGE_NONE:
         break;
     }
@@ -621,9 +644,10 @@ static void confirm_update(skiff_app *app, unsigned actions) {
             app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
             return;
         }
-        app_set_screen(app, app->confirm == CONFIRM_REPLACE      ? SKIFF_APP_SCREEN_DETAILS
-                            : app->confirm == CONFIRM_CANCEL_JOB ? SKIFF_APP_SCREEN_QUEUE
-                                                                 : app->keyboard_from);
+        app_set_screen(app, app->confirm == CONFIRM_REPLACE          ? SKIFF_APP_SCREEN_DETAILS
+                            : app->confirm == CONFIRM_CANCEL_JOB     ? SKIFF_APP_SCREEN_QUEUE
+                            : app->confirm == CONFIRM_RESTORE_BACKUP ? SKIFF_APP_SCREEN_SAVE_BACKUPS
+                                                                     : app->keyboard_from);
         return;
     }
     if (!(actions & SKIFF_UI_ACTION_CONFIRM)) {
@@ -641,6 +665,9 @@ static void confirm_update(skiff_app *app, unsigned actions) {
         break;
     case CONFIRM_DOWNLOAD_ALL:
         app_batch_confirmed(app);
+        break;
+    case CONFIRM_RESTORE_BACKUP:
+        app_saves_restore_confirmed(app);
         break;
     }
 }
@@ -663,6 +690,7 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     take_events(app);
     app_call_update(app);
     app_batch_update(app);
+    app_saves_update(app);
     if (app->note[0] != '\0' && app_now(app) >= app->note_until_ms) {
         app->note[0] = '\0';
         app->dirty = 1;
@@ -702,6 +730,15 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
         break;
     case SKIFF_APP_SCREEN_CONFIRM:
         confirm_update(app, actions);
+        break;
+    case SKIFF_APP_SCREEN_SAVES:
+        app_saves_screen_update(app, actions);
+        break;
+    case SKIFF_APP_SCREEN_SAVE_BACKUPS:
+        app_saves_backups_update(app, actions);
+        break;
+    case SKIFF_APP_SCREEN_SAVE_CHOICE:
+        app_saves_choice_update(app, actions);
         break;
     }
     const int64_t now = app_now(app);

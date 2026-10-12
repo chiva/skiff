@@ -20,11 +20,13 @@
 #define KEY_SYNCED_MS "synced_ms"
 #define KEY_FILES "files"
 #define KEY_TREE "tree"
+#define KEY_ROMS "roms"
 /* "files" for SKIFF_SAVES_TREE_UNKNOWN. */
 #define FILES_UNKNOWN (-1)
 /* Structural characters per game (9 keys, their commas and the object) and the top level's, with
  * room to spare. */
-#define BASELINE_TOKENS_MAX ((size_t)SKIFF_SAVES_BASELINE_GAMES_MAX * 24 + 64)
+#define BASELINE_TOKENS_MAX                                                                        \
+    ((size_t)SKIFF_SAVES_BASELINE_GAMES_MAX * 24 + (size_t)SKIFF_SAVES_BASELINE_ROMS_MAX * 8 + 64)
 /* "<FOLDER>/<FILE>:<size>:<mtime>\n" with 64-bit numbers. */
 #define TREE_LINE_SIZE (SKIFF_SAVES_ENTRY_SIZE + 48)
 
@@ -103,6 +105,70 @@ void skiff_saves_baseline_forget_all(skiff_saves_baseline *baseline) {
     }
 }
 
+/* ---- Remembered ROMs ---- */
+
+static long rom_index_of(const skiff_saves_baseline *baseline, uint64_t rom_id) {
+    for (size_t i = 0; i < baseline->rom_count; i++) {
+        if (baseline->roms[i].rom_id == rom_id) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+static void drop_rom(skiff_saves_baseline *baseline, size_t i) {
+    memmove(&baseline->roms[i], &baseline->roms[i + 1],
+            (baseline->rom_count - i - 1) * sizeof baseline->roms[0]);
+    baseline->rom_count--;
+    memset(&baseline->roms[baseline->rom_count], 0, sizeof baseline->roms[0]);
+}
+
+static int rom_target_valid(uint64_t rom_id, const char *save_target) {
+    return rom_id > 0 && rom_id <= SKIFF_SAVES_ID_MAX && save_target != NULL &&
+           (save_target[0] == '\0' || skiff_saves_target_valid(save_target));
+}
+
+const char *skiff_saves_baseline_rom_target(const skiff_saves_baseline *baseline, uint64_t rom_id) {
+    if (baseline == NULL) {
+        return NULL;
+    }
+    const long i = rom_index_of(baseline, rom_id);
+    return i < 0 ? NULL : baseline->roms[i].save_target;
+}
+
+skiff_err skiff_saves_baseline_remember_rom(skiff_saves_baseline *baseline, uint64_t rom_id,
+                                            const char *save_target, int *changed) {
+    if (changed != NULL) {
+        *changed = 0;
+    }
+    if (baseline == NULL || !rom_target_valid(rom_id, save_target)) {
+        return SKIFF_ERR_INVALID_ARG;
+    }
+    const long i = rom_index_of(baseline, rom_id);
+    if (i >= 0 && strcmp(baseline->roms[i].save_target, save_target) == 0) {
+        return SKIFF_OK;
+    }
+    if (i >= 0) {
+        drop_rom(baseline, (size_t)i);
+    } else if (baseline->rom_count == SKIFF_SAVES_BASELINE_ROMS_MAX) {
+        drop_rom(baseline, 0);
+    }
+    skiff_saves_rom_target *rom = &baseline->roms[baseline->rom_count++];
+    rom->rom_id = rom_id;
+    snprintf(rom->save_target, sizeof rom->save_target, "%s", save_target);
+    if (changed != NULL) {
+        *changed = 1;
+    }
+    return SKIFF_OK;
+}
+
+void skiff_saves_baseline_forget_roms(skiff_saves_baseline *baseline) {
+    if (baseline != NULL) {
+        baseline->rom_count = 0;
+        memset(baseline->roms, 0, sizeof baseline->roms);
+    }
+}
+
 /* ---- The file format ---- */
 
 static cJSON *entry_to_json(const skiff_saves_baseline_entry *entry) {
@@ -132,11 +198,23 @@ skiff_err skiff_saves_baseline_format(const skiff_saves_baseline *baseline, char
     *length = 0;
     cJSON *root = cJSON_CreateObject();
     cJSON *games = root != NULL ? cJSON_AddArrayToObject(root, KEY_GAMES) : NULL;
-    int built = games != NULL &&
+    cJSON *roms = root != NULL ? cJSON_AddArrayToObject(root, KEY_ROMS) : NULL;
+    int built = games != NULL && roms != NULL &&
                 cJSON_AddNumberToObject(root, KEY_VERSION, SKIFF_SAVES_BASELINE_VERSION) != NULL;
     for (size_t i = 0; built && i < baseline->count; i++) {
         cJSON *item = entry_to_json(&baseline->entries[i]);
         built = item != NULL && cJSON_AddItemToArray(games, item);
+        if (item != NULL && !built) {
+            cJSON_Delete(item);
+        }
+    }
+    for (size_t i = 0; built && i < baseline->rom_count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        built =
+            item != NULL &&
+            cJSON_AddNumberToObject(item, KEY_ROM_ID, (double)baseline->roms[i].rom_id) != NULL &&
+            cJSON_AddStringToObject(item, KEY_SAVE_TARGET, baseline->roms[i].save_target) != NULL &&
+            cJSON_AddItemToArray(roms, item);
         if (item != NULL && !built) {
             cJSON_Delete(item);
         }
@@ -186,6 +264,35 @@ static int read_entry(const cJSON *item, skiff_saves_baseline_entry *entry) {
     return entry_valid(entry);
 }
 
+/* "roms": absent for none, otherwise each ROM once with a save ID that is empty or valid. */
+static int fill_roms(skiff_saves_baseline *baseline, const cJSON *root) {
+    const cJSON *roms = cJSON_GetObjectItemCaseSensitive(root, KEY_ROMS);
+    if (roms == NULL) {
+        return 1;
+    }
+    if (!cJSON_IsArray(roms) || cJSON_GetArraySize(roms) > SKIFF_SAVES_BASELINE_ROMS_MAX) {
+        return 0;
+    }
+    const cJSON *item = NULL;
+    cJSON_ArrayForEach(item, roms) {
+        double rom_id = 0.0;
+        skiff_saves_rom_target rom;
+        memset(&rom, 0, sizeof rom);
+        if (!cJSON_IsObject(item) ||
+            !saves_json_number(item, KEY_ROM_ID, (double)SKIFF_SAVES_ID_MAX, &rom_id) ||
+            !saves_json_string(item, KEY_SAVE_TARGET, 1, rom.save_target, sizeof rom.save_target)) {
+            return 0;
+        }
+        rom.rom_id = (uint64_t)rom_id;
+        if (!rom_target_valid(rom.rom_id, rom.save_target) ||
+            rom_index_of(baseline, rom.rom_id) >= 0) {
+            return 0;
+        }
+        baseline->roms[baseline->rom_count++] = rom;
+    }
+    return 1;
+}
+
 static int fill(skiff_saves_baseline *baseline, const cJSON *root) {
     double version = 0.0;
     const cJSON *games = cJSON_GetObjectItemCaseSensitive(root, KEY_GAMES);
@@ -203,7 +310,7 @@ static int fill(skiff_saves_baseline *baseline, const cJSON *root) {
         }
         baseline->entries[baseline->count++] = entry;
     }
-    return 1;
+    return fill_roms(baseline, root);
 }
 
 skiff_err skiff_saves_baseline_parse(skiff_saves_baseline *baseline, const char *text,
@@ -212,6 +319,7 @@ skiff_err skiff_saves_baseline_parse(skiff_saves_baseline *baseline, const char 
         return SKIFF_ERR_INVALID_ARG;
     }
     skiff_saves_baseline_forget_all(baseline);
+    skiff_saves_baseline_forget_roms(baseline);
     if (length > SKIFF_SAVES_BASELINE_BYTES_MAX) {
         return SKIFF_ERR_INVALID_ARG;
     }
@@ -223,6 +331,7 @@ skiff_err skiff_saves_baseline_parse(skiff_saves_baseline *baseline, const char 
     cJSON_Delete(root);
     if (err != SKIFF_OK) {
         skiff_saves_baseline_forget_all(baseline);
+        skiff_saves_baseline_forget_roms(baseline);
     }
     return err;
 }
@@ -248,6 +357,7 @@ skiff_err skiff_saves_baseline_load(skiff_saves_baseline *baseline, skiff_storag
         return SKIFF_ERR_INVALID_ARG;
     }
     skiff_saves_baseline_forget_all(baseline);
+    skiff_saves_baseline_forget_roms(baseline);
     char *text = malloc(SKIFF_SAVES_BASELINE_BYTES_MAX);
     if (text == NULL) {
         baseline->load_error = SKIFF_ERR_NO_MEMORY;
@@ -268,6 +378,7 @@ skiff_err skiff_saves_baseline_load(skiff_saves_baseline *baseline, skiff_storag
     free(text);
     if (err != SKIFF_OK) {
         skiff_saves_baseline_forget_all(baseline);
+        skiff_saves_baseline_forget_roms(baseline);
         baseline->load_error = err;
         return err;
     }

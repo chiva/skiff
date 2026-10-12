@@ -121,6 +121,24 @@ static void test_the_version_policy(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_romm_check_version("5.3.1", NULL));
 }
 
+static void test_save_sync_needs_romm_5_4(void) {
+    static const struct {
+        const char *version;
+        int syncs;
+    } CASES[] = {
+        {"5.3.1", 0},  {"5.3.9", 0}, {"5.4.0", 1},       {"5.4.0-beta.1", 1},
+        {"5.10.0", 1}, {"6.0.0", 1}, {"development", 1},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        skiff_romm_server server;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_check_version(CASES[i].version, &server));
+        TEST_PRINTF("RomM '%s' syncs saves: %d", CASES[i].version,
+                    skiff_romm_server_syncs_saves(&server));
+        TEST_ASSERT_EQUAL_INT(CASES[i].syncs, skiff_romm_server_syncs_saves(&server));
+    }
+    TEST_ASSERT_EQUAL_INT(0, skiff_romm_server_syncs_saves(NULL));
+}
+
 static void test_heartbeat_reads_the_recorded_version_without_the_token(void) {
     serve_fixture("/api/heartbeat", "romm/heartbeat.http");
     skiff_romm_server server;
@@ -301,6 +319,97 @@ static void test_a_list_asks_only_for_what_its_query_wants(void) {
     TEST_ASSERT_EQUAL_size_t(2, fake.request_count);
     TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&favorite=true", fake.log[0].url + strlen(BASE_URL));
     TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&with_files=true", fake.log[1].url + strlen(BASE_URL));
+}
+
+static void test_the_roms_with_saves_list_asks_for_has_saves(void) {
+    const skiff_romm_list_query with_saves = {.platform_id = PSP_PLATFORM_ID,
+                                              .filter = SKIFF_ROMM_LIST_WITH_SAVES};
+    serve_raw(PAGE_PATH(0) "&has_saves=true",
+              JSON_OK "{\"items\":[],\"total\":0,\"limit\":1,\"offset\":0}");
+    skiff_romm_rom_page page;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_list_roms(&client, &with_saves, 0, 1, &page));
+    TEST_ASSERT_EQUAL_size_t(1, fake.request_count);
+    TEST_PRINTF("asked %s", fake.log[0].url + strlen(BASE_URL));
+    TEST_ASSERT_EQUAL_STRING(PAGE_PATH(0) "&has_saves=true", fake.log[0].url + strlen(BASE_URL));
+}
+
+/* A list item of ROM 1 with save_target and save_target_layout as JSON values (NULL: absent). */
+#define SAVE_FIELDS_MAX 256
+static void item_with_save_target(const char *target, const char *layout, char *out, size_t size) {
+    char fields[SAVE_FIELDS_MAX] = "";
+    if (target != NULL) {
+        snprintf(fields + strlen(fields), sizeof fields - strlen(fields), ",\"save_target\":%s",
+                 target);
+    }
+    if (layout != NULL) {
+        snprintf(fields + strlen(fields), sizeof fields - strlen(fields),
+                 ",\"save_target_layout\":%s", layout);
+    }
+    snprintf(out, size,
+             "{\"id\":1,\"platform_id\":1,\"name\":\"Game\",\"fs_name\":\"Game.iso\","
+             "\"fs_size_bytes\":10%s}",
+             fields);
+}
+
+static void test_a_roms_save_id_is_read_and_never_refuses_it(void) {
+    static const struct {
+        const char *target;
+        const char *layout;
+        const char *expected;
+        skiff_romm_save_layout expected_layout;
+    } CASES[] = {
+        {"\"ULUS10064\"", "\"folder-prefix\"", "ULUS10064", SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX},
+        {"\"SKIF00002\"", "\"folder-exact\"", "SKIF00002", SKIFF_ROMM_SAVE_LAYOUT_OTHER},
+        {"\"SKIF00002\"", "\"some-future-layout\"", "SKIF00002", SKIFF_ROMM_SAVE_LAYOUT_OTHER},
+        {"\"SKIF00002\"", "null", "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"\"SKIF00002\"", NULL, "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"null", "null", "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {NULL, NULL, "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"\"\"", "\"folder-prefix\"", "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"42", "\"folder-prefix\"", "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"\"ULUS\\u000710064\"", "\"folder-prefix\"", "", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"\"ULUS10064ULUS10064ULUS10064ULUS10064\"", "\"folder-prefix\"", "",
+         SKIFF_ROMM_SAVE_LAYOUT_NONE},
+        {"\"SKIF00002\"", "7", "SKIF00002", SKIFF_ROMM_SAVE_LAYOUT_NONE},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char item[RAW_MAX];
+        item_with_save_target(CASES[i].target, CASES[i].layout, item, sizeof item);
+        char page_json[2 * RAW_MAX];
+        snprintf(page_json, sizeof page_json,
+                 "{\"items\":[%s],\"total\":1,\"limit\":1,\"offset\":0}", item);
+        skiff_romm_rom_page page;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                              skiff_romm_parse_rom_page(page_json, strlen(page_json), &page));
+        const skiff_romm_rom_summary *rom = &page.items[0];
+        TEST_PRINTF(
+            "save_target %s, layout %s -> '%s', %d", CASES[i].target ? CASES[i].target : "-",
+            CASES[i].layout ? CASES[i].layout : "-", rom->save_target, (int)rom->save_layout);
+        if (CASES[i].expected_layout == SKIFF_ROMM_SAVE_LAYOUT_NONE) {
+            TEST_ASSERT_EQUAL_STRING("", rom->save_target);
+        } else {
+            TEST_ASSERT_EQUAL_STRING(CASES[i].expected, rom->save_target);
+        }
+        TEST_ASSERT_EQUAL_INT(CASES[i].expected_layout, rom->save_layout);
+        TEST_ASSERT_EQUAL_STRING("Game.iso", rom->fs_name);
+    }
+    TEST_PRINTF("a ROM's details carry it too");
+    char item[RAW_MAX];
+    item_with_save_target("\"ULUS10064\"", "\"folder-prefix\"", item, sizeof item);
+    item[strlen(item) - 1] = '\0';
+    char rom_json[2 * RAW_MAX];
+    snprintf(rom_json, sizeof rom_json,
+             "%s,\"files\":[{\"rom_id\":1,\"file_name\":\"Game.iso\",\"file_size_bytes\":10}]}",
+             item);
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_parse_rom(rom_json, strlen(rom_json), &rom));
+    TEST_ASSERT_EQUAL_STRING("ULUS10064", rom.summary.save_target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX, rom.summary.save_layout);
+    TEST_PRINTF("the recorded ROMs are files RomM could not read a save ID from");
+    serve_fixture("/api/roms/1", "romm/rom.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
+    TEST_ASSERT_EQUAL_STRING("", rom.summary.save_target);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_NONE, rom.summary.save_layout);
 }
 
 static void test_a_favourite_of_another_platform_is_refused(void) {
@@ -1701,6 +1810,7 @@ static void test_requests_refuse_bad_arguments(void) {
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_the_version_policy);
+    RUN_TEST(test_save_sync_needs_romm_5_4);
     RUN_TEST(test_heartbeat_reads_the_recorded_version_without_the_token);
     RUN_TEST(test_an_old_server_is_refused_and_still_named);
     RUN_TEST(test_a_heartbeat_with_an_escaped_control_is_a_bad_response);
@@ -1716,6 +1826,8 @@ int main(void) {
     RUN_TEST(test_page_limits_are_checked);
     RUN_TEST(test_favourites_list_with_their_files_then_end);
     RUN_TEST(test_a_list_asks_only_for_what_its_query_wants);
+    RUN_TEST(test_the_roms_with_saves_list_asks_for_has_saves);
+    RUN_TEST(test_a_roms_save_id_is_read_and_never_refuses_it);
     RUN_TEST(test_a_favourite_of_another_platform_is_refused);
     RUN_TEST(test_a_listed_file_is_kept_only_when_it_is_the_roms_only_one);
     RUN_TEST(test_every_field_is_checked_before_a_rom_is_shown);

@@ -5,8 +5,8 @@
 
 ## Prepare the RomM server
 
-- RomM **5.3 or newer** (shown under your profile → About in the RomM web UI). Syncing saves needs
-  5.4 or newer.
+- RomM **5.3 or newer** (shown under your profile → About in the RomM web UI). Syncing saves, and
+  getting games sent from RomM's web UI, need 5.4 or newer.
 - The PSP must be able to reach the server's address. If RomM is only on your home network, the PSP
   must be on a network that can reach it (see [Wi-Fi](02-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
 - A RomM user that can see your PSP games. A dedicated user that can read the library and keep
@@ -44,8 +44,9 @@ address of RomM's pairing page with this PSP's code in it, for example
    - reading your platforms and ROMs, to browse and download. Skiff cannot work without them
      (error 209). Your favourites need nothing more;
    - reading your collections, for Skiff's **Collections** list (below);
-   - reading and writing your saves, and RomM's record of this PSP, for
-     [save sync](06-sync-saves.md) (Skiff 0.4.0 or newer).
+   - reading and writing your saves, and RomM's record of this PSP (the device permissions), for
+     [save sync](06-sync-saves.md) (Skiff 0.4.0 or newer). Writing RomM's record of this PSP
+     also lets it receive [games sent from RomM](#games-sent-from-romm) (Skiff 0.5.0 or newer).
 
    You may untick all but the first: Skiff still browses and downloads, and the features that need
    the others ask you to pair again when you want them.
@@ -110,6 +111,53 @@ installed. The games themselves stay on the Memory Stick.
   game you copied there yourself.
 - Quitting Skiff (HOME, then quit) pauses the downloads; the next start carries on where they
   stopped. After sleep mode or a Wi-Fi drop, Skiff reconnects by itself.
+
+## Games sent from RomM
+
+From Skiff 0.5.0, with RomM 5.4 or newer, you can pick a game in RomM's web UI, on your phone or
+computer, and send it to the PSP: Skiff adds it to **Downloads** by itself, without asking.
+
+1. In RomM's web UI, signed in as the RomM user that approved this PSP's pairing, open a PSP game
+   and choose **Install on device**.
+2. Tick **Skiff on PSP**. RomM lists only your own devices that can receive games; a dot shows the
+   PSP online while Skiff is open and connected.
+3. With Skiff open, the game is in Downloads within about 20 seconds, also while Skiff sits on
+   the Downloads screen.
+   Skiff's header says "From RomM: 1 added to Downloads" ("Desde RomM: 1 añadidos a Descargas" on a
+   PSP set to Spanish), and RomM says **Added to downloads** and sends you a notification.
+
+Skiff only receives games while it is open. A game you send while Skiff is closed waits in RomM
+("Waiting for the device") for up to 2 days, RomM's default, and Skiff adds it right after it
+connects the next time you open it. Unticking the PSP in RomM before then cancels the send. Skiff
+never joins the Wi-Fi only to look for games: after a Wi-Fi drop it looks again once it has
+joined for something else, such as a download carrying on or the next game you open.
+
+Skiff applies the same rules as **Download all**. A game already in Downloads counts as added; an
+installed game is reported to RomM as already installed. RomM shows **Failed** with Skiff's reason,
+in the PSP's language, for a game Skiff did not add, and Skiff's header then says "From RomM: 1
+added, 1 not added (see RomM)":
+
+- a game of another platform: RomM offers Install on device for games of any platform, but Skiff
+  only installs PSP games (error 219);
+- a game Skiff cannot install: a folder of several files, or not an `.iso`, `.cso` or `.zso` file;
+- a game Skiff installed that RomM has changed since: open it in Skiff to replace your copy;
+- a game whose download failed in Downloads: retry it there;
+- no room: Downloads holds 64 unfinished downloads, Skiff keeps track of 512 installed games, and
+  the download must fit the Memory Stick's free space. Send it again once there is room.
+
+**Settings → Games from RomM** turns this off and on (it is on at first). Off, Skiff asks RomM to
+stop listing this PSP in Install on device, and adds nothing; your choice is kept in `config.ini`
+as `[downloads] from_romm = off`. The row may also say:
+
+- **Pair again to allow it**: the PSP was paired without the device permissions (by a Skiff older
+  than 0.4.0, with them unticked, or with a token pasted by hand), or RomM refused it (error 218). Choose the row to pair
+  again with the device permissions ticked; the address, the downloads and your installed games
+  stay.
+- **Needs RomM 5.4**: update RomM.
+- **Turned off in RomM**: the RomM server's administrator turned Install on device off.
+
+When the PSP does not show up in Install on device, see
+[troubleshooting](troubleshooting.md#the-psp-is-not-listed-in-install-on-device).
 
 ## Alternative: paste a token by hand
 

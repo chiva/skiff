@@ -426,9 +426,8 @@ Typical saves are tens of KB: a 20 KB save (3 files) hashed in about 0.1 s, uplo
 and restored in 2.3–2.5 s on the debug EBOOT.
 
 The restore's writes are its cost now: writing the stage and then copying it into the live folder
-writes every byte twice. Renaming the staged files into place would halve that, but whether
-`sceIoRename` moves across folders on the Memory Stick, and how a cut rename leaves FAT, are not
-known (see [open questions](#open-questions)). Uploads have shown no gain from 1 MiB reads yet.
+writes every byte twice. Renaming the staged files into place would halve that; it is not pursued
+(see [open questions](#open-questions)). Uploads have shown no gain from 1 MiB reads yet.
 
 The UI changes from the session are in #97 and #98. The PSP's GE left a corner pixel out of the
 □ symbol drawn with lines, so button symbols are now drawn pixel by pixel.
@@ -452,9 +451,11 @@ The UI changes from the session are in #97 and #98. The PSP's GE left a corner p
   now go through the firmware's resolver with a timeout, and `[log] level = debug` logs each
   lookup's time (`resolve <host>: <ms> ms`), so the next occurrence names its cause. Not seen again
   on 2026-10-10 (lookups 4–11 ms).
-- **Restoring by rename.** Whether `sceIoRename` moves a file or folder from Skiff's folder into
-  `PSP/SAVEDATA/` on a real Memory Stick, and what a rename cut by a sleep or a flat battery leaves,
-  is not known. It would halve a restore's writes ([save sync](#save-sync-s1)).
+- ~~**Restoring by rename.**~~ Not pursued (maintainer, 2026-10-12): moving folders is not atomic
+  on FAT, and the gain is about 8 s on a rare 8 MB save; PPSSPP refuses renames into another
+  folder. The question was whether `sceIoRename` moves a file or folder from Skiff's folder into
+  `PSP/SAVEDATA/` on a real Memory Stick, and what a rename cut by a sleep or a flat battery
+  leaves; it would halve a restore's writes ([save sync](#save-sync-s1)).
 - **An emptied save folder.** Step 5 of a restore empties a folder the unit lacks before removing
   it; whether the XMB shows such a folder, if a cut leaves it, as Corrupted Data is not known.
 - **`sceIoRmdir` on a full folder.** PPSSPP removes a folder that still holds files; whether the

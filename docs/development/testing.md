@@ -124,7 +124,12 @@ the PSP's network checks:
   `Skiff Save Disc.iso` (an ISO 9660 image holding only `UMD_DATA.BIN` with the made-up game ID
   `SKIF-00002`, no game in it): RomM reads its save ID (`save_target` `SKIF00002`, layout
   `folder-prefix`), which save sync and its tests use. `romm-record` leaves it out
-  (`SKIFF_SAVE_DISC=0`), so the recorded lists keep their two ROMs.
+  (`SKIFF_SAVE_DISC=0`), so the recorded lists keep their two ROMs. A last scan adds a game of
+  another platform, `Skiff Foreign Game.gba` (2 KiB of synthetic bytes in a `gba` platform), unless
+  `SKIFF_FOREIGN_ROM=0`: RomM lets a player send any platform's game to the PSP (Install on
+  device), so the install tests send it and Skiff refuses it (219). Scanned last, it leaves the PSP
+  ROMs' ids as they were; `romm-record` keeps it (`SKIFF_FOREIGN_ROM=1`), and `romm-test` finds its
+  id in `romm.json` (`foreign.rom_id`).
 
 | Command | What it does |
 |---|---|
@@ -186,7 +191,17 @@ RomM lacks is a 404; the favourites list holds the seeded favourite with its fil
 `collections.read` lists the admin's three collections and the viewer's public one (not the
 viewer's private one, nor the favourites), while the other token's request is refused (201, RomM's
 403); each collection's games list with `roms.read` alone, and the viewer's private collection
-lists none (RomM 5.4 checks the owner); a wrong token is a RomM refusal (200).
+lists none (RomM 5.4 checks the owner); a wrong token is a RomM refusal (200). Then games sent
+from RomM's web UI (`include/skiff/romm_installs.h`): a PSP paired with every scope registers
+`remote_install`, the admin sends it the payload and the foreign ROM as the web UI does, and the
+PSP claims both (oldest first), finds the foreign ROM is not on the `psp` platform and reports it
+failed with the Spanish 219 sentence, reports the payload done (a second report is 202), finds
+nothing left to claim, and turns `remote_install` off, after which RomM refuses the web UI's send
+(400); the seed's API token, not bound to the device, is refused the claim (218). `romm-record` records the same calls for the fake
+transport (`tests/integration/record-installs-fixtures.sh`): three sends (the payload, the extra
+ROM and the foreign ROM) claimed twice, reports `done`, `already_installed` and `failed`, a repeat
+(404) and a still-pending one (409), an empty claim, register off, and a token that only browses
+refused the claim and the register (403), with synthetic device ids.
 
 The fourth pairs with RomM (`include/skiff/romm_pairing.h`): a pairing starts, a poll before the
 admin approves is not approved, the admin approves through RomM's own endpoint (as its web UI does),
@@ -583,7 +598,8 @@ reserved characters in its name (no cover: a RomM edit would rename it). The adm
 the large file, the first 30 numbered ROMs and the three odd names, plus a second favourites
 collection with the next two numbered ROMs (RomM lists the union: 36 favourites, two pages). Its
 "Skiff Shelf" collection holds both seeded files, the first 30 numbered ROMs and the three odd
-names (35 games, two pages).
+names (35 games, two pages). The foreign ROM (`Skiff Foreign Game.gba`) is in RomM's `gba`
+platform, which the app never lists; I1 (below) sends it to the PSP.
 
 The library also gets the **launch check** (`tests/hardware/launch_check.c`), so a game Skiff
 downloaded can be launched from the XMB without any game file from outside the project: a tiny
@@ -807,6 +823,39 @@ Quit) while it downloads: Backlight Auto-Off still shows the player's setting. W
 Auto-Off set to Off, a download never darkens the screen. Read back: the `backlight:` lines in
 `skiff.log` (60 s while downloading, the player's time when done and at quit, and each press that
 only lit the screen).
+
+**Install on device (I1).** Games sent from RomM's web UI
+([Architecture](architecture.md#the-app)). The session changes Skiff's queue, `installed.json` and
+`config.ini`, so **first back up Skiff's folder** (`PSP/GAME/Skiff/`) to a dated folder on your
+computer, outside the repository (`cp -RX` on macOS). Prepare as above with
+`SKIFF_PAYLOAD_BYTES=67108864 SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp romm-lan` (the 64 MiB
+payload is I1.5's download; the seed adds the foreign ROM, `Skiff Foreign Game.gba`, by default)
+and `scripts/memstick.sh install`, which writes `[log] level = debug`. Pair with every permission
+ticked, the device permissions included: Settings → Games from RomM says On. Download one numbered
+ROM before I1.4, which sends it again as an installed game. Send from RomM's web UI in a phone or
+computer browser, signed in as the admin who approves the pairing (`build/integration/romm.env`).
+For I1.5's and I1.8's timings, copy the release app over the debug one (above).
+
+| # | Step | Pass criteria |
+|---|---|---|
+| I1.1 | Launch Skiff; in RomM open a PSP game → Install on device | "Skiff on PSP" is listed **online** |
+| I1.2 | Tick it while Skiff shows the library | within 20 s: header "From RomM: 1 added to Downloads", Downloads lists it, RomM says "Added to downloads" and notifies |
+| I1.3 | Quit Skiff; send two games; launch | both added right after connecting, before "Checking saves..." |
+| I1.4 | Send the foreign ROM, the `.zip` ROM and an installed game | RomM: two "Failed" with the PSP's reason (Spanish when the PSP is Spanish), one "Already installed" |
+| I1.5 | Send while a 64 MiB download runs | the download's KB/s around the poll (`request:` and `jobs:` lines); no frame > 16 ms beyond today's |
+| I1.6 | Wi-Fi switch off 2 min with nothing downloading, on; then sleep and wake | no error screen; the PSP goes offline in RomM; the next request the player makes rejoins and the next claim follows |
+| I1.6b | Wi-Fi switch off 1 min **while downloading** and leave the PSP on Downloads; switch on | the worker rejoins (`rejoin profile` line) and claims follow within about 20 s without a press; a send made meanwhile lands |
+| I1.7 | Settings → Games from RomM → Off; quit and relaunch | RomM no longer lists the PSP; one `remote_install false` per connection (`send: RomM sends no more games to this PSP`), no claims in the log |
+| I1.8 | Read back | `send` lines (per-send outcome, claim ms for non-empty claims), `stats:`; browse stack ≥ 8 KB free; system memory 84 KB |
+
+While the switch is on and Skiff sits idle, the empty claim shows as a `request:` line about every
+20 s and nothing else: an empty claim logs no `send` line. A claim that brought sends logs
+`send: claim of N in M ms: ...`, and each send `send <first 8 characters of its id>: rom <id> ->
+<done|already_installed|failed|left taken> (<why>)`. `scripts/memstick.sh results` also checks that
+neither the token pairing wrote nor the `X-Skiff-Test` value appears in any file under
+`PSP/GAME/Skiff*` but `config.ini` (and its temporary copies).
+
+Afterwards restore Skiff's folder from the backup (`cp -RX`, then check for `._` files).
 
 ## UI prototype
 

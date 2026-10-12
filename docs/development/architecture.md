@@ -57,13 +57,15 @@ network stack, TLS hooks, the GU renderer, the system dialogs) exist. The other 
   two calls. The profile to join is the one the network picker last connected through, found by
   its name (`skiff_psp_net_connected_profile()`; with two profiles of the same name, the first).
 - **Browsing thread**: runs the app's requests to RomM (connection check, platform, library pages,
-  a game's details, pairing, save sync), one at a time (`src/platform/psp/call_psp.h`), so a slow network
-  never freezes the screen. The app copies a request's inputs into its call before it starts and
-  reads the results once the UI sees it done (`src/app/app_call.c`); the thread touches nothing
-  else but the browse client, which is not replaced while a call runs. The one exception is
-  "Download all" queueing its games: that call reads the app's installer, roots and
-  queue (all fixed while a call runs) and copies `installed.json` under its lock, and the library
-  takes no input until it is done. Leaving what a request was
+  a game's details, pairing, save sync, games sent from RomM), one at a time
+  (`src/platform/psp/call_psp.h`), so a slow network never freezes the screen. The app copies a
+  request's inputs into its call before it starts and reads the results once the UI sees it done
+  (`src/app/app_call.c`); the thread touches nothing else but the browse client, which is not
+  replaced while a call runs. The one exception is queueing a batch of games ("Download all", or
+  games sent from RomM): that call reads the app's installer, roots and
+  queue (all fixed while a call runs) and copies `installed.json` under its lock. Until it is done
+  the library takes no input after Download all, and after sends the presses that would change the
+  queue do nothing. Leaving what a request was
   for (Back from a game's details, a pairing given up) drops its result and asks its transfer to
   stop. Settings that would replace the client (a new server, pairing again) wait for the call.
   It starts with the first request, at the worker's priority, with a 32 KB stack.
@@ -192,6 +194,50 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   distinct targets) and queues them with `skiff_jobs_add_many()`: one save of the queue
   instead of one per game (116 to 233 ms each on a PSP-1000). A game it cannot plan is reported
   with its error, apart from a full queue.
+- **Games sent from RomM** (`src/app/app_sends.c`; RomM 5.4 or newer with `DEVICE_INSTALL.ENABLED`
+  in its heartbeat, a token with `devices.write` and a `device_id`, and `[downloads] from_romm` not
+  `off`): a player picks this PSP in RomM's web UI (**Install on device**) and Skiff adds the game
+  to Downloads without asking. RomM keeps each send until the device reports it, and Skiff holds no
+  socket (its curl has no WebSockets), so it claims them: right after connecting (after the
+  library's first page, before save sync's check), then every
+  `SKIFF_APP_INSTALL_CLAIM_INTERVAL_MS` (20 s) while connected, also on Downloads. RomM's dialog
+  shows a device online for 90 s after its last claim. A claim runs only when no other call runs
+  or waits, the Wi-Fi is joined, and Skiff is not connecting, pairing, in a system dialog,
+  "Download all" or a server change; save sync waits for it. A claim that fails on the network
+  never joins the Wi-Fi: claims wait for the next join, whoever makes it. Meanwhile the app asks the
+  platform at most once a second (`skiff_app_env.net_online`) whether the Wi-Fi was joined again
+  since the last suspend, so the download worker's rejoin counts and a PSP left on Downloads
+  overnight keeps receiving. A round is three calls on the browsing thread, with the sorting on the
+  screen's:
+  1. `CALL_SENDS_CLAIM`: `remote_install: true` once per connection, the claim (the first 64
+     sends; the rest wait for the next one), `skiff_romm_get_rom()` per send and the free space;
+  2. sorting, in RomM's order: a game of another platform is refused (219, since RomM sends any
+     platform's games but Windows ones to any device), so is one of several files (RomM sends
+     update and DLC files with it), then Download all's rules (`app_batch_take()`) on a heap
+     batch of the round's own, cut to the free space. A changed installed copy is not replaced
+     (replacing stays the player's choice, game by game), and no room in the queue,
+     `installed.json` or the Memory Stick is a refusal with its reason;
+  3. `CALL_SENDS_QUEUE`: the chosen games queued with one save (`app_batch_queue_run()`);
+  4. `CALL_SENDS_REPORT`: every send reported, only after that save: `done` for one queued or
+     already in Downloads (RomM's web UI says "Added to downloads"), `already_installed`, or
+     `failed` with a reason. Reports have their own call so a slow RomM never holds the queue.
+
+  Skiff keeps no record of sends: one claimed and not reported (Skiff quit, the Wi-Fi went, a
+  report failed) comes back on the next claim and finds its game in Downloads or installed, so
+  nothing is queued twice; one whose details were lost with the connection is left taken for the
+  next claim. A ROM sent twice in one claim is queued once. Reasons are fixed texts or Skiff's
+  error sentence with its code, in the PSP's language; never RomM's text, a token or a path, and
+  nothing from the claim reaches the Memory Stick. The header says "From RomM: N added to
+  Downloads", or "From RomM: N added, M not added (see RomM)", after a round that added or refused
+  anything; an empty claim shows nothing and logs no `send` line (only the debug `request:` line
+  every request gets). Switched off in Settings, Skiff sends
+  `remote_install: false` once per connection (so RomM stops listing the PSP even if an earlier
+  run quit before telling it) and never claims. A 403 (218) on registering or claiming stops sends
+  until pairing again (one on a report is only logged with its send), a 404
+  (the device deleted in RomM, or the feature turned off since the heartbeat) until the next
+  connection. While the queue call runs, a download, Download all, a cancel or retry, a server
+  change and the confirmations wait; Download all also waits for a claimed round that has not
+  queued yet, so its room count never includes slots the round is about to take.
 - **Settings**: a new server address clears the token and RomM's device id (they belong to the old
   server) and pairs again. The old server's downloads cannot run against the new one (other ROM
   ids, other files), and neither does what Skiff installed from it say anything about the new
@@ -207,8 +253,8 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   download replaces are backed up first) while the header says "Checking saves..." and then "Saves: N synced, M need
   you". Conflicts and saves deleted on one side wait for the player: Settings → Saves lists every
   game with its state (Sync, Sync all, Backups), a game's details show its save and offer Sync
-  save, and a choice screen shows both sides. Library pages and "Download all" always go first;
-  save calls wait for them. A token without the save scopes (or one RomM answers 403) shows "Pair
+  save, and a choice screen shows both sides. Library pages, "Download all" and games sent from
+  RomM always go first; save calls wait for them. A token without the save scopes (or one RomM answers 403) shows "Pair
   again", a RomM before 5.4 that save sync needs 5.4 (215); browsing works either way. Pairing
   again or a new server forgets every baseline (backups and saves stay).
 - **installed.json is saved off the lock the UI reads**: the worker records a finished download
@@ -329,6 +375,7 @@ know and the player's order survive.
 | `[log]` | `level` | `error`, `warn`, `info` or `debug` for `skiff.log`; `info` when unset |
 | `[network]` | `profile` | The Network Settings connection (1-10) Skiff joins; Skiff saves the one picked in the network picker on the first launch |
 | `[skiff]` | `romm_notice` | The newer RomM release line the player was already told about; written by Skiff |
+| `[downloads]` | `from_romm` | `on` or `off` (any case): whether games sent to this PSP from RomM's web UI (Install on device) are added; on when unset or empty. Settings' **Games from RomM** row writes it |
 
 - **Parsing**: a UTF-8 byte-order mark and CRLF line endings are accepted (Notepad writes both);
   names ignore case; `#` or `;` starts a comment only at the start of a line, because a token or a
@@ -396,6 +443,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
 | Saves | The PSP ROMs with saves (the ROM list with `has_saves=true`), `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}` (its device), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
+| Sends | Games a player sends to this PSP from RomM's web UI (Install on device, RomM 5.4 while the heartbeat's `DEVICE_INSTALL.ENABLED` is true): `PUT /api/devices/{device_id}` with `{"capabilities":{"remote_install":true}}` (or `false`), `POST /api/devices/{device_id}/installs/claim`, `GET /api/roms/{id}` per send, and `PUT /api/devices/{device_id}/installs/{request_id}` with `done`, `already_installed` or `failed` and a reason (`devices.write`, a token bound to this device) |
 
 Custom headers: `config.ini` may define extra HTTP headers sent on every request. This covers
 proxy access schemes the PSP cannot otherwise satisfy — notably Cloudflare Access service tokens
@@ -494,6 +542,37 @@ download writes `<path>.part` and renames it once whole, never past the caller's
 Upload answers, negotiate plans and their strings are bounded and checked like every response; a
 device name is only shown, so it is kept in display form.
 
+The install calls (`include/skiff/romm_installs.h`) serve games sent from RomM's web UI. RomM keeps
+each send as an install request, only in Redis, until the device reports it; one not reported
+expires `DEVICE_INSTALL_REQUEST_TTL_DAYS` (2 by default) after its last change. RomM checks nothing
+about the platform (only that it is not one of `DEVICE_INSTALL_EXCLUDED_PLATFORM_SLUGS`, Windows
+by default), so the app refuses what is not a PSP game.
+
+- **Register**: `PUT /api/devices/{device_id}` with `{"remote_install": <on>}` as the whole
+  capabilities: RomM replaces the dict, keeps it while Skiff is not running, and lists a device in
+  Install on device only while it is true. Skiff sets no other capability. The answer must be this
+  device holding that value.
+- **Claim**: `POST …/installs/claim`, no body. RomM takes every pending request and returns every
+  one this device holds taken, oldest first, again on every claim until it is reported, so a claim
+  not acted on loses nothing. Skiff keeps the first 64 (`total` and `dropped` are counted for the
+  log). A request id is put in a URL only in the shape RomM makes it (a UUID4): 36 lowercase
+  hexadecimal digits and hyphens, the hyphens after the 8th, 12th, 16th and 20th digit (the UUID's
+  version and variant are not checked); any other is dropped, never reported, and expires in RomM. A
+  status other than `taken`, another device's request or a wrong type refuses the whole claim
+  (204). `file_ids` is only counted (at most 64 read).
+- **Report**: `PUT …/installs/{request_id}` with `{"status":"done|already_installed|failed"}` and,
+  for a refusal, `"reason"`: cut to at most 500 bytes on a UTF-8 boundary (RomM takes 500
+  characters); a control character refuses it. The answer must be that request with that status.
+- **Statuses**: 403 on any of them is 218 (the token may not receive games, or is not bound to this
+  device: a pasted API token); 404 is 202 (the device deleted in RomM, the feature turned off, or
+  for a report a request already ended or cancelled in the web UI); a report's 409 (still pending)
+  is 202 too; a claim's 409 (RomM's requests kept changing under it) is 203, tried again later.
+- **Heartbeat**: `skiff_romm_server.installs_enabled` is 1 only for `DEVICE_INSTALL.ENABLED: true`;
+  RomM 5.3 has no such key, which never fails the heartbeat.
+- The transport gained `PUT` for these: curl sends it as a POST body under
+  `CURLOPT_CUSTOMREQUEST`, set or cleared on every request so a reused handle never keeps the verb.
+  The layer logs nothing; the token travels only in the `Authorization` header.
+
 ### Pairing
 
 `include/skiff/romm_pairing.h` runs RomM's device-code flow, which follows RFC 8628 (the OAuth
@@ -505,7 +584,9 @@ device grant):
    against RomM 5.3.1), favourites included, and are required. The rest are optional: save sync
    (Phase 4) needs `assets.read` and `assets.write` (the player's own saves) and `devices.read`
    and `devices.write` (RomM's record of what this PSP synced), and collections need
-   `collections.read`. None of them changes the library. RomM answers
+   `collections.read`. `devices.write` also lets the PSP receive games sent from RomM's web UI
+   (registering `remote_install`, claiming and reporting sends), which needs no other optional
+   scope. None of them changes the library. RomM answers
    201 with a `device_code`, an 8-character `user_code` (letters and digits, e.g. `7EGGP3VE`), a
    `verification_path` relative to the server (`/pair/device`, also with `?user_code=`), `expires_in`
    (600 s) and `interval` (5 s). Skiff shows the code and the server's address plus the path with
@@ -857,8 +938,8 @@ release would have had a meaningful life. The image is built from source in ever
 than pulled from a registry, so there is no mutable published artifact to trust. wolfSSL is
 excluded because its GPL-2.0 licence is incompatible with Skiff's MIT licence.
 
-The `transport` interface (`include/skiff/transport.h`) takes a method (GET, or POST with a body
-sent whole from memory, for RomM's JSON calls, or streamed from a reader callback, for a save's
+The `transport` interface (`include/skiff/transport.h`) takes a method (GET, or POST or PUT with a
+body sent whole from memory, for RomM's JSON calls, or streamed from a reader callback, for a save's
 upload), a URL, headers, `Range`/`If-Range` (GET only) and a body callback, and fills a small response record: status, ETag, Content-Length and
 Content-Range, read by one header parser shared with the fake transport, plus the TLS version and
 cipher suite of the connection, for logs. Custom headers from
@@ -874,7 +955,7 @@ waiting out the stall timeout.
 
 A streamed body (`read_body`) has its exact size up front: curl sends it with `Content-Length`,
 never chunked (a PSP saves a few bytes and RomM sees the size before the body), and like every POST
-never with `Expect: 100-continue`, which would cost a round trip. The reader must give exactly that
+and PUT never with `Expect: 100-continue`, which would cost a round trip. The reader must give exactly that
 many bytes, checked by `skiff_http_read_body()` for both transports: a file that shrank or grew
 since its size was taken fails the request (1) instead of sending a body the server would store
 cut. A streamed body is read once, so curl cannot resend it when a kept-alive connection turns out

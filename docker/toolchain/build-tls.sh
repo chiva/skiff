@@ -25,6 +25,12 @@ WORK="$(mktemp -d)"
 readonly WORK
 trap 'rm -rf "$WORK"' EXIT
 
+# Transient failures (GitHub's release downloads, curl.se) have failed CI image builds, so each
+# archive gets a few attempts. pspdev's wget is BusyBox's, which has no retry option, so the loop
+# below retries for both tools; it re-fetches on a checksum mismatch too (a truncated download).
+readonly FETCH_ATTEMPTS=3
+readonly FETCH_RETRY_DELAY_SECONDS=5
+
 # pspdev's image has wget, the host image curl; either is fine because the checksum decides.
 fetch() {
   if command -v wget >/dev/null 2>&1; then
@@ -34,10 +40,29 @@ fetch() {
   fi
 }
 
-# fetch_verified <url> <sha256> <archive>: downloads and unpacks into $WORK, or stops the build.
+# fetch_verified <url> <sha256> <archive>: downloads and unpacks into $WORK, or stops the build
+# naming the URL and why its last attempt failed.
 fetch_verified() {
-  fetch "$1" "$WORK/$3"
-  echo "$2  $WORK/$3" | sha256sum -c -
+  attempt=1
+  while :; do
+    status=0
+    fetch "$1" "$WORK/$3" || status=$?
+    if [ "$status" -ne 0 ]; then
+      failure="download failed (exit status $status)"
+    elif echo "$2  $WORK/$3" | sha256sum -c -; then
+      break
+    else
+      failure="SHA256 mismatch"
+    fi
+    if [ "$attempt" -ge "$FETCH_ATTEMPTS" ]; then
+      echo "error: $1: $failure, giving up after $FETCH_ATTEMPTS attempts" >&2
+      exit 1
+    fi
+    echo "warning: $1: $failure (attempt $attempt of $FETCH_ATTEMPTS)," \
+      "retrying in $FETCH_RETRY_DELAY_SECONDS s" >&2
+    attempt=$((attempt + 1))
+    sleep "$FETCH_RETRY_DELAY_SECONDS"
+  done
   tar -xjf "$WORK/$3" -C "$WORK"
 }
 

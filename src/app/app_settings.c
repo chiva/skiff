@@ -142,7 +142,9 @@ static void apply_server(skiff_app *app, const char *url) {
         app_show_error(app, err, &issue, MESSAGE_BACK, MESSAGE_NONE, SKIFF_TEXT_OK, from);
         return;
     }
-    if (!app_stop_worker(app)) {
+    /* A request still running (a save call writes saves.json) ends first; the player tries again.
+     */
+    if (app_call_busy(app) || !app_stop_worker(app)) {
         app_show_text(app, SKIFF_TEXT_TITLE_NOTICE, app_text(app, SKIFF_TEXT_STOP_FAILED),
                       MESSAGE_BACK, from);
         return;

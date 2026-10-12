@@ -890,14 +890,14 @@ static skiff_err download(app_call *call, apply_scratch *a) {
 }
 
 /* "Leave it": the deleted save stays deleted while RomM's stays what it is. */
-static skiff_err leave_deleted(app_call *call) {
+static skiff_err leave_deleted(app_call *call, apply_scratch *a) {
     app_save_game *game = &call->saves.game;
-    const skiff_err err = skiff_saves_tree_summarize(
-        call->storage, &call->roots, SKIFF_STORAGE_ROOT_SAVES, game->save_target, &game->tree);
-    if (err != SKIFF_OK) {
+    /* Still deleted, or saves came back meanwhile (over USB): then compare again instead. */
+    game->has_local = 0;
+    const skiff_err err = confirm_local(call, a, game);
+    if (err != SKIFF_OK || call->saves.stale) {
         return err;
     }
-    game->has_local = 0;
     return record(call, game);
 }
 
@@ -934,7 +934,7 @@ skiff_err app_saves_apply_run(app_call *call) {
         err = download(call, a);
         break;
     case SAVES_OP_LEAVE_DELETED:
-        err = leave_deleted(call);
+        err = leave_deleted(call, a);
         break;
     case SAVES_OP_RESTORE_BACKUP:
         err = restore_backup(call, a);

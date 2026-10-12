@@ -367,6 +367,10 @@ static int may_run(const skiff_app *app) {
         app->batch.step != BATCH_NONE || app->dialog != SKIFF_APP_DIALOG_NONE) {
         return 0;
     }
+    /* A new server forgets the baselines a call would read and write. */
+    if (app->screen == SKIFF_APP_SCREEN_CONFIRM && app->confirm == CONFIRM_SERVER_CHANGE) {
+        return 0;
+    }
     return app->screen != SKIFF_APP_SCREEN_PAIR && app->screen != SKIFF_APP_SCREEN_CONNECTING &&
            app->screen != SKIFF_APP_SCREEN_SERVER && app->screen != SKIFF_APP_SCREEN_STARTING;
 }

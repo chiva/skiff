@@ -4230,6 +4230,40 @@ static void test_a_restore_cut_mid_way_is_settled_and_stops_save_sync(void) {
     fclose(kept);
 }
 
+static void test_leave_it_compares_again_when_the_save_came_back(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    char folder[SAVE_PATH_MAX];
+    snprintf(folder, sizeof folder, "%s/" GAME_UP DATA_FOLDER "/DATA.BIN", roots.saves);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(posix, folder));
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_PRINTF("the save comes back (over USB) before the player answers");
+    put_save(GAME_UP, UP_LOCAL);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(hash, skiff_saves_baseline_find(baseline, GAME_UP)->local_hash,
+                                     "never recorded as deleted while it is there");
+    skiff_saves_baseline_destroy(baseline);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    TEST_ASSERT_TRUE(shows("Synced"));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4348,5 +4382,6 @@ int main(void) {
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);
     RUN_TEST(test_a_restore_cut_mid_way_is_settled_and_stops_save_sync);
+    RUN_TEST(test_leave_it_compares_again_when_the_save_came_back);
     return UNITY_END();
 }

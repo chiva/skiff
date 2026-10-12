@@ -7,6 +7,15 @@
 #include "skiff/install.h"
 #include "skiff/romm_pairing.h"
 
+/* A text for the header: plain, or the text a game's name fills ({1}), whose name is shortened when
+ * the header is too narrow so the rest stays whole ("Synced: Pinball Hall of Fa..."). text is the
+ * plain text or the name; "" for none. */
+typedef struct app_header_text {
+    char text[SKIFF_TEXT_MAX];
+    /* The text the name fills; SKIFF_TEXT_COUNT for a plain one. */
+    skiff_text_id named;
+} app_header_text;
+
 #include "app_saves.h"
 
 #define APP_QUEUE_FILE "app:/" SKIFF_JOBS_FILE_NAME
@@ -30,9 +39,9 @@
 /* Lines a game's title and its file name each take at most on the details screen, beside the
  * cover: the size, the download state and the free space always fit under them. */
 #define APP_DETAILS_NAME_LINES 3
-/* An open collection's name as the library's title, in the measure's units: the title is drawn 4/3
- * the size of body text, and the status on its right takes up to SKIFF_APP_STATUS_WIDTH (in a
- * smaller font), so this keeps the two apart. */
+/* An open collection's name as the library's title, in the measure's units: drawn
+ * SKIFF_APP_TITLE_SCALE the size of body text, it leaves the status on its right room for the
+ * game count and the save notes. */
 #define APP_TITLE_NAME_WIDTH 180.0f
 
 /* What the library lists; SELECT goes to the next one (every game, the favourites, the
@@ -394,7 +403,8 @@ struct skiff_app {
 
     skiff_romm_server server;
     char profile_name[SKIFF_APP_TITLE_MAX];
-    char note[SKIFF_TEXT_MAX];
+    /* A short message in the header, until note_until_ms. */
+    app_header_text note;
     /* An address waiting for the player to confirm that downloads will be cancelled. */
     char pending_url[SKIFF_CONFIG_URL_MAX];
     char config_text[SKIFF_CONFIG_TEXT_MAX + 1];
@@ -418,6 +428,8 @@ skiff_err app_config_set(skiff_app *app, const char *section, const char *key, c
                          skiff_config_issue *issue);
 skiff_err app_config_replace(skiff_app *app, const char *text, size_t length);
 void app_note(skiff_app *app, const char *text);
+/* A note the name fills: id with {1}, the name shortened to fit the header (app_header_text). */
+void app_note_named(skiff_app *app, skiff_text_id id, const char *name);
 int64_t app_now(const skiff_app *app);
 void app_lock_manifest(skiff_app *app);
 void app_unlock_manifest(skiff_app *app);
@@ -601,6 +613,9 @@ const char *app_saves_title(const app_save_game *game);
 const app_save_game *app_saves_game_of_rom(const skiff_app *app, uint64_t rom_id);
 /* The player must choose for this game, or a transfer of it failed. */
 int app_saves_needs_player(const app_save_game *game);
+/* The games on the Saves screen that need the player (app_saves_needs_player()); 0 while save sync
+ * cannot run. */
+size_t app_saves_waiting(const skiff_app *app);
 void app_saves_problem_text(const skiff_app *app, const app_save_game *game, char *out);
 /* The details screen's ROM as a game to sync (1), or 0 when RomM has no save ID Skiff syncs. */
 int app_saves_rom_game(const skiff_app *app, app_save_game *out);
@@ -635,12 +650,30 @@ void app_view_add_hint(skiff_app *app, unsigned action, skiff_text_id label);
 void app_view_add_wrapped(skiff_app *app, const char *text, float width);
 void app_view_set_status(skiff_app *app, const char *text);
 void app_view_set_title(skiff_app *app, const char *title);
+/* The width the status may take beside the view's title (skiff/app.h's header), in the measure's
+ * units: set the title first. */
+float app_view_status_width(const skiff_app *app);
+/* A table under the view's lines, cells from dim_from on dimmed; NULL when the view holds no more.
+ * Add its rows, then lay it out. */
+skiff_app_table *app_view_add_table(skiff_app *app, size_t dim_from);
+/* A row of count cells (NULL for an empty one) led by action's button (0 for none); nothing when
+ * the table is full. */
+void app_view_add_table_row(const skiff_app *app, skiff_app_table *table, unsigned action,
+                            const char *const *cells, size_t count);
+/* Places the table's columns: each after the widest cell of the one before and
+ * SKIFF_APP_COLUMN_GAP, past the button symbols when a row has one, every cell fitted to what is
+ * left of the line. */
+void app_view_layout_table(const skiff_app *app, skiff_app_table *table);
 const char *app_text(const skiff_app *app, skiff_text_id id);
 /* Fills template with args into out (SKIFF_TEXT_MAX). */
 void app_format(const skiff_app *app, skiff_text_id id, const char *const *args, size_t count,
                 char *out);
 void app_format_bytes(const skiff_app *app, uint64_t bytes, char *out, size_t out_size);
 void app_fit(const skiff_app *app, const char *text, float width, char *out, size_t out_size);
+/* id with {1} filled by name, within width: the name shortened with SKIFF_UI_ELLIPSIS so the rest
+ * of the text stays whole, or the whole cut when even that leaves no room. */
+void app_format_fit_name(const skiff_app *app, skiff_text_id id, const char *name, float width,
+                         char *out, size_t out_size);
 /* The detail a ROM shows in the library: its download or its install state; "" for none. */
 void app_rom_detail(skiff_app *app, const skiff_romm_rom_summary *rom, char *out, size_t size);
 

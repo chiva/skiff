@@ -61,6 +61,8 @@
 #define SKIFF_APP_ROWS_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_HINTS_MAX 5
 #define SKIFF_APP_TITLE_MAX 64
+/* The header's status takes what the title leaves of the line: room for a game's whole name. */
+#define SKIFF_APP_STATUS_MAX SKIFF_TEXT_MAX
 #define SKIFF_APP_HINT_MAX 32
 #define SKIFF_APP_DETAIL_MAX 32
 #define SKIFF_APP_LABEL_MAX 160
@@ -69,8 +71,16 @@
 #define SKIFF_APP_TEXT_WIDTH 456.0f
 #define SKIFF_APP_LABEL_WIDTH 340.0f
 #define SKIFF_APP_DETAIL_WIDTH 110.0f
-/* The header's right part, after the title. */
-#define SKIFF_APP_STATUS_WIDTH 230.0f
+/* The header, one line SKIFF_APP_TEXT_WIDTH wide: the title on its left, drawn
+ * SKIFF_APP_TITLE_SCALE times the size of body text (the measure's), and the status on its right,
+ * SKIFF_APP_STATUS_SCALE times, at least SKIFF_APP_HEADER_GAP apart (in pixels on the screen). The
+ * status takes what the title leaves, never less than SKIFF_APP_STATUS_MIN_WIDTH (in the measure's
+ * units). The scales are the PSP's title and hint sizes over its text size
+ * (src/platform/psp/ui_psp.h). */
+#define SKIFF_APP_TITLE_SCALE (4.0f / 3.0f)
+#define SKIFF_APP_STATUS_SCALE (5.0f / 6.0f)
+#define SKIFF_APP_HEADER_GAP 16.0f
+#define SKIFF_APP_STATUS_MIN_WIDTH 120.0f
 /* The pairing screen's QR code takes a square this wide on the right of the body (the platform
  * fits the code and its quiet zone in it), and the body's text wraps to what is left. */
 #define SKIFF_APP_QR_WIDTH 176.0f
@@ -84,6 +94,19 @@
 #define SKIFF_APP_COVER_GAP 8.0f
 #define SKIFF_APP_COVER_TEXT_WIDTH                                                                 \
     (SKIFF_APP_TEXT_WIDTH - SKIFF_APP_COVER_WIDTH - SKIFF_APP_COVER_GAP)
+
+/* Tables in the body, under its lines (the choice between two saves: both sides, then the buttons
+ * and what each does). A table's cells start at their column's x, in the measure's units from the
+ * body's left edge, and are fitted to what is left of the line; a row with an action is led by that
+ * button's symbol, as the footer draws it, SKIFF_APP_SYMBOL_WIDTH pixels wide with the gap after
+ * it. Columns are SKIFF_APP_COLUMN_GAP apart, and an empty line's height sets each table apart from
+ * what is above it. */
+#define SKIFF_APP_TABLES_MAX 2
+#define SKIFF_APP_TABLE_ROWS_MAX 3
+#define SKIFF_APP_TABLE_COLUMNS 4
+#define SKIFF_APP_CELL_MAX 96
+#define SKIFF_APP_SYMBOL_WIDTH 13
+#define SKIFF_APP_COLUMN_GAP 12.0f
 
 /* Frames the starting screen is drawn before startup's blocking work (the first free-space query
  * takes 3 s on a 64 GB Memory Stick): with one, a PSP-1000 kept a half-drawn frame on screen. */
@@ -151,7 +174,25 @@ typedef struct skiff_app_row {
      * the row above it. Only in a list that never scrolls, whose rows and gaps fit the list's
      * rows of SKIFF_APP_LINE_HEIGHT. */
     int new_group;
+    /* Needs the player (a save to choose): draw its detail in the colour that asks for attention.
+     */
+    int attention;
 } skiff_app_row;
+
+typedef struct skiff_app_table_row {
+    /* The SKIFF_UI_ACTION_* whose button symbol leads the row; 0 for none. */
+    unsigned action;
+    /* "" for an empty cell. */
+    char cells[SKIFF_APP_TABLE_COLUMNS][SKIFF_APP_CELL_MAX];
+} skiff_app_table_row;
+
+typedef struct skiff_app_table {
+    float column_x[SKIFF_APP_TABLE_COLUMNS];
+    /* Cells of this column and the ones after it are drawn dimmed. */
+    size_t dim_from;
+    size_t row_count;
+    skiff_app_table_row rows[SKIFF_APP_TABLE_ROWS_MAX];
+} skiff_app_table;
 
 typedef struct skiff_app_hint {
     unsigned action;
@@ -163,7 +204,7 @@ typedef struct skiff_app_view {
     skiff_app_screen screen;
     char title[SKIFF_APP_TITLE_MAX];
     /* Right of the title: a count, or a short message. */
-    char status[SKIFF_APP_TITLE_MAX];
+    char status[SKIFF_APP_STATUS_MAX];
     /* Body text, each line within SKIFF_APP_TEXT_WIDTH (SKIFF_APP_QR_TEXT_WIDTH beside a QR code);
      * an empty one separates blocks. */
     size_t line_count;
@@ -176,6 +217,9 @@ typedef struct skiff_app_view {
      * into the app, valid until its next update. */
     int has_cover_box;
     const skiff_cover *cover;
+    /* Tables under the lines, in order (skiff_app_table); never with lines_below. */
+    size_t table_count;
+    skiff_app_table tables[SKIFF_APP_TABLES_MAX];
     /* A list under the lines: rows[i] is item list.first + i. */
     int has_list;
     skiff_ui_list list;

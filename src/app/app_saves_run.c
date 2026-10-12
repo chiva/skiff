@@ -655,8 +655,14 @@ static const char *shown_name(const app_save_game *game) {
     return game->title[0] != '\0' ? game->title : game->save_target;
 }
 
-/* By name, ignoring ASCII case, as a player looks a game up. */
+/* The games that need the player first, so the Saves screen opens on them; then by name, ignoring
+ * ASCII case, as a player looks a game up. */
 static int compare_games(const void *a, const void *b) {
+    const int a_waits = app_saves_needs_player(a);
+    const int b_waits = app_saves_needs_player(b);
+    if (a_waits != b_waits) {
+        return b_waits - a_waits;
+    }
     const char *x = shown_name(a);
     const char *y = shown_name(b);
     for (; *x != '\0' && fold(*x) == fold(*y); x++, y++) {

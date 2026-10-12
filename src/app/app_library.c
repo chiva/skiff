@@ -600,10 +600,7 @@ static void queue_download(skiff_app *app) {
         return;
     }
     app_queue_refresh(app);
-    const char *args[] = {app_rom_name(&app->rom.summary)};
-    char text[SKIFF_TEXT_MAX];
-    app_format(app, SKIFF_TEXT_QUEUE_ADDED, args, 1, text);
-    app_note(app, text);
+    app_note_named(app, SKIFF_TEXT_QUEUE_ADDED, app_rom_name(&app->rom.summary));
     app_set_screen(app, SKIFF_APP_SCREEN_LIBRARY);
 }
 

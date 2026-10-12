@@ -48,9 +48,9 @@ enum {
     FOOTER_RULE_Y = 254,
     FOOTER_BASELINE = 267,
     /* A button symbol: its size, where it sits against the baseline, and the gap after it. */
-    SYMBOL_SIZE = 9,
+    SYMBOL_SIZE = SKIFF_UI_SYMBOL_SIZE,
     SYMBOL_RISE = 9,
-    SYMBOL_GAP = 4,
+    SYMBOL_GAP = SKIFF_PSP_UI_SYMBOL_WIDTH - SYMBOL_SIZE,
     HINT_GAP = 16,
     /* Where a row's text sits in it, and the scroll bar on the right. */
     ROW_BASELINE = 10,
@@ -74,13 +74,6 @@ typedef struct ui_vertex {
     short y;
     short z;
 } ui_vertex;
-
-/* The Circle symbol, pixel by pixel ('#'): a midpoint circle of radius 4. Drawn as an outline, an
- * octagon that small rounds to a diamond. */
-static const char CIRCLE_PIXELS[SYMBOL_SIZE][SYMBOL_SIZE + 1] = {
-    "   ###   ", " ##   ## ", " #     # ", "#       #", "#       #",
-    "#       #", " #     # ", " ##   ## ", "   ###   ",
-};
 
 intraFont *skiff_psp_ui_load_font(void) {
     intraFontInit();
@@ -238,19 +231,8 @@ void skiff_psp_ui_backdrop(const skiff_psp_ui *ui) {
                       SKIFF_PSP_UI_COLOUR_BACKDROP);
 }
 
-/* An outline through points (x, y) pairs, closed back to the first. */
-static void draw_outline(const int (*points)[2], int count, int left, int top,
-                         unsigned int colour) {
-    ui_vertex *vertices = sceGuGetMemory((int)((size_t)(count + 1) * sizeof(ui_vertex)));
-    for (int i = 0; i <= count; i++) {
-        vertices[i] = vertex(colour, left + points[i % count][0], top + points[i % count][1]);
-    }
-    draw_vertices(GU_LINE_STRIP, vertices, count + 1);
-}
-
 /* The '#' pixels of a SYMBOL_SIZE square at (left, top), one sprite each. */
-static void draw_pixels(const char (*pixels)[SYMBOL_SIZE + 1], int left, int top,
-                        unsigned int colour) {
+static void draw_pixels(const skiff_ui_symbol_row *pixels, int left, int top, unsigned int colour) {
     int count = 0;
     for (int y = 0; y < SYMBOL_SIZE; y++) {
         for (int x = 0; x < SYMBOL_SIZE; x++) {
@@ -270,25 +252,18 @@ static void draw_pixels(const char (*pixels)[SYMBOL_SIZE + 1], int left, int top
     draw_vertices(GU_SPRITES, vertices, at);
 }
 
-/* The symbol of a face button in a SYMBOL_SIZE square at (left, top). */
+/* The symbol of a face button in a SYMBOL_SIZE square at (left, top), pixel by pixel
+ * (skiff_ui_symbol_pixels()): every corner and end is drawn, which lines would leave out. */
 static void draw_symbol(unsigned button, int left, int top) {
-    const int size = SYMBOL_SIZE - 1;
-    if (button == SKIFF_UI_BUTTON_CROSS) {
-        ui_vertex *vertices = sceGuGetMemory((int)(4 * sizeof(ui_vertex)));
-        vertices[0] = vertex(COLOUR_CROSS, left, top);
-        vertices[1] = vertex(COLOUR_CROSS, left + size, top + size);
-        vertices[2] = vertex(COLOUR_CROSS, left + size, top);
-        vertices[3] = vertex(COLOUR_CROSS, left, top + size);
-        draw_vertices(GU_LINES, vertices, 4);
-    } else if (button == SKIFF_UI_BUTTON_CIRCLE) {
-        draw_pixels(CIRCLE_PIXELS, left, top, COLOUR_CIRCLE);
-    } else if (button == SKIFF_UI_BUTTON_TRIANGLE) {
-        const int points[3][2] = {{size / 2, 0}, {size, size}, {0, size}};
-        draw_outline(points, 3, left, top, COLOUR_TRIANGLE);
-    } else {
-        const int points[4][2] = {{0, 0}, {size, 0}, {size, size}, {0, size}};
-        draw_outline(points, 4, left, top, COLOUR_SQUARE);
+    const skiff_ui_symbol_row *pixels = skiff_ui_symbol_pixels(button);
+    if (pixels == NULL) {
+        return;
     }
+    const unsigned int colour = button == SKIFF_UI_BUTTON_CROSS      ? COLOUR_CROSS
+                                : button == SKIFF_UI_BUTTON_CIRCLE   ? COLOUR_CIRCLE
+                                : button == SKIFF_UI_BUTTON_TRIANGLE ? COLOUR_TRIANGLE
+                                                                     : COLOUR_SQUARE;
+    draw_pixels(pixels, left, top, colour);
 }
 
 /* ---- Text ---- */
@@ -371,14 +346,20 @@ static const char *button_name(unsigned action) {
     }
 }
 
+void skiff_psp_ui_symbol(const skiff_psp_ui *ui, unsigned action, int x, int y) {
+    const unsigned button = symbol_button(ui, action);
+    if (button != 0) {
+        draw_symbol(button, x, y - SYMBOL_RISE);
+    }
+}
+
 void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints, size_t count) {
     skiff_psp_ui_rect(ui, 0, FOOTER_RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, COLOUR_RULE);
     float x = (float)SKIFF_PSP_UI_MARGIN;
     for (size_t i = 0; hints != NULL && i < count; i++) {
-        const unsigned button = symbol_button(ui, hints[i].action);
-        if (button != 0) {
-            draw_symbol(button, (int)x, FOOTER_BASELINE - SYMBOL_RISE);
-            x += (float)(SYMBOL_SIZE + SYMBOL_GAP);
+        if (symbol_button(ui, hints[i].action) != 0) {
+            skiff_psp_ui_symbol(ui, hints[i].action, (int)x, FOOTER_BASELINE);
+            x += (float)SKIFF_PSP_UI_SYMBOL_WIDTH;
         } else {
             x = print_aligned(ui, (int)x, FOOTER_BASELINE, SKIFF_PSP_UI_HINT_SIZE,
                               SKIFF_PSP_UI_COLOUR_DIM_TEXT, INTRAFONT_ALIGN_LEFT,
@@ -400,7 +381,7 @@ void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
     int gaps = 0;
     for (size_t shown = 0; shown < list->rows && list->first + shown < list->count; shown++) {
         const size_t index = list->first + shown;
-        skiff_psp_ui_row item = {NULL, NULL, 0, 0};
+        skiff_psp_ui_row item = {NULL, NULL, 0, 0, 0};
         row(row_ctx, index, &item);
         if (shown > 0) {
             gaps += item.gap_above;
@@ -417,7 +398,9 @@ void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
         if (item.detail != NULL && item.detail[0] != '\0') {
             (void)print_aligned(ui, SKIFF_PSP_UI_SCREEN_WIDTH - LIST_TEXT_RIGHT - SCROLL_BAR_RIGHT,
                                 top + ROW_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
-                                SKIFF_PSP_UI_COLOUR_DIM_TEXT, INTRAFONT_ALIGN_RIGHT, item.detail);
+                                item.attention ? SKIFF_PSP_UI_COLOUR_ATTENTION
+                                               : SKIFF_PSP_UI_COLOUR_DIM_TEXT,
+                                INTRAFONT_ALIGN_RIGHT, item.detail);
         }
     }
     if (list->count <= list->rows) {

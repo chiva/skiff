@@ -41,11 +41,13 @@ is there when you install it). Before a download replaces or removes a save on t
 keeps a backup of it (below). Then the header says, for example, "Saves: 2 synced, 1 need you".
 Downloads of games carry on meanwhile.
 
-The games that need you wait in Settings → **Saves**.
+The games that need you wait in Settings → **Saves**. Until you choose, the library's Settings
+button counts them ("Settings (1)"), and Settings' **Saves** row says how many need you.
 
 ## Settings → Saves
 
-The list holds every game with a save on this PSP or in RomM (up to 128), with its state:
+The list holds every game with a save on this PSP or in RomM (up to 128), with its state. Games
+that need you come first, their state in amber; the rest follow by name:
 
 | State | What it means | Sync |
 |---|---|---|
@@ -73,24 +75,31 @@ when RomM has a save ID for the game.
 
 ## Which save? (when Skiff asks)
 
-The screen names the game and why it asks: "… changed on this PSP and in RomM since the last
-sync", or "… has different saves on this PSP and in RomM". Below, when each side last changed:
-"On this PSP: 11 Oct 18:15" and "In RomM: 11 Oct 18:19, from …", with the device RomM's save came
-from when RomM says. The PSP's date is its own clock; RomM's is the time RomM recorded, often UTC,
-so the two can differ by your time zone.
+The header names the game. The screen says in one line what happened ("Changed on both since the
+last sync", or "The two saves differ and have never synced"), then when each side last changed, in
+columns:
+
+```
+This PSP   11 Oct   18:15
+RomM       11 Oct   18:19   Argosy on Pixel
+```
+
+with the device RomM's save came from when RomM says (or the emulator that uploaded it). The PSP's
+date is its own clock; RomM's is the time RomM recorded, often UTC, so the two can differ by your
+time zone. Under them, each button with what it does (the footer names them too):
 
 - **Keep this PSP's** uploads this PSP's save. RomM keeps the one it replaces in its history.
-- **Use RomM's** downloads RomM's save. This PSP's is backed up first.
+- **Use RomM's** downloads RomM's save. This PSP's is backed up first (see Backups).
 - **Later** does nothing; the game still needs you.
 
-For a save deleted in RomM ("the save was deleted in RomM, but this PSP still has one"):
+For a save deleted in RomM ("Deleted in RomM since the last sync"; RomM's side says Deleted):
 **Keep this PSP's** uploads it again; **Remove this PSP's** deletes it on this PSP too, after a
 backup.
 
-For a save deleted on this PSP ("the save was deleted on this PSP, but RomM still has it"):
-**Download again** puts it back; **Leave it** keeps this PSP without the save while RomM keeps its
-copy. Skiff then stops asking, until RomM's save changes: that one it downloads, since there is
-nothing on this PSP to lose.
+For a save deleted on this PSP ("Deleted on this PSP since the last sync"): **Download again** puts
+RomM's back; **Leave it** keeps this PSP without the save while RomM keeps its copy. Skiff then
+stops asking, until RomM's save changes: that one it downloads, since there is nothing on this PSP
+to lose.
 
 ## Backups
 

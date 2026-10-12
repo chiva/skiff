@@ -46,10 +46,17 @@ void app_set_screen(skiff_app *app, skiff_app_screen screen) {
     }
 }
 
-void app_note(skiff_app *app, const char *text) {
-    snprintf(app->note, sizeof app->note, "%s", text);
+static void show_note(skiff_app *app, skiff_text_id named, const char *text) {
+    snprintf(app->note.text, sizeof app->note.text, "%s", text);
+    app->note.named = named;
     app->note_until_ms = app_now(app) + SKIFF_APP_NOTE_MS;
     app->dirty = 1;
+}
+
+void app_note(skiff_app *app, const char *text) { show_note(app, SKIFF_TEXT_COUNT, text); }
+
+void app_note_named(skiff_app *app, skiff_text_id id, const char *name) {
+    show_note(app, id, name);
 }
 
 static size_t wrap_into(skiff_app *app, const char *text) {
@@ -691,8 +698,8 @@ void skiff_app_update(skiff_app *app, unsigned actions) {
     app_call_update(app);
     app_batch_update(app);
     app_saves_update(app);
-    if (app->note[0] != '\0' && app_now(app) >= app->note_until_ms) {
-        app->note[0] = '\0';
+    if (app->note.text[0] != '\0' && app_now(app) >= app->note_until_ms) {
+        app->note.text[0] = '\0';
         app->dirty = 1;
     }
     switch (app->screen) {

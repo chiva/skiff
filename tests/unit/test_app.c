@@ -486,8 +486,20 @@ static void print_view(void) {
         if (v->rows[i].new_group) {
             TEST_PRINTF("    (new group)");
         }
-        TEST_PRINTF("  %c %s | %s%s", v->list.first + i == v->list.selected ? '>' : ' ',
-                    v->rows[i].label, v->rows[i].detail, v->rows[i].dim ? " (dim)" : "");
+        TEST_PRINTF("  %c %s | %s%s%s", v->list.first + i == v->list.selected ? '>' : ' ',
+                    v->rows[i].label, v->rows[i].detail, v->rows[i].dim ? " (dim)" : "",
+                    v->rows[i].attention ? " (attention)" : "");
+    }
+    for (size_t t = 0; t < v->table_count; t++) {
+        const skiff_app_table *table = &v->tables[t];
+        TEST_PRINTF("   table %zu: columns at %d %d %d %d, dim from %zu", t,
+                    (int)table->column_x[0], (int)table->column_x[1], (int)table->column_x[2],
+                    (int)table->column_x[3], table->dim_from);
+        for (size_t r = 0; r < table->row_count; r++) {
+            const skiff_app_table_row *row = &table->rows[r];
+            TEST_PRINTF("   [action %u] %s | %s | %s | %s", row->action, row->cells[0],
+                        row->cells[1], row->cells[2], row->cells[3]);
+        }
     }
 }
 
@@ -520,6 +532,15 @@ static int shows(const char *text) {
     for (size_t i = 0; i < v->row_count; i++) {
         if (strstr(v->rows[i].label, text) != NULL || strstr(v->rows[i].detail, text) != NULL) {
             return 1;
+        }
+    }
+    for (size_t t = 0; t < v->table_count; t++) {
+        for (size_t r = 0; r < v->tables[t].row_count; r++) {
+            for (size_t c = 0; c < SKIFF_APP_TABLE_COLUMNS; c++) {
+                if (strstr(v->tables[t].rows[r].cells[c], text) != NULL) {
+                    return 1;
+                }
+            }
         }
     }
     return strstr(v->status, text) != NULL || strstr(v->title, text) != NULL;
@@ -3463,7 +3484,8 @@ typedef struct saves_scene {
 
 static saves_scene scene;
 
-static void set_saves_scene(void) {
+/* The scene with ask_title for the game whose saves differ. */
+static void set_saves_scene_titled(const char *ask_title) {
     memset(&scene, 0, sizeof scene);
     put_save(GAME_UP, UP_LOCAL);
     put_save(GAME_ASK, ASK_LOCAL);
@@ -3478,7 +3500,7 @@ static void set_saves_scene(void) {
     char items[RAW_MAX];
     int used = saves_item(items, sizeof items, ROM_DOWN, "Down Game", GAME_DOWN);
     items[used++] = ',';
-    saves_item(items + used, sizeof items - (size_t)used, ROM_ASK, "Ask Game", GAME_ASK);
+    saves_item(items + used, sizeof items - (size_t)used, ROM_ASK, ask_title, GAME_ASK);
     serve_saves_list(items, 2);
     char ops[OPS_MAX];
     used = sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
@@ -3501,6 +3523,8 @@ static void set_saves_scene(void) {
     serve_device_of(SAVE_ASK, ROM_ASK, scene.ask_server_hash);
     serve_complete();
 }
+
+static void set_saves_scene(void) { set_saves_scene_titled("Ask Game"); }
 
 static void test_the_launch_check_syncs_what_needs_no_choice_and_counts_the_rest(void) {
     set_saves_scene();
@@ -3589,6 +3613,71 @@ static void test_the_launch_check_syncs_what_needs_no_choice_and_counts_the_rest
     TEST_ASSERT_NULL(strstr(log_text, TOKEN));
 }
 
+/* The choice screen's two tables: both sides, then the buttons. */
+enum { SIDES_TABLE, OPTIONS_TABLE, CHOICE_TABLES };
+enum { SIDE_NAME, SIDE_DAY, SIDE_TIME, SIDE_SOURCE };
+enum { OPTION_LABEL, OPTION_DETAIL };
+#define CHOICE_OPTIONS 3
+
+static const skiff_app_table_row *side_row(size_t row) {
+    return &view()->tables[SIDES_TABLE].rows[row];
+}
+
+/* "18:19": two digits, a colon, two digits. */
+static void check_time(const char *text) {
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(5, strlen(text), text);
+    TEST_ASSERT_EQUAL_CHAR(':', text[2]);
+}
+
+/*
+ * The choice screen (Which save?): the game in the header, one line saying what happened, both
+ * sides aligned in columns, and the three buttons in the body with their symbols' actions and what
+ * each does, named in the footer too.
+ */
+static void check_choice(const char *game, skiff_text_id situation, const skiff_text_id *labels,
+                         const skiff_text_id *details) {
+    static const unsigned ACTIONS[CHOICE_OPTIONS] = {SKIFF_UI_ACTION_CONFIRM, SKIFF_UI_ACTION_EXTRA,
+                                                     SKIFF_UI_ACTION_BACK};
+    print_view();
+    const skiff_app_view *v = view();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, v->screen);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVE_CHOICE), v->title);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(game, v->status, "the game is named in the header only");
+    TEST_ASSERT_EQUAL_size_t(1, v->line_count);
+    TEST_ASSERT_EQUAL_STRING(english(situation), v->lines[0]);
+    TEST_ASSERT_EQUAL_size_t(CHOICE_TABLES, v->table_count);
+
+    const skiff_app_table *sides = &v->tables[SIDES_TABLE];
+    TEST_ASSERT_EQUAL_size_t(2, sides->row_count);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_SIDE_THIS_PSP), side_row(0)->cells[SIDE_NAME]);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_SIDE_ROMM), side_row(1)->cells[SIDE_NAME]);
+    TEST_ASSERT_EQUAL_UINT(0, side_row(0)->action);
+    TEST_PRINTF("both sides' dates start in one column, after the wider side's name");
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, sides->column_x[SIDE_NAME]);
+    TEST_ASSERT_EQUAL_FLOAT(CHAR_WIDTH * (float)strlen(english(SKIFF_TEXT_SIDE_THIS_PSP)) +
+                                SKIFF_APP_COLUMN_GAP,
+                            sides->column_x[SIDE_DAY]);
+    TEST_ASSERT_TRUE(sides->column_x[SIDE_TIME] > sides->column_x[SIDE_DAY]);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(SIDE_SOURCE, sides->dim_from, "only the source is dimmed");
+
+    const skiff_app_table *options = &v->tables[OPTIONS_TABLE];
+    TEST_ASSERT_EQUAL_size_t(CHOICE_OPTIONS, options->row_count);
+    TEST_PRINTF("each button's symbol leads its row, labels and details in two columns");
+    TEST_ASSERT_EQUAL_FLOAT((float)SKIFF_APP_SYMBOL_WIDTH, options->column_x[OPTION_LABEL]);
+    TEST_ASSERT_EQUAL_size_t(OPTION_DETAIL, options->dim_from);
+    for (size_t i = 0; i < CHOICE_OPTIONS; i++) {
+        const skiff_app_table_row *row = &options->rows[i];
+        TEST_ASSERT_EQUAL_UINT(ACTIONS[i], row->action);
+        TEST_ASSERT_EQUAL_STRING(english(labels[i]), row->cells[OPTION_LABEL]);
+        TEST_ASSERT_EQUAL_STRING(english(details[i]), row->cells[OPTION_DETAIL]);
+        TEST_ASSERT_TRUE(options->column_x[OPTION_DETAIL] >=
+                         options->column_x[OPTION_LABEL] +
+                             CHAR_WIDTH * (float)strlen(row->cells[OPTION_LABEL]) +
+                             SKIFF_APP_COLUMN_GAP);
+        TEST_ASSERT_TRUE(hints(ACTIONS[i], english(labels[i])));
+    }
+}
+
 /* The launch check, then the Saves screen at Ask Game and its conflict. */
 static void open_the_conflict(void) {
     set_saves_scene();
@@ -3603,13 +3692,18 @@ static void open_the_conflict(void) {
 
 static void test_a_conflict_shows_both_saves_and_keep_this_psps_overwrites(void) {
     open_the_conflict();
-    TEST_PRINTF("both dates, and the device RomM's save came from");
-    TEST_ASSERT_TRUE(shows("Ask Game has different saves on this PSP and in RomM."));
-    TEST_ASSERT_TRUE(shows("On this PSP: "));
-    TEST_ASSERT_TRUE(shows("In RomM: 11 Oct 18:19, from " OTHER_DEVICE_NAME));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_KEEP_THIS_PSP)));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_USE_ROMM)));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_LATER)));
+    TEST_PRINTF("never synced here: both dates, and the device RomM's save came from");
+    const skiff_text_id labels[] = {SKIFF_TEXT_KEEP_THIS_PSP, SKIFF_TEXT_USE_ROMM,
+                                    SKIFF_TEXT_LATER};
+    const skiff_text_id details[] = {SKIFF_TEXT_KEEP_THIS_PSP_DETAIL, SKIFF_TEXT_USE_ROMM_DETAIL,
+                                     SKIFF_TEXT_LATER_DETAIL};
+    check_choice("Ask Game", SKIFF_TEXT_SAVE_CONFLICT_FIRST, labels, details);
+    TEST_ASSERT_TRUE(side_row(0)->cells[SIDE_DAY][0] != '\0');
+    check_time(side_row(0)->cells[SIDE_TIME]);
+    TEST_ASSERT_EQUAL_STRING("", side_row(0)->cells[SIDE_SOURCE]);
+    TEST_ASSERT_EQUAL_STRING("11 Oct", side_row(1)->cells[SIDE_DAY]);
+    TEST_ASSERT_EQUAL_STRING("18:19", side_row(1)->cells[SIDE_TIME]);
+    TEST_ASSERT_EQUAL_STRING(OTHER_DEVICE_NAME, side_row(1)->cells[SIDE_SOURCE]);
     TEST_PRINTF("Later: nothing changes");
     frame(SKIFF_UI_ACTION_BACK);
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
@@ -3627,7 +3721,7 @@ static void test_a_conflict_shows_both_saves_and_keep_this_psps_overwrites(void)
     upload_path(ROM_ASK, scene.ask_hash, "false", path, sizeof path);
     TEST_ASSERT_FALSE(requested_path(path));
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
-    TEST_ASSERT_EQUAL_STRING("Ask Game: save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: Ask Game", view()->status);
     skiff_saves_baseline *baseline = NULL;
     read_baseline(&baseline);
     const skiff_saves_baseline_entry *ask = skiff_saves_baseline_find(baseline, GAME_ASK);
@@ -3646,7 +3740,7 @@ static void test_use_romms_restores_it_after_a_backup(void) {
     char data[64];
     read_save(GAME_ASK, data, sizeof data);
     TEST_ASSERT_EQUAL_STRING(ASK_SERVER, data);
-    TEST_ASSERT_EQUAL_STRING("Ask Game: save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: Ask Game", view()->status);
     TEST_PRINTF("this PSP's save went to a backup first, listed on the Backups screen");
     char backup[TEMP_DIR_PATH_MAX];
     app_file("saves-backup/" GAME_ASK "/1.zip", backup, sizeof backup);
@@ -3711,6 +3805,14 @@ static void test_romms_409_turns_an_upload_into_a_question(void) {
     char data[64];
     read_save(GAME_UP, data, sizeof data);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(UP_LOCAL, data, "nothing was overwritten either way");
+    TEST_PRINTF("Sync asks: both changed since the last sync");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    const skiff_text_id labels[] = {SKIFF_TEXT_KEEP_THIS_PSP, SKIFF_TEXT_USE_ROMM,
+                                    SKIFF_TEXT_LATER};
+    const skiff_text_id details[] = {SKIFF_TEXT_KEEP_THIS_PSP_DETAIL, SKIFF_TEXT_USE_ROMM_DETAIL,
+                                     SKIFF_TEXT_LATER_DETAIL};
+    check_choice("Up Game", SKIFF_TEXT_SAVE_CONFLICT, labels, details);
     skiff_saves_baseline *baseline = NULL;
     read_baseline(&baseline);
     TEST_ASSERT_EQUAL_STRING(old_hash, skiff_saves_baseline_find(baseline, GAME_UP)->server_hash);
@@ -3743,10 +3845,15 @@ static void test_a_save_deleted_on_this_psp_asks_and_can_be_left_deleted(void) {
     TEST_ASSERT_TRUE(shows("Deleted on this PSP"));
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_saves();
-    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
-    TEST_ASSERT_TRUE(shows("Up Game: the save was deleted on this PSP, but RomM still has it."));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD_AGAIN)));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_LEAVE_IT)));
+    const skiff_text_id labels[] = {SKIFF_TEXT_DOWNLOAD_AGAIN, SKIFF_TEXT_LEAVE_IT,
+                                    SKIFF_TEXT_LATER};
+    const skiff_text_id details[] = {SKIFF_TEXT_DOWNLOAD_AGAIN_DETAIL, SKIFF_TEXT_LEAVE_IT_DETAIL,
+                                     SKIFF_TEXT_LATER_DETAIL};
+    check_choice("Up Game", SKIFF_TEXT_SAVE_DELETED_LOCAL_CHOICE, labels, details);
+    TEST_PRINTF("this PSP's side has no save: said in its date's place");
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_SAVE_GONE), side_row(0)->cells[SIDE_DAY]);
+    TEST_ASSERT_EQUAL_STRING("", side_row(0)->cells[SIDE_TIME]);
+    TEST_ASSERT_TRUE(side_row(1)->cells[SIDE_DAY][0] != '\0');
     TEST_PRINTF("Leave it: remembered, so the next sync leaves it too");
     frame(SKIFF_UI_ACTION_EXTRA);
     run_saves();
@@ -3904,7 +4011,7 @@ static void test_a_games_details_show_its_save_and_sync_it(void) {
     frame(SKIFF_UI_ACTION_EXTRA);
     run_saves();
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
-    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: Game 101", view()->status);
     TEST_ASSERT_TRUE(shows("Save: Synced 21 Sep"));
     char path[512];
     upload_path(ROM_UP, hash, "false", path, sizeof path);
@@ -4240,7 +4347,7 @@ static void test_a_transfer_that_ends_after_leaving_keeps_the_players_screen(voi
     env_state.hold_calls = 0;
     run_saves();
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
-    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: Game 101", view()->status);
     char path[512];
     upload_path(ROM_UP, hash, "false", path, sizeof path);
     TEST_ASSERT_TRUE(requested_path(path));
@@ -4353,7 +4460,7 @@ static void test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call
     storage.write_error = SKIFF_ERR_STORAGE_NO_SPACE;
     frame(SKIFF_UI_ACTION_EXTRA);
     run_saves();
-    TEST_ASSERT_EQUAL_STRING("Game 101: save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: Game 101", view()->status);
     skiff_saves_baseline *baseline = NULL;
     read_baseline(&baseline);
     TEST_ASSERT_NULL(skiff_saves_baseline_find(baseline, GAME_UP));
@@ -4425,13 +4532,17 @@ static void test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here(v
     TEST_ASSERT_TRUE(shows("Deleted in RomM"));
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_saves();
-    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
-    TEST_ASSERT_TRUE(shows(GAME_UP ": the save was deleted in RomM, but this PSP still has one."));
-    TEST_PRINTF("taking RomM's side is named for what it does");
-    TEST_ASSERT_TRUE(shows("deletes the save on this PSP too"));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_REMOVE_THIS_PSP)));
+    TEST_PRINTF("taking RomM's side is named for what it does: this PSP's goes, after a backup");
+    const skiff_text_id labels[] = {SKIFF_TEXT_KEEP_THIS_PSP, SKIFF_TEXT_REMOVE_THIS_PSP,
+                                    SKIFF_TEXT_LATER};
+    const skiff_text_id details[] = {SKIFF_TEXT_UPLOAD_AGAIN_DETAIL,
+                                     SKIFF_TEXT_REMOVE_THIS_PSP_DETAIL, SKIFF_TEXT_LATER_DETAIL};
+    check_choice(GAME_UP, SKIFF_TEXT_SAVE_DELETED_SERVER_CHOICE, labels, details);
+    TEST_ASSERT_TRUE(shows("after a backup"));
     TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_USE_ROMM)));
-    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_KEEP_THIS_PSP)));
+    TEST_ASSERT_TRUE(side_row(0)->cells[SIDE_DAY][0] != '\0');
+    check_time(side_row(0)->cells[SIDE_TIME]);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_SAVE_GONE), side_row(1)->cells[SIDE_DAY]);
     frame(SKIFF_UI_ACTION_EXTRA);
     run_saves();
     char data[64];
@@ -4442,7 +4553,7 @@ static void test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here(v
     FILE *file = fopen(backup, "rb");
     TEST_ASSERT_NOT_NULL_MESSAGE(file, "after a backup");
     fclose(file);
-    TEST_ASSERT_EQUAL_STRING(GAME_UP ": save synced", view()->status);
+    TEST_ASSERT_EQUAL_STRING("Synced: " GAME_UP, view()->status);
 }
 
 /* PSP ROMs with saves, ids from first_id, on the list's page at offset of a list of total. */
@@ -4590,8 +4701,243 @@ static void test_another_rom_with_the_same_save_id_starts_as_a_first_sync(void) 
     frame(SKIFF_UI_ACTION_EXTRA);
     run_saves();
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
-    TEST_ASSERT_TRUE(shows("has different saves on this PSP and in RomM."));
+    TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_SAVE_CONFLICT_FIRST)));
     TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+}
+
+/* ---- The header, and what needs the player ---- */
+
+#define LONG_GAME "Pinball Hall of Fame - The Gottlieb Collection"
+#define ZED_GAME "Zed Game"
+
+/* The width a status may take beside title with the fake measure, as skiff/app.h lays the header.
+ */
+static float expected_status_width(const char *title) {
+    const float title_width = CHAR_WIDTH * (float)strlen(title) * SKIFF_APP_TITLE_SCALE;
+    return (SKIFF_APP_TEXT_WIDTH - title_width - SKIFF_APP_HEADER_GAP) / SKIFF_APP_STATUS_SCALE;
+}
+
+static void test_the_status_takes_the_width_the_title_leaves(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(3);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const float width = app_view_status_width(app);
+    TEST_PRINTF("beside \"%s\": %d units for the status", view()->title, (int)width);
+    TEST_ASSERT_EQUAL_FLOAT(expected_status_width(english(SKIFF_TEXT_TITLE_LIBRARY)), width);
+    TEST_ASSERT_TRUE_MESSAGE(width > 400.0f, "a short title leaves the status most of the line");
+    TEST_PRINTF("a note with a long name: the whole of it, past the old 230 units");
+    app_note_named(app, SKIFF_TEXT_QUEUE_ADDED, LONG_GAME);
+    frame(0);
+    print_view();
+    TEST_ASSERT_EQUAL_STRING("Added to downloads: " LONG_GAME, view()->status);
+    TEST_PRINTF("a title too long for the line still leaves the status its minimum");
+    snprintf(app->view.title, sizeof app->view.title, "%s", LONG_GAME);
+    TEST_ASSERT_EQUAL_FLOAT(SKIFF_APP_STATUS_MIN_WIDTH, app_view_status_width(app));
+}
+
+static void test_a_long_name_is_shortened_so_the_action_stays(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(3);
+    create_app();
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    const float width = 20.0f * CHAR_WIDTH;
+    char out[SKIFF_APP_STATUS_MAX];
+    app_format_fit_name(app, SKIFF_TEXT_SAVE_SYNCED_NOTE, LONG_GAME, width, out, sizeof out);
+    TEST_PRINTF("in %d units: \"%s\"", (int)width, out);
+    TEST_ASSERT_EQUAL_STRING("Synced: Pinball H...", out);
+    app_format_fit_name(app, SKIFF_TEXT_SAVES_SYNCING, LONG_GAME, width, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("Syncing: Pinball...", out);
+    TEST_PRINTF("a name that fits stays whole");
+    app_format_fit_name(app, SKIFF_TEXT_SAVE_IN_SYNC_NOTE, "Lumines", 200.0f, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("Already in sync: Lumines", out);
+    TEST_PRINTF("no room for even part of the name: the text is cut as a whole");
+    app_format_fit_name(app, SKIFF_TEXT_SAVE_IN_SYNC_NOTE, LONG_GAME, 10.0f * CHAR_WIDTH, out,
+                        sizeof out);
+    TEST_ASSERT_EQUAL_STRING("Already...", out);
+    TEST_PRINTF("in Spanish, the action first too");
+    app->config.language = SKIFF_LANGUAGE_SPANISH;
+    app_format_fit_name(app, SKIFF_TEXT_SAVE_SYNCED_NOTE, LONG_GAME, 30.0f * CHAR_WIDTH, out,
+                        sizeof out);
+    TEST_PRINTF("es: \"%s\"", out);
+    TEST_ASSERT_EQUAL_STRING("Sincronizada: Pinball Hall...", out);
+    app_format_fit_name(app, SKIFF_TEXT_SAVES_SYNCING, LONG_GAME, 30.0f * CHAR_WIDTH, out,
+                        sizeof out);
+    TEST_ASSERT_EQUAL_STRING("Sincronizando: Pinball Hall...", out);
+    app->config.language = SKIFF_LANGUAGE_ENGLISH;
+}
+
+/* The header's text is the start of the action and name given, cut to fit beside the title. */
+static void check_header_cut(const char *start) {
+    const char *status = view()->status;
+    TEST_ASSERT_EQUAL_STRING_LEN(start, status, strlen(start));
+    TEST_ASSERT_TRUE(CHAR_WIDTH * (float)strlen(status) <= app_view_status_width(app));
+    TEST_ASSERT_EQUAL_STRING(SKIFF_UI_ELLIPSIS,
+                             status + strlen(status) - strlen(SKIFF_UI_ELLIPSIS));
+}
+
+static void test_a_long_names_sync_note_says_synced_first(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, LONG_GAME LONG_GAME, GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    TEST_PRINTF("while the upload runs: \"Syncing:\" first, the name cut");
+    for (int i = 0; i < FRAMES_MAX && app->call.kind != CALL_SAVES_APPLY; i++) {
+        frame(0);
+    }
+    print_view();
+    TEST_ASSERT_EQUAL_INT(CALL_SAVES_APPLY, app->call.kind);
+    check_header_cut("Syncing: " LONG_GAME);
+    run_saves();
+    TEST_PRINTF("then \"Synced:\" first, the name cut");
+    check_header_cut("Synced: " LONG_GAME);
+}
+
+/* The library's Settings hint: plain, or with the saves that need the player. */
+static int settings_hint(const char *label) { return hints(SKIFF_UI_ACTION_MENU, label); }
+
+/* Settings' Saves row (its third). */
+static const skiff_app_row *saves_row(void) { return &view()->rows[2]; }
+
+static void test_saves_that_need_the_player_are_flagged_until_chosen(void) {
+    set_saves_scene_titled(ZED_GAME);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Saves: 2 synced, 1 need you", view()->status);
+    wait_ms(SKIFF_APP_NOTE_MS);
+    TEST_PRINTF("after the launch note: the library's Settings hint keeps the count");
+    print_view();
+    TEST_ASSERT_TRUE(settings_hint("Settings (1)"));
+    TEST_ASSERT_EQUAL_size_t(1, app_saves_waiting(app));
+
+    TEST_PRINTF("Settings' Saves row says it, in the colour that asks for attention");
+    frame(SKIFF_UI_ACTION_MENU);
+    print_view();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), saves_row()->label);
+    TEST_ASSERT_EQUAL_STRING("1 needs you", saves_row()->detail);
+    TEST_ASSERT_TRUE(saves_row()->attention);
+    TEST_ASSERT_FALSE(view()->rows[0].attention);
+
+    TEST_PRINTF("the Saves screen lists it first, marked, though its name sorts last");
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    print_view();
+    TEST_ASSERT_EQUAL_size_t(3, view()->row_count);
+    TEST_ASSERT_EQUAL_STRING(ZED_GAME, view()->rows[0].label);
+    TEST_ASSERT_TRUE(view()->rows[0].attention);
+    TEST_ASSERT_EQUAL_STRING("Down Game", view()->rows[1].label);
+    TEST_ASSERT_FALSE(view()->rows[1].attention);
+    TEST_ASSERT_EQUAL_STRING(GAME_UP, view()->rows[2].label);
+    TEST_ASSERT_FALSE(view()->rows[2].attention);
+
+    TEST_PRINTF("two waiting: the plural");
+    app_save_game *down = &app->saves->shown->games[1];
+    const skiff_saves_decision decision = down->decision;
+    down->decision.action = SKIFF_SAVES_ASK_CONFLICT;
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_STRING("2 need you", saves_row()->detail);
+    app->config.language = SKIFF_LANGUAGE_SPANISH;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_ASSERT_EQUAL_STRING("2 te necesitan", saves_row()->detail);
+    down->decision = decision;
+    app->dirty = 1;
+    frame(0);
+    TEST_ASSERT_EQUAL_STRING("1 te necesita", saves_row()->detail);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_TRUE(settings_hint("Ajustes (1)"));
+    app->config.language = SKIFF_LANGUAGE_ENGLISH;
+
+    TEST_PRINTF("chosen: Keep this PSP's, and nothing is flagged any more");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_app_open_saves(app));
+    frame(0);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
+    select_save_row(ZED_GAME);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    serve_upload(ROM_ASK, scene.ask_hash, "true", SAVE_KEPT);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_saves();
+    TEST_ASSERT_EQUAL_STRING("Synced: " ZED_GAME, view()->status);
+    TEST_ASSERT_FALSE(view()->rows[0].attention);
+    TEST_ASSERT_EQUAL_size_t(0, app_saves_waiting(app));
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_EQUAL_STRING("", saves_row()->detail);
+    TEST_ASSERT_FALSE(saves_row()->attention);
+    frame(SKIFF_UI_ACTION_BACK);
+    TEST_ASSERT_TRUE(settings_hint(english(SKIFF_TEXT_SETTINGS)));
+}
+
+/* No cell of the view's tables was cut to fit. */
+static void check_tables_whole(void) {
+    const skiff_app_view *v = view();
+    for (size_t t = 0; t < v->table_count; t++) {
+        for (size_t r = 0; r < v->tables[t].row_count; r++) {
+            for (size_t c = 0; c < SKIFF_APP_TABLE_COLUMNS; c++) {
+                const char *cell = v->tables[t].rows[r].cells[c];
+                TEST_ASSERT_NULL_MESSAGE(strstr(cell, SKIFF_UI_ELLIPSIS), cell);
+                TEST_ASSERT_TRUE(v->tables[t].column_x[c] + CHAR_WIDTH * (float)strlen(cell) <=
+                                 SKIFF_APP_TEXT_WIDTH);
+            }
+        }
+    }
+}
+
+/* The choice on screen, as the deletion action would have it. */
+static void saves_choice_variant(skiff_saves_action action) {
+    app->saves->choice.decision.action = action;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+}
+
+static void test_the_choice_fits_in_spanish(void) {
+    open_the_conflict();
+    app->config.language = SKIFF_LANGUAGE_SPANISH;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_ASSERT_EQUAL_STRING("¿Qué partida?", view()->title);
+    TEST_ASSERT_EQUAL_STRING("Ask Game", view()->status);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(1, view()->line_count, "what happened takes one line");
+    TEST_ASSERT_EQUAL_STRING("Esta PSP", side_row(0)->cells[SIDE_NAME]);
+    TEST_ASSERT_EQUAL_STRING("11 oct", side_row(1)->cells[SIDE_DAY]);
+    TEST_ASSERT_EQUAL_STRING("Usar la de la PSP", view()->tables[OPTIONS_TABLE].rows[0].cells[0]);
+    check_tables_whole();
+    TEST_PRINTF("and when RomM deleted it: the longest label");
+    saves_choice_variant(SKIFF_SAVES_ASK_DELETED_SERVER);
+    TEST_ASSERT_EQUAL_STRING("Borrar la de la PSP", view()->tables[OPTIONS_TABLE].rows[1].cells[0]);
+    TEST_ASSERT_EQUAL_STRING("Se borra aquí, tras una copia",
+                             view()->tables[OPTIONS_TABLE].rows[1].cells[1]);
+    check_tables_whole();
+    saves_choice_variant(SKIFF_SAVES_ASK_DELETED_LOCAL);
+    check_tables_whole();
+    app->config.language = SKIFF_LANGUAGE_ENGLISH;
+    saves_choice_variant(SKIFF_SAVES_ASK_DELETED_LOCAL);
+    check_tables_whole();
+    TEST_PRINTF("a device name longer than its column is cut there, between characters");
+    snprintf(app->saves->choice.server_device, sizeof app->saves->choice.server_device, "%s",
+             "Teléfono de María, salón " LONG_GAME LONG_GAME);
+    saves_choice_variant(SKIFF_SAVES_ASK_CONFLICT);
+    const char *source = side_row(1)->cells[SIDE_SOURCE];
+    const float column = view()->tables[SIDES_TABLE].column_x[SIDE_SOURCE];
+    TEST_ASSERT_EQUAL_STRING_LEN("Teléfono de María", source, strlen("Teléfono de María"));
+    TEST_ASSERT_EQUAL_STRING(SKIFF_UI_ELLIPSIS,
+                             source + strlen(source) - strlen(SKIFF_UI_ELLIPSIS));
+    TEST_ASSERT_TRUE(column + CHAR_WIDTH * (float)strlen(source) <= SKIFF_APP_TEXT_WIDTH);
 }
 
 #define SHIFTED_FIRST_ID 500U
@@ -4738,6 +5084,11 @@ int main(void) {
     RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
     RUN_TEST(test_installed_games_past_the_lookup_budget_are_reached_next_time);
     RUN_TEST(test_another_rom_with_the_same_save_id_starts_as_a_first_sync);
+    RUN_TEST(test_the_status_takes_the_width_the_title_leaves);
+    RUN_TEST(test_a_long_name_is_shortened_so_the_action_stays);
+    RUN_TEST(test_a_long_names_sync_note_says_synced_first);
+    RUN_TEST(test_saves_that_need_the_player_are_flagged_until_chosen);
+    RUN_TEST(test_the_choice_fits_in_spanish);
     RUN_TEST(test_a_rom_read_twice_across_shifted_pages_is_one_game);
     return UNITY_END();
 }

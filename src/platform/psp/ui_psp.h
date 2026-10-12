@@ -29,6 +29,8 @@ enum {
     /* A list row, in pixels, and the left margin text starts at. */
     SKIFF_PSP_UI_ROW_HEIGHT = 13,
     SKIFF_PSP_UI_MARGIN = 12,
+    /* A button symbol and the gap before the text after it. */
+    SKIFF_PSP_UI_SYMBOL_WIDTH = 13,
 };
 
 /* Colours are 0xAABBGGRR. */
@@ -38,6 +40,8 @@ enum {
 #define SKIFF_PSP_UI_COLOUR_SELECTION 0xFF805020U
 #define SKIFF_PSP_UI_COLOUR_BAR 0xFF404040U
 #define SKIFF_PSP_UI_COLOUR_BAR_FILL 0xFF30B060U
+/* Amber, for what needs the player (a save to choose). */
+#define SKIFF_PSP_UI_COLOUR_ATTENTION 0xFF30B8FFU
 /* Laid over the screen while a system dialog is open, as games do, so the dialog stands out. */
 #define SKIFF_PSP_UI_COLOUR_BACKDROP 0xB0000000U
 /* A QR code is dark on light, as phones expect: never in the UI's own colours. */
@@ -48,6 +52,8 @@ enum {
     (0xFF000000U | (SKIFF_COVER_BACKGROUND_BLUE << 16) | (SKIFF_COVER_BACKGROUND_GREEN << 8) |     \
      SKIFF_COVER_BACKGROUND_RED)
 
+/* skiff/app.h sizes the header by these: SKIFF_APP_TITLE_SCALE is the title's size over the text's,
+ * SKIFF_APP_STATUS_SCALE the hint size's (the status) over the text's. */
 #define SKIFF_PSP_UI_TITLE_SIZE 0.8f
 #define SKIFF_PSP_UI_TEXT_SIZE 0.6f
 #define SKIFF_PSP_UI_HINT_SIZE 0.5f
@@ -115,6 +121,10 @@ void skiff_psp_ui_backdrop(const skiff_psp_ui *ui);
 void skiff_psp_ui_header(const skiff_psp_ui *ui, const char *title, const char *status);
 /* Button hints along the footer, left to right. */
 void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints, size_t count);
+/* The symbol of the face button action is on (SKIFF_UI_ACTION_CONFIRM, _BACK, _MENU, _EXTRA), as
+ * the footer draws it, at x for text with its baseline at y: SKIFF_PSP_UI_SYMBOL_WIDTH wide with
+ * its gap. Nothing for another action. */
+void skiff_psp_ui_symbol(const skiff_psp_ui *ui, unsigned action, int x, int y);
 
 /* The label of item index, already fitted to the list's width (skiff_ui_fit_text()). */
 typedef const char *(*skiff_psp_ui_label_fn)(void *ctx, size_t index);
@@ -125,13 +135,15 @@ void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
                        skiff_psp_ui_label_fn label, void *label_ctx);
 
 /* A row of skiff_psp_ui_rows(): its label, already fitted; a detail drawn right-aligned in the
- * row (NULL or "" for none); whether to draw it dimmed (shown but not usable); and the pixels
- * between it and the row above (none above the first row shown). Gaps are for a list that never
- * scrolls: the scroll bar spans the rows alone. */
+ * row (NULL or "" for none); whether to draw it dimmed (shown but not usable); whether its detail
+ * asks for attention (SKIFF_PSP_UI_COLOUR_ATTENTION); and the pixels between it and the row above
+ * (none above the first row shown). Gaps are for a list that never scrolls: the scroll bar spans
+ * the rows alone. */
 typedef struct skiff_psp_ui_row {
     const char *label;
     const char *detail;
     int dim;
+    int attention;
     int gap_above;
 } skiff_psp_ui_row;
 

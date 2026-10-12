@@ -90,6 +90,44 @@ unsigned skiff_ui_input_update(skiff_ui_input *input, unsigned buttons) {
     return actions;
 }
 
+/* ---- Button symbols ---- */
+
+/* A full outline, every corner set. */
+static const skiff_ui_symbol_row SQUARE_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "#########", "#       #", "#       #", "#       #", "#       #",
+    "#       #", "#       #", "#       #", "#########",
+};
+/* Both diagonals, every end set. */
+static const skiff_ui_symbol_row CROSS_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "#       #", " #     # ", "  #   #  ", "   # #   ", "    #    ",
+    "   # #   ", "  #   #  ", " #     # ", "#       #",
+};
+/* The apex at the top's middle, the sides a pixel further out every two rows, the base whole. */
+static const skiff_ui_symbol_row TRIANGLE_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "    #    ", "   # #   ", "   # #   ", "  #   #  ", "  #   #  ",
+    " #     # ", " #     # ", "#       #", "#########",
+};
+/* A midpoint circle of radius 4: drawn as an outline, an octagon that small rounds to a diamond. */
+static const skiff_ui_symbol_row CIRCLE_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "   ###   ", " ##   ## ", " #     # ", "#       #", "#       #",
+    "#       #", " #     # ", " ##   ## ", "   ###   ",
+};
+
+const skiff_ui_symbol_row *skiff_ui_symbol_pixels(unsigned button) {
+    switch (button) {
+    case SKIFF_UI_BUTTON_CROSS:
+        return CROSS_PIXELS;
+    case SKIFF_UI_BUTTON_CIRCLE:
+        return CIRCLE_PIXELS;
+    case SKIFF_UI_BUTTON_TRIANGLE:
+        return TRIANGLE_PIXELS;
+    case SKIFF_UI_BUTTON_SQUARE:
+        return SQUARE_PIXELS;
+    default:
+        return NULL;
+    }
+}
+
 /* ---- The backlight ---- */
 
 int skiff_ui_backlight_off_s(int player_s, int downloading) {

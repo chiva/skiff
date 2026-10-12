@@ -58,6 +58,8 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_DOWNLOAD, 0, "Download", "Descargar")                                             \
     X(SKIFF_TEXT_QUIT, 0, "Quit", "Salir")                                                         \
     X(SKIFF_TEXT_SETTINGS, 0, "Settings", "Ajustes")                                               \
+    /* Settings with the saves that need the player, from the library. */                          \
+    X(SKIFF_TEXT_SETTINGS_WAITING, 1, "Settings ({1})", "Ajustes ({1})")                           \
     X(SKIFF_TEXT_DOWNLOADS, 0, "Downloads", "Descargas")                                           \
     X(SKIFF_TEXT_EDIT, 0, "Edit", "Editar")                                                        \
     X(SKIFF_TEXT_NEW_CODE, 0, "New code", "Código nuevo")                                          \
@@ -234,9 +236,12 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_SAVES_OFFLINE, 0, "Saves sync once Skiff is connected to RomM.",                  \
       "Las partidas se sincronizan cuando Skiff está conectado a RomM.")                           \
     X(SKIFF_TEXT_SAVES_CHECKING, 0, "Checking saves...", "Comprobando partidas...")                \
-    X(SKIFF_TEXT_SAVES_SYNCING, 1, "Syncing {1}...", "Sincronizando {1}...")                       \
+    X(SKIFF_TEXT_SAVES_SYNCING, 1, "Syncing: {1}", "Sincronizando: {1}")                           \
     X(SKIFF_TEXT_SAVES_SUMMARY, 2, "Saves: {1} synced, {2} need you",                              \
       "Partidas: {1} sincronizadas, {2} te necesitan")                                             \
+    /* Settings' Saves row while games need the player: one, or more. */                           \
+    X(SKIFF_TEXT_SAVES_WAITING_ONE, 1, "{1} needs you", "{1} te necesita")                         \
+    X(SKIFF_TEXT_SAVES_WAITING, 1, "{1} need you", "{1} te necesitan")                             \
     X(SKIFF_TEXT_SAVES_EMPTY, 0, "No saves on this PSP or in RomM yet.",                           \
       "Aún no hay partidas en esta PSP ni en RomM.")                                               \
     X(SKIFF_TEXT_SAVES_NOT_CHECKED, 0, "Choose Sync all to compare this PSP's saves with RomM's.", \
@@ -269,31 +274,29 @@ typedef enum skiff_language {
       "Sincronizar partida.")                                                                      \
     X(SKIFF_TEXT_SAVE_ERROR, 1, "Can't sync: {1}", "No se puede sincronizar: {1}")                 \
     X(SKIFF_TEXT_SAVE_LAST_SYNCED, 1, "Last synced {1}", "Última sincronización: {1}")             \
-    X(SKIFF_TEXT_SAVE_CONFLICT, 1, "{1} changed on this PSP and in RomM since the last sync.",     \
-      "{1} ha cambiado en esta PSP y en RomM desde la última sincronización.")                     \
-    X(SKIFF_TEXT_SAVE_CONFLICT_FIRST, 1, "{1} has different saves on this PSP and in RomM.",       \
-      "{1} tiene partidas distintas en esta PSP y en RomM.")                                       \
-    X(SKIFF_TEXT_SAVE_DELETED_SERVER_CHOICE, 1,                                                    \
-      "{1}: the save was deleted in RomM, but this PSP still has one.",                            \
-      "{1}: la partida se borró en RomM, pero esta PSP todavía tiene una.")                        \
-    X(SKIFF_TEXT_SAVE_DELETED_LOCAL_CHOICE, 1,                                                     \
-      "{1}: the save was deleted on this PSP, but RomM still has it.",                             \
-      "{1}: la partida se borró en esta PSP, pero RomM todavía la tiene.")                         \
-    X(SKIFF_TEXT_SAVE_ON_THIS_PSP, 1, "On this PSP: {1}", "En esta PSP: {1}")                      \
-    X(SKIFF_TEXT_SAVE_IN_ROMM, 1, "In RomM: {1}", "En RomM: {1}")                                  \
-    X(SKIFF_TEXT_SAVE_IN_ROMM_FROM, 2, "In RomM: {1}, from {2}", "En RomM: {1}, de {2}")           \
-    X(SKIFF_TEXT_SAVE_KEEP_NOTE, 0,                                                                \
-      "The save you do not keep stays in RomM's history or in Skiff's backups.",                   \
-      "La partida que no conserves sigue en el historial de RomM o en las copias de Skiff.")       \
-    X(SKIFF_TEXT_SAVE_LEAVE_NOTE, 0,                                                               \
-      "Leave it keeps this PSP without the save; RomM keeps its copy.",                            \
-      "Dejarla así deja esta PSP sin la partida; RomM conserva su copia.")                         \
+    /* Which save?: what happened, both sides, and what each button does. */                       \
+    X(SKIFF_TEXT_SAVE_CONFLICT, 0, "Changed on both since the last sync.",                         \
+      "Cambiada en ambas desde la última sincronización.")                                         \
+    X(SKIFF_TEXT_SAVE_CONFLICT_FIRST, 0, "The two saves differ and have never synced.",            \
+      "Las dos partidas son distintas y nunca se han sincronizado.")                               \
+    X(SKIFF_TEXT_SAVE_DELETED_SERVER_CHOICE, 0, "Deleted in RomM since the last sync.",            \
+      "Borrada en RomM desde la última sincronización.")                                           \
+    X(SKIFF_TEXT_SAVE_DELETED_LOCAL_CHOICE, 0, "Deleted on this PSP since the last sync.",         \
+      "Borrada en esta PSP desde la última sincronización.")                                       \
+    X(SKIFF_TEXT_SIDE_THIS_PSP, 0, "This PSP", "Esta PSP")                                         \
+    X(SKIFF_TEXT_SIDE_ROMM, 0, "RomM", "RomM")                                                     \
+    X(SKIFF_TEXT_SAVE_GONE, 0, "Deleted", "Borrada")                                               \
+    X(SKIFF_TEXT_KEEP_THIS_PSP_DETAIL, 0, "RomM's stays in its history",                           \
+      "La de RomM queda en su historial")                                                          \
+    X(SKIFF_TEXT_USE_ROMM_DETAIL, 0, "This PSP's goes to Backups", "La de la PSP pasa a Copias")   \
+    X(SKIFF_TEXT_LATER_DETAIL, 0, "Nothing changes", "No cambia nada")                             \
+    X(SKIFF_TEXT_DOWNLOAD_AGAIN_DETAIL, 0, "Puts RomM's back on this PSP",                         \
+      "Vuelve a traer la de RomM")                                                                 \
+    X(SKIFF_TEXT_LEAVE_IT_DETAIL, 0, "RomM keeps its copy", "RomM conserva su copia")              \
+    X(SKIFF_TEXT_UPLOAD_AGAIN_DETAIL, 0, "Uploads it to RomM again", "Se vuelve a subir a RomM")   \
     X(SKIFF_TEXT_REMOVE_THIS_PSP, 0, "Remove this PSP's", "Borrar la de la PSP")                   \
-    X(SKIFF_TEXT_SAVE_REMOVE_NOTE, 0,                                                              \
-      "Remove this PSP's deletes the save on this PSP too, as it was deleted in RomM; Skiff "      \
-      "keeps a backup of it first.",                                                               \
-      "Borrar la de la PSP elimina también la partida de esta PSP, como se eliminó en RomM; "      \
-      "antes Skiff guarda una copia.")                                                             \
+    X(SKIFF_TEXT_REMOVE_THIS_PSP_DETAIL, 0, "Deleted here, after a backup",                        \
+      "Se borra aquí, tras una copia")                                                             \
     X(SKIFF_TEXT_DETAILS_SAVE, 1, "Save: {1}", "Partida: {1}")                                     \
     X(SKIFF_TEXT_BACKUPS_EMPTY, 0, "No backups of this game's saves yet.",                         \
       "Aún no hay copias de las partidas de este juego.")                                          \
@@ -302,9 +305,8 @@ typedef enum skiff_language {
       "Restore this backup? The saves on this PSP are backed up first.",                           \
       "¿Restaurar esta copia? Antes se hace una copia de las partidas de esta PSP.")               \
     X(SKIFF_TEXT_BACKUP_RESTORED, 0, "Backup restored", "Copia restaurada")                        \
-    X(SKIFF_TEXT_SAVE_SYNCED_NOTE, 1, "{1}: save synced", "{1}: partida sincronizada")             \
-    X(SKIFF_TEXT_SAVE_IN_SYNC_NOTE, 1, "{1}: save already in sync",                                \
-      "{1}: la partida ya estaba sincronizada")                                                    \
+    X(SKIFF_TEXT_SAVE_SYNCED_NOTE, 1, "Synced: {1}", "Sincronizada: {1}")                          \
+    X(SKIFF_TEXT_SAVE_IN_SYNC_NOTE, 1, "Already in sync: {1}", "Ya sincronizada: {1}")             \
     /* Short month names, in order, separated by blanks. */                                        \
     X(SKIFF_TEXT_MONTHS, 0, "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",                     \
       "ene feb mar abr may jun jul ago sep oct nov dic")                                           \

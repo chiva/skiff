@@ -2,7 +2,8 @@
  * The UI's models (skiff/ui.h): buttons become actions with the console's confirm button and a
  * held d-pad repeats; a list scrolls and wraps; text is cut to a width between UTF-8 characters;
  * UTF-8 to and from the system dialogs' UTF-16, with invalid input replaced;
- * progress, rate and time left; sizes and durations as the player reads them.
+ * progress, rate and time left; sizes and durations as the player reads them; the face buttons'
+ * symbols as whole pixel patterns.
  */
 #include <stdio.h>
 #include <string.h>
@@ -671,6 +672,110 @@ static void test_formatting_refuses_bad_arguments_and_small_buffers(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_ui_format_duration(1, out, 0));
 }
 
+/* ---- Button symbols ---- */
+
+#define SYMBOL_LAST (SKIFF_UI_SYMBOL_SIZE - 1)
+
+static int set_at(const skiff_ui_symbol_row *pixels, int x, int y) {
+    return x >= 0 && y >= 0 && x <= SYMBOL_LAST && y <= SYMBOL_LAST && pixels[y][x] == '#';
+}
+
+static void print_symbol(const char *name, const skiff_ui_symbol_row *pixels) {
+    TEST_PRINTF("%s:", name);
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        TEST_PRINTF("  |%s|", pixels[y]);
+    }
+}
+
+/* Rows of SKIFF_UI_SYMBOL_SIZE pixels, each '#' or ' ', the same mirrored left to right. */
+static void check_symbol_shape(const skiff_ui_symbol_row *pixels) {
+    TEST_ASSERT_NOT_NULL(pixels);
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        TEST_ASSERT_EQUAL_size_t(SKIFF_UI_SYMBOL_SIZE, strlen(pixels[y]));
+        for (int x = 0; x < SKIFF_UI_SYMBOL_SIZE; x++) {
+            TEST_ASSERT_TRUE(pixels[y][x] == '#' || pixels[y][x] == ' ');
+            TEST_ASSERT_EQUAL_INT_MESSAGE(set_at(pixels, x, y), set_at(pixels, SYMBOL_LAST - x, y),
+                                          pixels[y]);
+        }
+    }
+}
+
+static void check_upside_down_alike(const skiff_ui_symbol_row *pixels) {
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        TEST_ASSERT_EQUAL_STRING(pixels[y], pixels[SYMBOL_LAST - y]);
+    }
+}
+
+/* A closed outline: every pixel set touches at least two others (diagonals count). */
+static void check_closed(const skiff_ui_symbol_row *pixels) {
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        for (int x = 0; x < SKIFF_UI_SYMBOL_SIZE; x++) {
+            if (!set_at(pixels, x, y)) {
+                continue;
+            }
+            int neighbours = 0;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    neighbours += (dx != 0 || dy != 0) && set_at(pixels, x + dx, y + dy);
+                }
+            }
+            TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2, neighbours, pixels[y]);
+        }
+    }
+}
+
+static void test_button_symbols_are_whole_pixel_patterns(void) {
+    const skiff_ui_symbol_row *square = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_SQUARE);
+    const skiff_ui_symbol_row *cross = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_CROSS);
+    const skiff_ui_symbol_row *triangle = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_TRIANGLE);
+    const skiff_ui_symbol_row *circle = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_CIRCLE);
+    const skiff_ui_symbol_row *symbols[] = {square, cross, triangle, circle};
+    const char *const names[] = {"square", "cross", "triangle", "circle"};
+    for (size_t i = 0; i < sizeof symbols / sizeof symbols[0]; i++) {
+        print_symbol(names[i], symbols[i]);
+        check_symbol_shape(symbols[i]);
+    }
+
+    TEST_PRINTF("square: the whole outline, all four corners, nothing inside");
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        for (int x = 0; x < SKIFF_UI_SYMBOL_SIZE; x++) {
+            const int edge = x == 0 || y == 0 || x == SYMBOL_LAST || y == SYMBOL_LAST;
+            TEST_ASSERT_EQUAL_INT(edge, set_at(square, x, y));
+        }
+    }
+    check_upside_down_alike(square);
+
+    TEST_PRINTF("cross: both diagonals, all four ends");
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        for (int x = 0; x < SKIFF_UI_SYMBOL_SIZE; x++) {
+            TEST_ASSERT_EQUAL_INT(x == y || x == SYMBOL_LAST - y, set_at(cross, x, y));
+        }
+    }
+    check_upside_down_alike(cross);
+
+    TEST_PRINTF("triangle: apex at the top's middle, the whole base, sides falling outwards");
+    for (int x = 0; x < SKIFF_UI_SYMBOL_SIZE; x++) {
+        TEST_ASSERT_EQUAL_INT(x == SYMBOL_LAST / 2, set_at(triangle, x, 0));
+        TEST_ASSERT_TRUE(set_at(triangle, x, SYMBOL_LAST));
+    }
+    int left = SYMBOL_LAST / 2;
+    for (int y = 1; y < SYMBOL_LAST; y++) {
+        const int edge = (int)(strchr(triangle[y], '#') - triangle[y]);
+        TEST_ASSERT_TRUE(edge <= left && edge >= left - 1);
+        left = edge;
+    }
+    check_closed(triangle);
+
+    TEST_PRINTF("circle: closed, the same every way up");
+    check_upside_down_alike(circle);
+    check_closed(circle);
+    check_closed(square);
+
+    TEST_PRINTF("buttons without a symbol have none");
+    TEST_ASSERT_NULL(skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_START));
+    TEST_ASSERT_NULL(skiff_ui_symbol_pixels(0));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_confirm_and_back_follow_the_console_setting);
@@ -710,5 +815,6 @@ int main(void) {
     RUN_TEST(test_sizes_read_as_the_xmb_shows_them);
     RUN_TEST(test_durations_read_as_a_player_says_them);
     RUN_TEST(test_formatting_refuses_bad_arguments_and_small_buffers);
+    RUN_TEST(test_button_symbols_are_whole_pixel_patterns);
     return UNITY_END();
 }

@@ -71,6 +71,17 @@ void skiff_ui_input_init(skiff_ui_input *input, int confirm_is_cross);
  * direction or shoulder button again when it repeats. Call once per frame. 0 for NULL. */
 unsigned skiff_ui_input_update(skiff_ui_input *input, unsigned buttons);
 
+/* ---- Button symbols ---- */
+
+/* A face button's symbol as SKIFF_UI_SYMBOL_SIZE rows of pixels, '#' set and ' ' clear, drawn one
+ * sprite a pixel: the GE leaves out a line's end points, which dropped corners off symbols drawn
+ * as lines on hardware. */
+#define SKIFF_UI_SYMBOL_SIZE 9
+typedef char skiff_ui_symbol_row[SKIFF_UI_SYMBOL_SIZE + 1];
+
+/* The pixels of SKIFF_UI_BUTTON_CROSS, _CIRCLE, _TRIANGLE or _SQUARE; NULL for another button. */
+const skiff_ui_symbol_row *skiff_ui_symbol_pixels(unsigned button);
+
 /* ---- The backlight ---- */
 
 /* While a download runs, the firmware's backlight-off time is shortened to this many seconds, so a

@@ -154,7 +154,7 @@ static void reset(skiff_app *app) {
     saves->want_apply = 0;
     saves->batch = 0;
     saves->batch_session = 0;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     skiff_ui_list_init(&saves->list, 0, APP_SAVES_ROWS);
 }
 
@@ -279,6 +279,18 @@ int app_saves_needs_player(const app_save_game *game) {
             game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER);
 }
 
+size_t app_saves_waiting(const skiff_app *app) {
+    if (app_saves_blocked(app) != SAVES_OK) {
+        return 0;
+    }
+    const app_save_list *list = app->saves->shown;
+    size_t waiting = 0;
+    for (size_t i = 0; i < list->count; i++) {
+        waiting += (size_t)app_saves_needs_player(&list->games[i]);
+    }
+    return waiting;
+}
+
 /* ---- Starting calls ---- */
 
 static void prepare(skiff_app *app) {
@@ -302,9 +314,16 @@ static void prepare(skiff_app *app) {
     saves->baseline_error = SKIFF_OK;
 }
 
-static void set_activity(skiff_app *app, skiff_text_id id, const char *arg) {
-    const char *args[] = {arg};
-    app_format(app, id, args, arg != NULL ? 1 : 0, app->saves->activity);
+/* The header's activity: id alone, or the text a game's name fills. */
+static void set_activity(skiff_app *app, skiff_text_id id, const char *name) {
+    app_header_text *activity = &app->saves->activity;
+    if (name != NULL) {
+        snprintf(activity->text, sizeof activity->text, "%s", name);
+        activity->named = id;
+    } else {
+        app_format(app, id, NULL, 0, activity->text);
+        activity->named = SKIFF_TEXT_COUNT;
+    }
     app->dirty = 1;
 }
 
@@ -410,7 +429,7 @@ static void batch_step(skiff_app *app) {
         waiting += (size_t)(app_saves_needs_player(&list->games[i]) || list->games[i].recheck);
     }
     saves->batch = 0;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     app->dirty = 1;
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
                     "saves: %u synced, %u failed, %zu need the player", (unsigned)synced,
@@ -492,7 +511,7 @@ void app_saves_update(skiff_app *app) {
         for (size_t i = 0; i < saves->shown->count; i++) {
             saves->shown->games[i].recheck = 0;
         }
-        saves->activity[0] = '\0';
+        saves->activity.text[0] = '\0';
         return;
     }
     if (wait_for_network(app)) {
@@ -537,7 +556,7 @@ static void refused(skiff_app *app) {
     saves->forbidden = 1;
     saves->batch = 0;
     saves->batch_session = 0;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     app->dirty = 1;
 }
 
@@ -561,10 +580,7 @@ static void show_failure(skiff_app *app, skiff_err err, app_saves_origin origin)
 }
 
 static void note_game(skiff_app *app, skiff_text_id id, const app_save_game *game) {
-    const char *args[] = {app_saves_title(game)};
-    char text[SKIFF_TEXT_MAX];
-    app_format(app, id, args, 1, text);
-    app_note(app, text);
+    app_note_named(app, id, app_saves_title(game));
 }
 
 /* Why a game cannot be synced, as a sentence (into out, SKIFF_TEXT_MAX). */
@@ -633,7 +649,7 @@ static void one_checked(skiff_app *app) {
     app_save_game game = app->call.saves.game;
     const app_saves_origin origin = saves->running_origin;
     saves->running_origin = SAVES_FROM_NONE;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     if (app->call.saves.session_id != 0 && err == SKIFF_OK) {
         saves->batch_session = app->call.saves.session_id;
     }
@@ -680,7 +696,7 @@ void app_saves_checked(skiff_app *app) {
         return;
     }
     const skiff_err err = app->call.err;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     app->dirty = 1;
     if (err == SKIFF_ERR_ROMM_FORBIDDEN) {
         refused(app);
@@ -712,7 +728,7 @@ void app_saves_applied(skiff_app *app) {
     const app_saves_call *call = &app->call.saves;
     const app_saves_origin origin = saves->running_origin;
     saves->running_origin = SAVES_FROM_NONE;
-    saves->activity[0] = '\0';
+    saves->activity.text[0] = '\0';
     app->dirty = 1;
     app_save_game game = call->game;
     if (call->baseline_error != SKIFF_OK) {

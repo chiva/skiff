@@ -4345,11 +4345,12 @@ static void test_a_roms_details_skiff_refuses_cost_only_that_game(void) {
     serve_complete();
     open_saves_library(SAVE_SCOPES, SAVES_ROMM);
     run_saves();
-    TEST_PRINTF("the other game still syncs; the refused one is asked about again next time");
+    TEST_PRINTF(
+        "the other game still syncs; the refused one waits, without a save ID, for Sync all");
     TEST_ASSERT_EQUAL_STRING("Saves: 1 synced, 0 need you", view()->status);
     skiff_saves_baseline *baseline = NULL;
     read_baseline(&baseline);
-    TEST_ASSERT_NULL(skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(baseline, ROM_UP));
     TEST_ASSERT_EQUAL_STRING(GAME_DOWN, skiff_saves_baseline_rom_target(baseline, ROM_DOWN));
     TEST_ASSERT_NOT_NULL(skiff_saves_baseline_find(baseline, GAME_DOWN));
     skiff_saves_baseline_destroy(baseline);
@@ -4491,6 +4492,39 @@ static void test_sync_all_asks_again_about_a_game_once_without_a_save_id(void) {
     TEST_ASSERT_TRUE(shows("Synced"));
 }
 
+#define MANY_INSTALLED_FIRST 400U
+#define MANY_INSTALLED (APP_SAVES_LOOKUPS_MAX + 1)
+
+static void test_installed_games_past_the_lookup_budget_are_reached_next_time(void) {
+    unsigned ids[MANY_INSTALLED];
+    uint32_t crcs[MANY_INSTALLED];
+    for (unsigned i = 0; i < MANY_INSTALLED; i++) {
+        ids[i] = MANY_INSTALLED_FIRST + i;
+        crcs[i] = body_crc;
+    }
+    record_installs(ids, crcs, MANY_INSTALLED);
+    serve_saves_list("", 0);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("RomM has none of them: a check asks about %d, remembering each",
+                APP_SAVES_LOOKUPS_MAX);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(baseline, MANY_INSTALLED_FIRST));
+    TEST_ASSERT_NULL(
+        skiff_saves_baseline_rom_target(baseline, MANY_INSTALLED_FIRST + APP_SAVES_LOOKUPS_MAX));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("the next check asks about the one never asked first");
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING("", skiff_saves_baseline_rom_target(
+                                     baseline, MANY_INSTALLED_FIRST + APP_SAVES_LOOKUPS_MAX));
+    skiff_saves_baseline_destroy(baseline);
+    TEST_ASSERT_EQUAL_size_t(APP_SAVES_LOOKUPS_MAX - 1, app->saves->lookup_cursor);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4616,5 +4650,6 @@ int main(void) {
     RUN_TEST(test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here);
     RUN_TEST(test_many_games_are_negotiated_in_rounds);
     RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
+    RUN_TEST(test_installed_games_past_the_lookup_budget_are_reached_next_time);
     return UNITY_END();
 }

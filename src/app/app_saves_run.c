@@ -29,6 +29,8 @@ typedef struct check_scratch {
     server_rom roms[APP_SAVES_SERVER_ROMS_MAX];
     size_t folder_count;
     char folders[APP_SAVES_FOLDERS_MAX][SKIFF_STORAGE_NAME_MAX];
+    /* Installed games asked about this check for the first time. */
+    unsigned char asked[SKIFF_INSTALL_RECORDS_MAX];
     size_t rom_id_count;
     uint64_t rom_ids[SKIFF_ROMM_SYNC_ROMS_MAX];
     size_t state_count;
@@ -342,40 +344,59 @@ static skiff_err read_server_roms(app_call *call, check_scratch *s) {
 
 /* The save IDs of installed games not remembered yet, from their details, a few per check. A ROM
  * RomM no longer has is remembered without one. */
-static skiff_err read_installed(app_call *call, check_scratch *s) {
-    size_t asked = 0;
-    for (size_t i = 0; i < call->saves.installed_count && asked < APP_SAVES_LOOKUPS_MAX; i++) {
-        const uint64_t id = call->saves.installed[i];
-        /* A ROM remembered without a save ID is asked again on Sync all: RomM may have rescanned
-         * it since. */
-        const char *known = skiff_saves_baseline_rom_target(call->saves.baseline, id);
-        if (known != NULL && (known[0] != '\0' || !call->saves.force_hash)) {
-            continue;
-        }
-        asked++;
-        const skiff_err err = skiff_romm_get_rom(call->romm, id, &s->rom);
-        if (err == SKIFF_ERR_ROMM_NOT_FOUND) {
-            remember(call, s, id, "");
-            continue;
-        }
-        /* An answer Skiff refuses for one ROM (RomM's data, not the connection) costs only that
-         * game: not remembered, so a later check asks again once RomM is fixed or rescanned. */
-        if (err == SKIFF_ERR_ROMM_BAD_RESPONSE) {
-            skiff_log_write(call->saves.log, SKIFF_LOG_WARN, SAVES_LOG_TAG,
-                            "ROM %llu: details refused, asked again next check: %s (%d)",
-                            (unsigned long long)id, skiff_err_name(err), (int)err);
-            continue;
-        }
-        if (err != SKIFF_OK) {
-            return err;
-        }
-        char target[SKIFF_SAVES_TARGET_SIZE];
-        syncable_target(&s->rom.summary, target, sizeof target);
-        remember(call, s, id, target);
+/* Asks RomM for one installed game's save ID and remembers the answer. A ROM RomM no longer has,
+ * or whose details Skiff refuses (RomM's data, not the connection), is remembered without one: it
+ * then costs only that game, and Sync all asks about it again. */
+static skiff_err look_up(app_call *call, check_scratch *s, uint64_t id) {
+    const skiff_err err = skiff_romm_get_rom(call->romm, id, &s->rom);
+    if (err == SKIFF_ERR_ROMM_NOT_FOUND || err == SKIFF_ERR_ROMM_BAD_RESPONSE) {
+        skiff_log_write(call->saves.log, SKIFF_LOG_WARN, SAVES_LOG_TAG,
+                        "ROM %llu: no save ID from its details: %s (%d)", (unsigned long long)id,
+                        skiff_err_name(err), (int)err);
+        remember(call, s, id, "");
+        return SKIFF_OK;
     }
-    skiff_log_write(call->saves.log, SKIFF_LOG_DEBUG, SAVES_LOG_TAG,
-                    "%zu installed game(s), %zu asked about", call->saves.installed_count, asked);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    char target[SKIFF_SAVES_TARGET_SIZE];
+    syncable_target(&s->rom.summary, target, sizeof target);
+    remember(call, s, id, target);
     return SKIFF_OK;
+}
+
+/* The save IDs of installed games, a few per check: first the games never asked about, then on
+ * Sync all those remembered without one (RomM may have rescanned them), taken in turn from where
+ * the last check stopped so every one is reached however many there are. */
+static skiff_err read_installed(app_call *call, check_scratch *s) {
+    const size_t count = call->saves.installed_count;
+    size_t asked = 0;
+    skiff_err err = SKIFF_OK;
+    for (size_t i = 0; err == SKIFF_OK && i < count && asked < APP_SAVES_LOOKUPS_MAX; i++) {
+        const uint64_t id = call->saves.installed[i];
+        s->asked[i] = skiff_saves_baseline_rom_target(call->saves.baseline, id) == NULL;
+        if (s->asked[i]) {
+            asked++;
+            err = look_up(call, s, id);
+        }
+    }
+    size_t step = 0;
+    for (;
+         err == SKIFF_OK && call->saves.force_hash && step < count && asked < APP_SAVES_LOOKUPS_MAX;
+         step++) {
+        const size_t i = (call->saves.lookup_cursor + step) % count;
+        const char *known =
+            skiff_saves_baseline_rom_target(call->saves.baseline, call->saves.installed[i]);
+        if (!s->asked[i] && known != NULL && known[0] == '\0') {
+            asked++;
+            err = look_up(call, s, call->saves.installed[i]);
+        }
+    }
+    call->saves.lookup_cursor = count > 0 ? (call->saves.lookup_cursor + step) % count : 0;
+    skiff_log_write(call->saves.log, SKIFF_LOG_DEBUG, SAVES_LOG_TAG,
+                    "%zu installed game(s), %zu asked about: %s (%d)", count, asked,
+                    skiff_err_name(err), (int)err);
+    return err;
 }
 
 static skiff_storage_list_step take_folder(void *ctx, const skiff_storage_entry *entry) {
@@ -503,7 +524,7 @@ static const server_rom *server_rom_of(const check_scratch *s, uint64_t rom_id) 
 
 /* A game for a save ID some ROM has, when there is anything to sync: local folders, saves in
  * RomM, or a baseline. */
-static void add_target(app_call *call, check_scratch *s, const char *save_target) {
+static void add_target(app_call *call, const check_scratch *s, const char *save_target) {
     if (find_game(call->saves.list, save_target, 0) != NULL) {
         return;
     }
@@ -661,7 +682,7 @@ static size_t game_roms(const check_scratch *s, const app_save_game *game) {
     return count;
 }
 
-static void add_game_roms(app_call *call, check_scratch *s, const app_save_game *game) {
+static void add_game_roms(const app_call *call, check_scratch *s, const app_save_game *game) {
     if (game->problem == SAVE_PROBLEM_NONE) {
         add_rom_id(s, game->rom_id);
         add_save_state(s, game, call->saves.now_utc_ms);

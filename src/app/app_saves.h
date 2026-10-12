@@ -133,6 +133,8 @@ typedef struct app_saves_call {
     size_t installed_count;
     uint64_t installed[SKIFF_INSTALL_RECORDS_MAX];
     int force_hash;
+    /* In and out: where Sync all's refresh of ROMs without a save ID goes on from. */
+    size_t lookup_cursor;
     /* Every other op: the game, as it then stands. */
     app_save_game game;
     /* SAVES_OP_RESTORE_BACKUP: which; CALL_SAVES_BACKUPS: the list. */
@@ -186,6 +188,8 @@ typedef struct app_saves {
     skiff_ui_list list;
     /* The baseline in memory holds what saves.json does not yet (written by the next save call). */
     int baseline_dirty;
+    /* Where the next Sync all asks again about ROMs remembered without a save ID. */
+    size_t lookup_cursor;
     /* The backup the player picked to restore. */
     uint32_t backups_pick;
     /* A check ran (the list is RomM's answer), or failed with check_error; RomM refused a save

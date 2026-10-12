@@ -315,6 +315,7 @@ static void start_check(skiff_app *app) {
     call->op = SAVES_OP_CHECK;
     call->list = saves->work;
     call->force_hash = saves->want_force;
+    call->lookup_cursor = saves->lookup_cursor;
     call->has_platform = app->has_platform;
     call->platform_id = app->platform.id;
     app_lock_manifest(app);
@@ -690,6 +691,7 @@ void app_saves_checked(skiff_app *app) {
         saves->check_error = err;
         return;
     }
+    saves->lookup_cursor = app->call.saves.lookup_cursor;
     app_save_list *shown = saves->shown;
     saves->shown = saves->work;
     saves->work = shown;

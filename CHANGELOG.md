@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/chiva/skiff/compare/v0.3.0...v0.4.0) (2026-10-12)
+
+
+### Features
+
+* **app:** browse RomM collections ([#93](https://github.com/chiva/skiff/issues/93)) ([10150d6](https://github.com/chiva/skiff/commit/10150d6725e9c9de5589216e488d6f11eba695a5))
+* **app:** clearer save sync screens ([#98](https://github.com/chiva/skiff/issues/98)) ([a3fc194](https://github.com/chiva/skiff/commit/a3fc194edd3ca2f1535b3ce244d0c7d7ec9d3b43))
+* **app:** download all favourites ([#81](https://github.com/chiva/skiff/issues/81)) ([c8f6531](https://github.com/chiva/skiff/commit/c8f65315558e519408c58ddb1c992813fb570924))
+* **app:** set Saves apart from the server rows in Settings ([#97](https://github.com/chiva/skiff/issues/97)) ([7c911ff](https://github.com/chiva/skiff/commit/7c911ffd6af87ab61e29f0903a81a9100c92c858))
+* **app:** switch the library to favourites with SELECT ([#79](https://github.com/chiva/skiff/issues/79)) ([094fc11](https://github.com/chiva/skiff/commit/094fc11a73136aaaeee11b5878866a1a843a519a))
+* **app:** sync saves ([#95](https://github.com/chiva/skiff/issues/95)) ([8f8213b](https://github.com/chiva/skiff/commit/8f8213bf8693ab8a48abcbe8a0e8dde907648b93))
+* **jobs:** queue many downloads with one save ([#78](https://github.com/chiva/skiff/issues/78)) ([3b05917](https://github.com/chiva/skiff/commit/3b05917f0730d700c2bf058bf4b2130ab911bc32))
+* **net:** stream request bodies from a reader ([#90](https://github.com/chiva/skiff/issues/90)) ([f6d3271](https://github.com/chiva/skiff/commit/f6d32710a82cf78409d4de1da5ffc65cad770ba1))
+* **psp:** turn the screen off sooner while games download ([#85](https://github.com/chiva/skiff/issues/85)) ([83fa569](https://github.com/chiva/skiff/commit/83fa5692884ce89a1097e6ff3a14fce1cfc16bd1))
+* **romm:** ask for save sync and collections when pairing, as optional scopes ([#88](https://github.com/chiva/skiff/issues/88)) ([2e2cd30](https://github.com/chiva/skiff/commit/2e2cd3091b81633a456576db8ed6c2581ea80e7c))
+* **romm:** list a player's favourite games ([#77](https://github.com/chiva/skiff/issues/77)) ([6f40f29](https://github.com/chiva/skiff/commit/6f40f2930c84f36337ab05bc77b1fe7ce95e6b7e))
+* **romm:** RomM's save and sync calls ([#91](https://github.com/chiva/skiff/issues/91)) ([b863187](https://github.com/chiva/skiff/commit/b863187337f8abde2d4e6a714cfd37e0ed6d0fc0))
+* **romm:** test against RomM 5.4.0 and drop its newer-release notice ([#86](https://github.com/chiva/skiff/issues/86)) ([d1edcd7](https://github.com/chiva/skiff/commit/d1edcd78586c76aaf3a52508f960b1d8fd3bb213))
+* **saves:** read, write and hash PSP save units ([#92](https://github.com/chiva/skiff/issues/92)) ([8cff119](https://github.com/chiva/skiff/commit/8cff119a73b80bf1405305a8b8f45d45b3c17f41))
+* **saves:** restore save units safely, keep backups and a sync baseline ([#94](https://github.com/chiva/skiff/issues/94)) ([8c96dcc](https://github.com/chiva/skiff/commit/8c96dcc3c22275c85c3d2a24b122d6e3bd242b23))
+* **storage:** list folders on the Memory Stick ([#89](https://github.com/chiva/skiff/issues/89)) ([dabaa10](https://github.com/chiva/skiff/commit/dabaa103e3278e806be99386543a1d3f2ff6cfcf))
+
+
+### Bug Fixes
+
+* **saves:** recover from sleep and closed sessions during save sync ([#99](https://github.com/chiva/skiff/issues/99)) ([6429256](https://github.com/chiva/skiff/commit/64292568c5c1df7c3d3f47bd25c642ce8e369870))
+
+
+### Performance Improvements
+
+* **saves:** faster hashing, restore and upload ([#100](https://github.com/chiva/skiff/issues/100)) ([e75cd1f](https://github.com/chiva/skiff/commit/e75cd1f85e7ee66dcb99bfe908e8354e070b456c))
+
 ## [0.3.0](https://github.com/chiva/skiff/compare/v0.2.0...v0.3.0) (2026-10-10)
 
 

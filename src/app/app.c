@@ -24,18 +24,46 @@ void app_unlock_manifest(skiff_app *app) {
     }
 }
 
+static void log_free_space(skiff_app *app, skiff_err err, int64_t elapsed_ms) {
+    skiff_log_write(app->log, SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
+                    "free space: %llu MiB in %lld ms: %s (%d)",
+                    (unsigned long long)(app->free_known ? app->free_bytes / APP_BYTES_PER_MIB : 0),
+                    (long long)elapsed_ms, skiff_err_name(err), (int)err);
+}
+
 /* The free space of the Skiff folder's device, for the screens that show it. The first query after
- * a launch counts the whole Memory Stick (2.6 s on a 64 GB one, hardware row A1); later ones are
- * quick, so start() makes it while the starting screen is up, not in the middle of browsing. */
+ * a launch counts the whole Memory Stick (2.6 s on a 64 GB one, hardware row A1; 3.0 s in S1), so
+ * start() runs it on the browsing thread (app_free_space_start()) while the Wi-Fi joins; later
+ * ones are quick, and none is made while that first one runs. */
 static void refresh_free_space(skiff_app *app) {
+    if (app->free_pending) {
+        return;
+    }
     const int64_t started_ms = app_now(app);
     const skiff_err err =
         skiff_storage_free_space(app->config.storage, app->config.roots.app, &app->free_bytes);
     app->free_known = err == SKIFF_OK;
-    skiff_log_write(app->log, SKIFF_LOG_DEBUG, SKIFF_APP_LOG_TAG,
-                    "free space: %llu MiB in %lld ms: %s (%d)",
-                    (unsigned long long)(app->free_known ? app->free_bytes / APP_BYTES_PER_MIB : 0),
-                    (long long)(app_now(app) - started_ms), skiff_err_name(err), (int)err);
+    log_free_space(app, err, app_now(app) - started_ms);
+}
+
+void app_free_space_start(skiff_app *app) {
+    app->call.storage = app->config.storage;
+    app->call.roots = app->config.roots;
+    app->call.now_ms = app->env.now_ms;
+    app->call.clock_ctx = app->env.ctx;
+    app->call.free_bytes = 0;
+    app->call.free_space_ms = 0;
+    app->free_pending = 1;
+    app_call_start(app, CALL_FREE_SPACE);
+}
+
+void app_free_space_done(skiff_app *app) {
+    const skiff_err err = app->call.err;
+    app->free_pending = 0;
+    app->free_known = err == SKIFF_OK;
+    app->free_bytes = app->free_known ? app->call.free_bytes : 0;
+    log_free_space(app, err, app->call.free_space_ms);
+    app->dirty = 1;
 }
 
 void app_set_screen(skiff_app *app, skiff_app_screen screen) {
@@ -345,7 +373,7 @@ static void start(skiff_app *app) {
                         app->settings.first_unknown.section, app->settings.first_unknown.key);
     }
     register_secrets(app);
-    refresh_free_space(app);
+    app_free_space_start(app);
     app->profile = app->settings.network_profile;
     err = start_queue(app);
     if (err == SKIFF_OK) {

@@ -670,6 +670,40 @@ static void test_a_file_holding_the_boundary_is_never_sent_whole(void) {
     TEST_ASSERT_EQUAL_INT(storage.opens, storage.closes);
 }
 
+/* A file of size bytes of '-' (the delimiter's first byte) and near misses of the delimiter: its
+ * dashes, then the boundary with its last character changed, every near_every bytes. */
+static void write_near_misses(const char *path, size_t size, size_t near_every) {
+    static const char DELIMITER[] = "--" BOUNDARY;
+    static unsigned char bytes[2 * SKIFF_ROMM_UPLOAD_BUFFER_BYTES];
+    TEST_ASSERT_TRUE(size <= sizeof bytes);
+    memset(bytes, '-', size);
+    for (size_t at = 0; at + sizeof DELIMITER - 1 <= size; at += near_every) {
+        memcpy(bytes + at, DELIMITER, sizeof DELIMITER - 1);
+        bytes[at + sizeof DELIMITER - 2] ^= 1U;
+    }
+    FILE *file = fopen(path, "wb");
+    TEST_ASSERT_NOT_NULL(file);
+    TEST_ASSERT_EQUAL_size_t(size, fwrite(bytes, 1, size, file));
+    fclose(file);
+}
+
+static void test_dashes_and_near_misses_of_the_boundary_are_sent_whole(void) {
+    char path[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, FILE_NAME, path, sizeof path));
+    const skiff_romm_upload spec = unit_upload(path);
+    const size_t size = SKIFF_ROMM_UPLOAD_BUFFER_BYTES + SKIFF_ROMM_UPLOAD_BUFFER_BYTES / 2;
+    const size_t spacings[] = {sizeof "--" BOUNDARY - 1, 61, SKIFF_ROMM_UPLOAD_BUFFER_BYTES - 7};
+    for (size_t i = 0; i < sizeof spacings / sizeof spacings[0]; i++) {
+        reset_fake();
+        serve(PATH_UPLOAD_A, "romm/saves-upload.http");
+        write_near_misses(path, size, spacings[i]);
+        TEST_PRINTF("a near miss every %zu bytes of %zu, dashes between", spacings[i], size);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, upload(&spec));
+        TEST_ASSERT_EQUAL_size_t(fake.log[0].body_size, fake.log[0].body_received);
+    }
+    TEST_ASSERT_EQUAL_INT(storage.opens, storage.closes);
+}
+
 static void test_a_missing_unit_sends_nothing(void) {
     char path[TEMP_DIR_PATH_MAX];
     TEST_ASSERT_TRUE(temp_dir_path(dir, "missing.zip", path, sizeof path));
@@ -1056,6 +1090,7 @@ int main(void) {
     RUN_TEST(test_a_memory_stick_failing_mid_upload_stops_it);
     RUN_TEST(test_a_file_that_changes_while_it_is_sent_fails);
     RUN_TEST(test_a_file_holding_the_boundary_is_never_sent_whole);
+    RUN_TEST(test_dashes_and_near_misses_of_the_boundary_are_sent_whole);
     RUN_TEST(test_a_missing_unit_sends_nothing);
     RUN_TEST(test_upload_refuses_what_romm_would_and_sends_nothing);
     RUN_TEST(test_every_malformed_save_is_refused);

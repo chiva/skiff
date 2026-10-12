@@ -69,6 +69,12 @@ static void run(void *arg) {
     case CALL_BATCH_SPACE:
         call->err = skiff_storage_free_space(call->storage, call->roots.app, &call->free_bytes);
         break;
+    case CALL_FREE_SPACE: {
+        const int64_t started = call->now_ms(call->clock_ctx);
+        call->err = skiff_storage_free_space(call->storage, call->roots.app, &call->free_bytes);
+        call->free_space_ms = call->now_ms(call->clock_ctx) - started;
+        break;
+    }
     case CALL_BATCH_QUEUE:
         call->err = app_batch_queue_run(call);
         break;
@@ -100,7 +106,7 @@ static void run(void *arg) {
  */
 static int uses_network(const app_call *call) {
     if (call->kind == CALL_BATCH_SPACE || call->kind == CALL_BATCH_QUEUE ||
-        call->kind == CALL_SAVES_BACKUPS) {
+        call->kind == CALL_SAVES_BACKUPS || call->kind == CALL_FREE_SPACE) {
         return 0;
     }
     return call->kind != CALL_SAVES_APPLY ||
@@ -139,8 +145,9 @@ void app_call_start(skiff_app *app, app_call_kind kind) {
     /* Kept apart from call->err: once started, the thread may write that before call_start()
      * returns. */
     const int settle = kind == CALL_SAVES_APPLY && call->saves.op == SAVES_OP_SETTLE;
-    /* A settle touches only the Memory Stick: no client (nor server) is needed for it. */
-    skiff_err launch = settle ? SKIFF_OK : app_ensure_client(app);
+    /* A settle and the startup free-space count touch only the Memory Stick: no client (nor
+     * server, which there may not be yet) is needed for them. */
+    skiff_err launch = settle || kind == CALL_FREE_SPACE ? SKIFF_OK : app_ensure_client(app);
     if (launch == SKIFF_OK) {
         launch = app->env.call_start(app->env.ctx, run, call);
     }
@@ -154,7 +161,8 @@ void app_call_start(skiff_app *app, app_call_kind kind) {
 }
 
 void app_call_abandon(skiff_app *app) {
-    if (!app_call_busy(app) || app->call.abandoned) {
+    /* The startup free-space count belongs to no server or screen: it is always taken. */
+    if (!app_call_busy(app) || app->call.abandoned || app->call.kind == CALL_FREE_SPACE) {
         return;
     }
     app->call.abandoned = 1;
@@ -211,6 +219,9 @@ static void apply(skiff_app *app, app_call_kind kind) {
         break;
     case CALL_SAVES_BACKUPS:
         app_saves_backups_listed(app);
+        break;
+    case CALL_FREE_SPACE:
+        app_free_space_done(app);
         break;
     case CALL_NONE:
         break;

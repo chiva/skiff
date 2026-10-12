@@ -2,6 +2,7 @@
  * MD5 (skiff/md5.h) against RFC 1321's test suite (appendix A.5), fed whole and in pieces that
  * cross block boundaries, and around the padding edge where the length needs a second block.
  */
+#include <stdint.h>
 #include <string.h>
 
 #include "skiff/md5.h"
@@ -105,11 +106,26 @@ static void test_a_million_bytes_in_one_call(void) {
     TEST_ASSERT_EQUAL_STRING(MILLION_A_DIGEST, hex);
 }
 
+static void test_bytes_at_any_alignment_give_the_same_digest(void) {
+    static unsigned char buffer[MILLION_A_REPEATS + sizeof(uint64_t)];
+    char expected[SKIFF_MD5_HEX_SIZE];
+    memset(buffer, 'a', sizeof buffer);
+    hex_of(buffer, MILLION_A_REPEATS, MILLION_A_REPEATS, expected);
+    TEST_ASSERT_EQUAL_STRING(MILLION_A_DIGEST, expected);
+    for (size_t offset = 1; offset < sizeof(uint64_t); offset++) {
+        char hex[SKIFF_MD5_HEX_SIZE];
+        hex_of(buffer + offset, MILLION_A_REPEATS, MILLION_A_REPEATS, hex);
+        TEST_PRINTF("1,000,000 x 'a' from offset %zu: %s", offset, hex);
+        TEST_ASSERT_EQUAL_STRING(MILLION_A_DIGEST, hex);
+    }
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_the_rfc_1321_suite_hashes_to_its_published_digests);
     RUN_TEST(test_pieces_of_any_size_give_the_same_digest);
     RUN_TEST(test_lengths_around_the_padding_edge);
     RUN_TEST(test_a_million_bytes_in_one_call);
+    RUN_TEST(test_bytes_at_any_alignment_give_the_same_digest);
     return UNITY_END();
 }

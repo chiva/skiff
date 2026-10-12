@@ -478,6 +478,27 @@ static void test_a_damaged_unit_is_refused_before_anything_is_written(void) {
     assert_nothing_changed(SKIFF_ERR_STORAGE_SAVE_DAMAGED, restore_on(&storage.base, NULL));
 }
 
+static void test_a_unit_that_is_not_the_one_expected_is_refused_before_anything_is_written(void) {
+    prepare();
+    static const char OTHER_HASH[] = "0123456789abcdef0123456789abcdef";
+    skiff_saves_restore_report report;
+    const skiff_err err =
+        skiff_saves_restore_checked(&storage.base, &roots, UNIT_PATH, GAME, OTHER_HASH, &report);
+    TEST_PRINTF("expected %s, the unit hashes to %s", OTHER_HASH, report.content_hash);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(new_hash, report.content_hash,
+                                     "the report says what the unit holds");
+    assert_nothing_changed(SKIFF_ERR_ROMM_SAVE_MISMATCH, err);
+}
+
+static void test_a_unit_that_is_the_one_expected_is_restored(void) {
+    prepare();
+    skiff_saves_restore_report report;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_saves_restore_checked(&storage.base, &roots, UNIT_PATH,
+                                                                GAME, new_hash, &report));
+    TEST_ASSERT_EQUAL_STRING(new_hash, report.content_hash);
+    assert_new_save();
+}
+
 static void test_another_games_unit_is_refused(void) {
     prepare();
     const skiff_err err = skiff_saves_restore(&storage.base, &roots, UNIT_PATH, OTHER_GAME, NULL);
@@ -1107,6 +1128,8 @@ int main(void) {
     RUN_TEST(test_a_full_memory_stick_is_refused_before_anything_is_written);
     RUN_TEST(test_a_device_that_cannot_tell_its_free_space_is_not_refused);
     RUN_TEST(test_a_damaged_unit_is_refused_before_anything_is_written);
+    RUN_TEST(test_a_unit_that_is_not_the_one_expected_is_refused_before_anything_is_written);
+    RUN_TEST(test_a_unit_that_is_the_one_expected_is_restored);
     RUN_TEST(test_another_games_unit_is_refused);
     RUN_TEST(test_live_folders_no_unit_may_hold_are_refused);
     RUN_TEST(test_a_file_in_place_of_a_unit_folder_is_refused);

@@ -134,6 +134,9 @@ typedef enum app_call_kind {
     CALL_SAVES_APPLY,
     CALL_SAVES_COMPLETE,
     CALL_SAVES_BACKUPS,
+    /* The Memory Stick's free space at startup: its first count reads the whole FAT (3 s on a
+     * PSP-1000, S1), so it runs off the screen while the Wi-Fi joins. */
+    CALL_FREE_SPACE,
 } app_call_kind;
 
 /* The most games one "Download all" queues: the queue holds no more unfinished ones. */
@@ -231,6 +234,8 @@ typedef struct app_call {
     int64_t cover_decode_ms;
     skiff_err cover_cache_err;
     skiff_err cover_store_err;
+    /* How long CALL_FREE_SPACE took, for the log. */
+    int64_t free_space_ms;
     /* "Download all": out, the free space (CALL_BATCH_SPACE); in, the app whose batch
      * CALL_BATCH_QUEUE plans and queues (its installer, manifest under its lock, roots and queue:
      * none of them changes while a call runs). */
@@ -358,6 +363,9 @@ struct skiff_app {
     skiff_cover_key cover_key;
     /* Free space on the Memory Stick, read when a screen showing it opens. */
     uint64_t free_bytes;
+    /* The first count runs on the browsing thread (CALL_FREE_SPACE): the screens show the free
+     * space once it is known, and ask again only then. */
+    int free_pending;
 
     app_queue_view queue;
     skiff_ui_list queue_list;
@@ -564,6 +572,9 @@ size_t app_batch_lines(const skiff_app *app, char lines[][SKIFF_TEXT_MAX], size_
 skiff_err app_batch_queue_run(app_call *call);
 void app_batch_page_done(skiff_app *app);
 void app_batch_space_done(skiff_app *app);
+/* Starts the first free-space count off the screen (CALL_FREE_SPACE), and takes its result. */
+void app_free_space_start(skiff_app *app);
+void app_free_space_done(skiff_app *app);
 void app_batch_queued(skiff_app *app);
 
 /* ---- app_queue.c ---- */

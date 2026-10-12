@@ -1899,6 +1899,128 @@ static void test_a_failed_favourites_page_ends_download_all_with_its_error(void)
     run_until(SKIFF_APP_SCREEN_LIBRARY);
 }
 
+/* ---- A batch of another list's own ---- */
+
+/* A game as a list gives it with its file: "Game <id>", its file file_name of size bytes. */
+static skiff_romm_rom_summary listed_game(unsigned id, const char *file_name, uint64_t size) {
+    skiff_romm_rom_summary rom;
+    memset(&rom, 0, sizeof rom);
+    rom.id = id;
+    rom.platform_id = 1;
+    snprintf(rom.name, sizeof rom.name, "Game %u", id);
+    snprintf(rom.fs_name, sizeof rom.fs_name, "%s", file_name);
+    rom.size = size;
+    rom.has_crc32 = 1;
+    rom.crc32 = body_crc;
+    rom.has_file = 1;
+    snprintf(rom.file.file_name, sizeof rom.file.file_name, "%s", file_name);
+    rom.file.size = size;
+    rom.file.has_crc32 = 1;
+    rom.file.crc32 = body_crc;
+    return rom;
+}
+
+/* "Game <id>.iso" recorded as installed in the running app's installed.json, with crc. */
+static void record_in_app(unsigned id, uint32_t crc) {
+    skiff_install_record record;
+    memset(&record, 0, sizeof record);
+    record.rom_id = id;
+    snprintf(record.file_name, sizeof record.file_name, "Game %u.iso", id);
+    snprintf(record.path, sizeof record.path, "games:/Game %u.iso", id);
+    record.size = BODY_BYTES;
+    record.has_crc32 = 1;
+    record.crc32 = crc;
+    app_lock_manifest(app);
+    const skiff_err err = skiff_install_manifest_record(app->manifest, &record);
+    app_unlock_manifest(app);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+}
+
+static void assert_job_target(const skiff_job *job, uint64_t rom_id, const char *logical) {
+    char target[TEMP_DIR_PATH_MAX];
+    TEST_ASSERT_TRUE(temp_dir_path(dir, logical, target, sizeof target));
+    TEST_PRINTF("job for %llu: %s", (unsigned long long)job->rom_id, job->target);
+    TEST_ASSERT_EQUAL_UINT64(rom_id, job->rom_id);
+    TEST_ASSERT_EQUAL_STRING(target, job->target);
+}
+
+static void test_a_batch_of_its_own_sorts_and_queues_apart_from_download_all(void) {
+    open_paired_library(2);
+    TEST_PRINTF("Game 1 queued from its details; Game 2 installed; Game 3 changed in RomM");
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    record_in_app(2, body_crc);
+    record_in_app(3, body_crc ^ 1U);
+
+    app_batch *own = calloc(1, sizeof *own);
+    TEST_ASSERT_NOT_NULL(own);
+    app_batch_reset(app, own);
+    TEST_PRINTF("room: %zu downloads, %zu records", own->queue_room, own->record_room);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX - 1, own->queue_room);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_INSTALL_RECORDS_MAX - 3, own->record_room);
+
+    TEST_PRINTF("Download all's rules, game by game, in the order given");
+    const skiff_romm_rom_summary games[] = {
+        listed_game(1, "Game 1.iso", BODY_BYTES), listed_game(2, "Game 2.iso", BODY_BYTES),
+        listed_game(3, "Game 3.iso", BODY_BYTES), listed_game(4, "Game 4.iso", 0),
+        listed_game(5, "Game 5.iso", BODY_BYTES), listed_game(5, "Game 5.iso", BODY_BYTES),
+        listed_game(6, "Game 5.iso", BODY_BYTES), listed_game(7, "Game 1.iso", BODY_BYTES),
+        listed_game(8, "Game 8.iso", BODY_BYTES),
+    };
+    const app_batch_outcome expected[] = {
+        OUTCOME_QUEUED,   OUTCOME_INSTALLED, OUTCOME_CHANGED, OUTCOME_REFUSED, OUTCOME_TAKEN,
+        OUTCOME_REPEATED, OUTCOME_TAKEN,     OUTCOME_TAKEN,   OUTCOME_TAKEN,
+    };
+    TEST_ASSERT_EQUAL_size_t(sizeof games / sizeof games[0], sizeof expected / sizeof expected[0]);
+    for (size_t i = 0; i < sizeof games / sizeof games[0]; i++) {
+        const app_batch_outcome outcome = app_batch_take(app, own, &games[i]);
+        TEST_PRINTF("game %llu (%s): outcome %d", (unsigned long long)games[i].id,
+                    games[i].file.file_name, (int)outcome);
+        TEST_ASSERT_EQUAL_INT(expected[i], outcome);
+    }
+    TEST_PRINTF("no room left in the queue, then in installed.json");
+    const skiff_romm_rom_summary late = listed_game(9, "Game 9.iso", BODY_BYTES);
+    own->queue_room = own->count;
+    TEST_ASSERT_EQUAL_INT(OUTCOME_OVER_QUEUE, app_batch_take(app, own, &late));
+    own->queue_room = SKIFF_JOBS_MAX;
+    own->record_room = own->count;
+    TEST_ASSERT_EQUAL_INT(OUTCOME_OVER_RECORDS, app_batch_take(app, own, &late));
+    TEST_ASSERT_EQUAL_size_t(4, own->count);
+    TEST_ASSERT_EQUAL_size_t(1, own->queued);
+    TEST_ASSERT_EQUAL_size_t(1, own->installed);
+    TEST_ASSERT_EQUAL_size_t(1, own->changed);
+    TEST_ASSERT_EQUAL_size_t(1, own->refused);
+    TEST_ASSERT_EQUAL_size_t(1, own->over_queue);
+    TEST_ASSERT_EQUAL_size_t(1, own->over_records);
+
+    TEST_PRINTF("room for three past the margin and Game 1's download still to come");
+    app_batch_fit(app, own, SKIFF_OK,
+                  SKIFF_STORAGE_FREE_MARGIN_BYTES + (uint64_t)4 * BODY_BYTES + BODY_BYTES / 2);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, own->pending_bytes);
+    TEST_ASSERT_EQUAL_size_t(3, own->count);
+    TEST_ASSERT_EQUAL_size_t(1, own->over_space);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)3 * BODY_BYTES, own->bytes);
+
+    TEST_PRINTF("queued with targets kept apart from Game 1's and from each other");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_batch_queue_run(app, own));
+    TEST_ASSERT_EQUAL_size_t(3, own->request_count);
+    TEST_ASSERT_EQUAL_size_t(3, own->added);
+    TEST_ASSERT_EQUAL_size_t(0, own->plan_failures);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(4, list_jobs(jobs));
+    assert_job_target(&jobs[0], 1, "ISO/Game 1.iso");
+    assert_job_target(&jobs[1], 5, "ISO/Game 5.iso");
+    assert_job_target(&jobs[2], 6, "ISO/Game 5 [6].iso");
+    assert_job_target(&jobs[3], 7, "ISO/Game 1 [7].iso");
+    free(own);
+
+    TEST_PRINTF("Download all's own batch was never touched");
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+    TEST_ASSERT_EQUAL_size_t(0, app->batch.count);
+    TEST_ASSERT_EQUAL_size_t(0, app->batch.request_count);
+}
+
 /* ---- Downloading ---- */
 
 static void test_a_download_is_queued_into_the_iso_folder(void) {
@@ -5770,6 +5892,7 @@ int main(void) {
     RUN_TEST(test_back_while_favourites_are_checked_stops_download_all);
     RUN_TEST(test_download_all_is_offered_only_on_favourites_with_games);
     RUN_TEST(test_a_failed_favourites_page_ends_download_all_with_its_error);
+    RUN_TEST(test_a_batch_of_its_own_sorts_and_queues_apart_from_download_all);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);
     RUN_TEST(test_a_finished_download_shows_as_installed);
     RUN_TEST(test_a_changed_game_and_a_hand_copy);

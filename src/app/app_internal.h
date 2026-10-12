@@ -153,9 +153,27 @@ typedef enum app_batch_step {
     BATCH_QUEUEING,
 } app_batch_step;
 
-/* "Download all" on the favourites or an open collection: what the list holds, and the games
- * chosen to queue, in name order. While it queues (BATCH_QUEUEING), the browsing thread reads it
- * and fills plans, requests and ids; the screen's thread leaves it alone until the call is done. */
+/* What app_batch_take() made of a game: chosen, or left out and why. */
+typedef enum app_batch_outcome {
+    OUTCOME_TAKEN,
+    /* Already chosen in this batch. */
+    OUTCOME_REPEATED,
+    /* Skiff cannot install it (no single usable file, empty, too large, not a supported kind). */
+    OUTCOME_REFUSED,
+    /* A job for it is in the queue (queued, active or failed). */
+    OUTCOME_QUEUED,
+    OUTCOME_INSTALLED,
+    /* Installed, but changed in RomM since. */
+    OUTCOME_CHANGED,
+    /* No room left in the queue, or in installed.json. */
+    OUTCOME_OVER_QUEUE,
+    OUTCOME_OVER_RECORDS,
+} app_batch_outcome;
+
+/* Games chosen to queue, and why the others were left out: "Download all" on the favourites or an
+ * open collection uses app->batch, in name order; another list may own one of its own. While it
+ * queues (app_batch_queue_run()), the browsing thread reads it and fills plans, requests and ids;
+ * the screen's thread leaves it alone until the call is done. */
 typedef struct app_batch {
     /* The list it reads, and the collection's name for the question (empty for the favourites). */
     skiff_romm_list_filter filter;
@@ -568,8 +586,17 @@ void app_batch_cancel(skiff_app *app);
 void app_batch_confirmed(skiff_app *app);
 /* The confirmation's lines (CONFIRM_DOWNLOAD_ALL), for the view. */
 size_t app_batch_lines(const skiff_app *app, char lines[][SKIFF_TEXT_MAX], size_t capacity);
-/* On the browsing thread: plans and queues app->batch's games (CALL_BATCH_QUEUE). */
-skiff_err app_batch_queue_run(app_call *call);
+/* Any batch's steps, its owner's own or app->batch: emptied with the room the queue and
+ * installed.json have now; a game sorted (counted as left out, or chosen while there is room); the
+ * chosen games cut down to the longest run that fits the free space (free_err not SKIFF_OK:
+ * unknown, not held against them). */
+void app_batch_reset(skiff_app *app, app_batch *batch);
+app_batch_outcome app_batch_take(skiff_app *app, app_batch *batch,
+                                 const skiff_romm_rom_summary *rom);
+void app_batch_fit(skiff_app *app, app_batch *batch, skiff_err free_err, uint64_t free_bytes);
+/* On the browsing thread: plans and queues batch's chosen games with one save of the queue
+ * (CALL_BATCH_QUEUE: app->batch). */
+skiff_err app_batch_queue_run(skiff_app *app, app_batch *batch);
 void app_batch_page_done(skiff_app *app);
 void app_batch_space_done(skiff_app *app);
 /* Starts the first free-space count off the screen (CALL_FREE_SPACE), and takes its result. */

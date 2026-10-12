@@ -41,16 +41,12 @@ void app_batch_start(skiff_app *app) {
         app->failed_request = REQUEST_NONE;
     }
     app_batch *batch = &app->batch;
-    memset(batch, 0, offsetof(app_batch, games));
+    app_batch_reset(app, batch);
     app_current_list(app, &batch->filter, &batch->collection_id);
     if (app->source == SOURCE_COLLECTIONS) {
         app_fit(app, app_collection_name(app, &app->collection), SKIFF_APP_LABEL_WIDTH, batch->name,
                 sizeof batch->name);
     }
-    app_queue_refresh(app);
-    const size_t unfinished = app_queue_unfinished(app);
-    batch->queue_room = unfinished < SKIFF_JOBS_MAX ? SKIFF_JOBS_MAX - unfinished : 0;
-    batch->record_room = app_installed_records_free(app);
     batch->step = BATCH_SCANNING;
     app->dirty = 1;
     char list[APP_LIST_NAME_MAX];
@@ -98,15 +94,21 @@ void app_batch_update(skiff_app *app) {
     app_call_start(app, CALL_BATCH_SPACE);
 }
 
-/* Sorts one game of the list: counted as left out, or chosen while the queue and installed.json
- * have room. */
-static void take(skiff_app *app, const skiff_romm_rom_summary *rom) {
-    app_batch *batch = &app->batch;
+void app_batch_reset(skiff_app *app, app_batch *batch) {
+    memset(batch, 0, offsetof(app_batch, games));
+    app_queue_refresh(app);
+    const size_t unfinished = app_queue_unfinished(app);
+    batch->queue_room = unfinished < SKIFF_JOBS_MAX ? SKIFF_JOBS_MAX - unfinished : 0;
+    batch->record_room = app_installed_records_free(app);
+}
+
+app_batch_outcome app_batch_take(skiff_app *app, app_batch *batch,
+                                 const skiff_romm_rom_summary *rom) {
     /* Offset pages can repeat a game when the list changes while it is read: once is enough, and a
      * second copy must not take room another game could use. */
     for (size_t i = 0; i < batch->count; i++) {
         if (batch->games[i].id == rom->id) {
-            return;
+            return OUTCOME_REPEATED;
         }
     }
     /* An empty file is refused by the queue, and would take the whole batch down with it. */
@@ -115,26 +117,33 @@ static void take(skiff_app *app, const skiff_romm_rom_summary *rom) {
         skiff_install_check(app->installer, rom, &rom->file) == SKIFF_INSTALL_SUPPORTED;
     if (!installable) {
         batch->refused++;
-        return;
+        return OUTCOME_REFUSED;
     }
     if (app_queue_job_for(app, rom->id) != NULL) {
         batch->queued++;
-        return;
+        return OUTCOME_QUEUED;
     }
     app_lock_manifest(app);
     const skiff_install_state state = skiff_install_state_of(app->manifest, rom);
     app_unlock_manifest(app);
     if (state == SKIFF_INSTALL_INSTALLED) {
         batch->installed++;
-    } else if (state == SKIFF_INSTALL_CHANGED) {
-        batch->changed++;
-    } else if (batch->count >= batch->queue_room) {
-        batch->over_queue++;
-    } else if (batch->count >= batch->record_room) {
-        batch->over_records++;
-    } else {
-        batch->games[batch->count++] = *rom;
+        return OUTCOME_INSTALLED;
     }
+    if (state == SKIFF_INSTALL_CHANGED) {
+        batch->changed++;
+        return OUTCOME_CHANGED;
+    }
+    if (batch->count >= batch->queue_room) {
+        batch->over_queue++;
+        return OUTCOME_OVER_QUEUE;
+    }
+    if (batch->count >= batch->record_room) {
+        batch->over_records++;
+        return OUTCOME_OVER_RECORDS;
+    }
+    batch->games[batch->count++] = *rom;
+    return OUTCOME_TAKEN;
 }
 
 void app_batch_page_done(skiff_app *app) {
@@ -157,7 +166,7 @@ void app_batch_page_done(skiff_app *app) {
         return;
     }
     for (size_t i = 0; i < call->page.count; i++) {
-        take(app, &call->page.items[i]);
+        (void)app_batch_take(app, batch, &call->page.items[i]);
     }
     batch->total = call->page.total;
     batch->seen += call->page.count;
@@ -238,20 +247,24 @@ size_t app_batch_lines(const skiff_app *app, char lines[][SKIFF_TEXT_MAX], size_
     return used;
 }
 
+void app_batch_fit(skiff_app *app, app_batch *batch, skiff_err free_err, uint64_t free_bytes) {
+    /* What unfinished downloads still need, as the queue stands now: one that finished while the
+     * list was read is already in the free space. */
+    app_queue_refresh(app);
+    batch->pending_bytes = app_queue_unfinished_bytes(app);
+    /* A Memory Stick that cannot say is not held against the batch: each download checks room. */
+    batch->free_known = free_err == SKIFF_OK;
+    batch->free_bytes = batch->free_known ? free_bytes : 0;
+    fit_space(batch);
+}
+
 void app_batch_space_done(skiff_app *app) {
     app_batch *batch = &app->batch;
     const app_call *call = &app->call;
     if (batch->step != BATCH_SPACE) {
         return;
     }
-    /* What unfinished downloads still need, as the queue stands now: one that finished while the
-     * list was read is already in the free space. */
-    app_queue_refresh(app);
-    batch->pending_bytes = app_queue_unfinished_bytes(app);
-    /* A Memory Stick that cannot say is not held against the batch: each download checks room. */
-    batch->free_known = call->err == SKIFF_OK;
-    batch->free_bytes = batch->free_known ? call->free_bytes : 0;
-    fit_space(batch);
+    app_batch_fit(app, batch, call->err, call->free_bytes);
     skiff_log_write(app->log, SKIFF_LOG_INFO, SKIFF_APP_LOG_TAG,
                     "download all: %llu checked, %zu to download (%llu bytes); "
                     "installed %zu, queued %zu, changed %zu, refused %zu, over queue %zu, over "
@@ -295,12 +308,18 @@ void app_batch_confirmed(skiff_app *app) {
 
 /* ---- On the browsing thread ---- */
 
+/* What planning's taken hook reads. */
+typedef struct promise_ctx {
+    const skiff_app *app;
+    const app_batch *batch;
+} promise_ctx;
+
 /* skiff_install_plan_download()'s taken hook: a target an unfinished job uses, or one planned for
  * an earlier game of this batch (two games whose safe names are the same). */
 static int promised(void *ctx, const char *logical_path) {
-    const app_call *call = ctx;
-    const skiff_app *app = call->app;
-    const app_batch *batch = &app->batch;
+    const promise_ctx *promise = ctx;
+    const skiff_app *app = promise->app;
+    const app_batch *batch = promise->batch;
     char path[SKIFF_STORAGE_PATH_MAX];
     if (skiff_storage_resolve(&app->config.roots, logical_path, path, sizeof path) != SKIFF_OK) {
         return 1;
@@ -318,9 +337,7 @@ static int promised(void *ctx, const char *logical_path) {
     return 0;
 }
 
-skiff_err app_batch_queue_run(app_call *call) {
-    skiff_app *app = call->app;
-    app_batch *batch = &app->batch;
+skiff_err app_batch_queue_run(skiff_app *app, app_batch *batch) {
     /* The queue first: a job that finishes after this is listed as unfinished (its target stays
      * promised), and its record is in the snapshot below. */
     batch->listed_count = skiff_jobs_list(app->jobs, batch->listed, SKIFF_JOBS_MAX);
@@ -346,13 +363,14 @@ skiff_err app_batch_queue_run(app_call *call) {
     app_lock_manifest(app);
     *snapshot = *app->manifest;
     app_unlock_manifest(app);
+    promise_ctx promise = {.app = app, .batch = batch};
     /* The requests point into games[] and plans[]. */
     for (size_t i = 0; i < batch->count; i++) {
         const skiff_romm_rom_summary *rom = &batch->games[i];
         skiff_install_plan *plan = &batch->plans[i];
         const skiff_err planned =
             skiff_install_plan_download(app->installer, rom, &rom->file, &app->config.roots,
-                                        snapshot, app->config.storage, promised, call, plan);
+                                        snapshot, app->config.storage, promised, &promise, plan);
         batch->planned[i] = planned == SKIFF_OK;
         if (!batch->planned[i]) {
             if (batch->plan_failures++ == 0) {

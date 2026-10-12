@@ -4525,6 +4525,31 @@ static void test_installed_games_past_the_lookup_budget_are_reached_next_time(vo
     TEST_ASSERT_EQUAL_size_t(APP_SAVES_LOOKUPS_MAX - 1, app->saves->lookup_cursor);
 }
 
+static void test_another_rom_with_the_same_save_id_starts_as_a_first_sync(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    TEST_PRINTF("this PSP's save last synced with the other copy of the game (ROM 102)");
+    record_saves_baseline(GAME_UP, ROM_DOWN, SAVE_DOWN, hash, hash);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "no_op", ROM_DOWN, SAVE_DOWN, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops)->max_uses = 1;
+    sync_op(ops, sizeof ops, "conflict", ROM_UP, SAVE_UP, OTHER_HASH, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_device_of(SAVE_UP, ROM_UP, OTHER_HASH);
+    serve_complete();
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("synced from ROM 101, whose RomM save differs: asked, never downloaded");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVE_CHOICE, view()->screen);
+    TEST_ASSERT_TRUE(shows("has different saves on this PSP and in RomM."));
+    TEST_ASSERT_FALSE(requested_prefix("/api/saves/201/content"));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4651,5 +4676,6 @@ int main(void) {
     RUN_TEST(test_many_games_are_negotiated_in_rounds);
     RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
     RUN_TEST(test_installed_games_past_the_lookup_budget_are_reached_next_time);
+    RUN_TEST(test_another_rom_with_the_same_save_id_starts_as_a_first_sync);
     return UNITY_END();
 }

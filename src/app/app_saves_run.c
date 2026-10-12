@@ -224,6 +224,11 @@ static skiff_err negotiate(app_call *call, check_scratch *s) {
 static void decide(app_call *call, check_scratch *s, app_save_game *game) {
     const skiff_saves_baseline_entry *entry =
         skiff_saves_baseline_find(call->saves.baseline, game->save_target);
+    /* The baseline of another ROM with this save ID (the ISO's, for the CSO) says nothing about
+     * this one's saves in RomM: a first sync with it. */
+    if (entry != NULL && entry->rom_id != game->rom_id) {
+        entry = NULL;
+    }
     game->synced_ms = entry != NULL ? entry->synced_ms : 0;
     const skiff_saves_sync_input in = {game->has_local ? game->local_hash : NULL,
                                        game->has_server ? game->server_hash : NULL,
@@ -593,7 +598,7 @@ static void add_unclaimed(app_call *call, const check_scratch *s) {
 
 /* Every distinct save ID worth a row: the baseline's, the ROMs' with saves, the installed
  * games'; then ROMs with saves but no save ID; then folders nobody claims. */
-static void list_games(app_call *call, check_scratch *s) {
+static void list_games(app_call *call, const check_scratch *s) {
     const skiff_saves_baseline *baseline = call->saves.baseline;
     for (size_t i = 0; i < baseline->count; i++) {
         add_target(call, s, baseline->entries[i].save_target);

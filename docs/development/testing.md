@@ -670,8 +670,8 @@ is requested. Read back: the `collections:` lines (count, or the error) and the 
 no `slow frame:` line while the list loads, and `stats:` as in A3.
 
 **Save sync (S1).** Real saves are at stake, so **first back up the whole `PSP/SAVEDATA/` and
-Skiff's folder** (`PSP/GAME/Skiff/`) to `local/memstick-backup-<date>-s1/` (`cp -RX` on macOS),
-and say so before going on. Prepare as above with `SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp
+Skiff's folder** (`PSP/GAME/Skiff/`) to a dated folder on your computer, outside the repository
+(`cp -RX` on macOS), and say so before going on. Prepare as above with `SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp
 launch-disc romm-lan` (the seed adds the synthetic save disc, save ID `SKIF00002`), then copy your
 own game's ISO into the test RomM's library for the session only (`docker compose cp` into
 `romm:/romm/library/roms/psp/`, never committed) and rescan the platform in RomM's web UI; its
@@ -682,6 +682,23 @@ a folder `PSP/SAVEDATA/SKIF00002DATA00/` holding an 8 MB file of random bytes (n
 XMB shows it as Corrupted Data, which is expected). `scripts/memstick.sh install` writes
 `[log] level = debug`.
 
+S1.4 and S1.5 upload a save from PPSSPP's side as Argosy does (emulator `ppsspp`, slot `autosave`):
+through Argosy itself, or from the computer with the test server's token, which has the save
+scopes. Zip the game's folders from PPSSPP's `memstick/PSP/SAVEDATA/` (folder entries and
+compression are fine: Skiff reads Argosy's deflated units) and post it as RomM's `saveFile` part;
+`<ROM id>` is the number in the game's address in RomM's web UI, `<LAN IP>` the address the PSP
+uses:
+
+```bash
+export SKIFF_TOKEN="$(jq -r .token build/integration/romm.json)"
+(cd <ppsspp>/memstick/PSP/SAVEDATA && zip -r /tmp/ppsspp-save.zip <game ID>* -x '*.DS_Store')
+curl -sS --cacert build/integration/certs/ca.crt -H "Authorization: Bearer $SKIFF_TOKEN" \
+  -F "saveFile=@/tmp/ppsspp-save.zip;filename=<game ID>.zip;type=application/zip" \
+  "https://<LAN IP>:8443/api/saves?rom_id=<ROM id>&emulator=ppsspp&slot=autosave"
+```
+
+Without a `device_id` RomM applies no upload guard, as for a client that does not register itself.
+
 1. S1.1: Settings → Pair again, approve with every permission ticked. Pass: `config.ini`'s
    `[auth] scopes` lists `assets.read`, `assets.write`, `devices.read` and `devices.write`; the
    queue and the installed games are still there; Settings → Saves shows a list, not "Pair again".
@@ -690,10 +707,10 @@ XMB shows it as Corrupted Data, which is expected). `scripts/memstick.sh install
    `<ID> [date].zip` in slot `autosave` with emulator `psp_console`.
 3. S1.3: in your own PPSSPP (phone or PC), load that save (through Argosy, or by unzipping the unit
    into its `memstick/PSP/SAVEDATA/`). Pass: the game loads it (PSP → PPSSPP).
-4. S1.4: save in PPSSPP, upload it to the same ROM as `ppsspp` in slot `autosave`
-   (`local/saves-evidence/probe.py`, or Argosy), launch Skiff. Pass: the launch check downloads it
-   ("Saves: 1 synced"), Settings → Saves → the game → △ Backups lists Backup 1, and the game on the
-   PSP loads the save (PPSSPP → PSP, PPSSPP's `EncryptSave` at its default).
+4. S1.4: save in PPSSPP, upload it to the same ROM as `ppsspp` in slot `autosave` (Argosy, or
+   the recipe above), launch Skiff. Pass: the launch check downloads it ("Saves: 1 synced"),
+   Settings → Saves → the game → △ Backups lists Backup 1, and the game on the PSP loads the save
+   (PPSSPP → PSP, PPSSPP's `EncryptSave` at its default).
 5. S1.5: change the save on the PSP, upload another from PPSSPP's side, launch Skiff. Pass: "1 need
    you"; on the Saves screen ✕ Sync opens the choice with both dates and the device RomM's save
    came from; □ Use RomM's restores it and the backup is listed. Repeat and choose ✕ Keep this

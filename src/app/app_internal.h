@@ -94,6 +94,8 @@ typedef enum app_request {
     REQUEST_COVER,
     /* The collections list. */
     REQUEST_COLLECTIONS,
+    /* A save sync the player asked for, which found the Wi-Fi gone: it goes on once joined. */
+    REQUEST_SAVES,
 } app_request;
 
 /* A request to RomM, which runs off the screen's thread (env.call_start), one at a time. Its inputs
@@ -579,6 +581,8 @@ int app_saves_busy(const skiff_app *app);
  * restart can never pair the old baselines with the new identity. Backups and the saves themselves
  * stay. On an error nothing in memory changes and the caller keeps the old identity. */
 skiff_err app_saves_forget(skiff_app *app, int server_changed);
+/* Connected again for a save sync the player asked for: back to where they asked. */
+void app_saves_resume(skiff_app *app);
 /* Once a frame, after app_call_update(): starts the next save call when nothing else waits. */
 void app_saves_update(skiff_app *app);
 /* What a finished save call returned, applied on the screen's thread. */

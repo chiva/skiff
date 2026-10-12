@@ -3794,9 +3794,12 @@ static void test_a_check_that_times_out_says_so_and_retries(void) {
     open_saves_screen();
     TEST_ASSERT_TRUE(shows("[103]"));
     TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_RETRY)));
-    TEST_PRINTF("Retry: the check again, and with nothing anywhere an empty list");
+    TEST_PRINTF("Retry: the Wi-Fi is joined again first, then the check, back on the Saves screen");
+    const int joins = env_state.net_starts;
     frame(SKIFF_UI_ACTION_CONFIRM);
     run_saves();
+    TEST_ASSERT_GREATER_THAN_INT(joins, env_state.net_starts);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SAVES, view()->screen);
     TEST_ASSERT_TRUE(shows("No saves on this PSP or in RomM yet."));
     TEST_ASSERT_TRUE(view()->has_list);
     TEST_ASSERT_EQUAL_size_t(0, view()->row_count);

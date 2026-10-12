@@ -423,6 +423,46 @@ static void batch_step(skiff_app *app) {
     }
 }
 
+/* The player's syncs waiting to run that need RomM (leaving a save deleted and restoring a backup
+ * only touch the Memory Stick). */
+static int player_needs_network(const app_saves *saves) {
+    const int local_apply =
+        saves->apply_op == SAVES_OP_LEAVE_DELETED || saves->apply_op == SAVES_OP_RESTORE_BACKUP;
+    return saves->want_one || saves->want_check || (saves->want_apply && !local_apply);
+}
+
+/* Where a pending player's sync came from. */
+static app_saves_origin pending_origin(const app_saves *saves) {
+    return saves->want_apply ? saves->apply_origin
+           : saves->want_one ? saves->one_origin
+                             : SAVES_FROM_LIST;
+}
+
+void app_saves_resume(skiff_app *app) {
+    const int details = pending_origin(app->saves) == SAVES_FROM_DETAILS && app->has_rom;
+    app_set_screen(app, details ? SKIFF_APP_SCREEN_DETAILS : SKIFF_APP_SCREEN_SAVES);
+}
+
+/* The Wi-Fi went with a lost request: what the player asked for joins it again first (and goes on
+ * after), what runs on its own waits for the next check. */
+static int wait_for_network(skiff_app *app) {
+    app_saves *saves = app->saves;
+    if (app->net_joined) {
+        return 0;
+    }
+    saves->batch_next = saves->shown->count;
+    saves->batch_session = 0;
+    for (size_t i = 0; i < saves->shown->count; i++) {
+        saves->shown->games[i].recheck = 0;
+    }
+    if (!player_needs_network(saves)) {
+        return 0;
+    }
+    app->failed_request = REQUEST_SAVES;
+    app_connect_begin(app, CONNECT_NETWORK);
+    return 1;
+}
+
 void app_saves_update(skiff_app *app) {
     app_saves *saves = app->saves;
     if (!saves->launch_done && app->connect == CONNECT_DONE && app->has_server) {
@@ -449,6 +489,9 @@ void app_saves_update(skiff_app *app) {
             saves->shown->games[i].recheck = 0;
         }
         saves->activity[0] = '\0';
+        return;
+    }
+    if (wait_for_network(app)) {
         return;
     }
     if (saves->want_apply) {

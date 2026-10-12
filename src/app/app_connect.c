@@ -30,6 +30,11 @@ void app_drop_client(skiff_app *app) {
 }
 
 void app_resume_after_connect(skiff_app *app) {
+    if (app->failed_request == REQUEST_SAVES) {
+        app->failed_request = REQUEST_NONE;
+        app_saves_resume(app);
+        return;
+    }
     if (app->failed_request == REQUEST_ROM) {
         app->failed_request = REQUEST_NONE;
         app_set_screen(app, SKIFF_APP_SCREEN_DETAILS);

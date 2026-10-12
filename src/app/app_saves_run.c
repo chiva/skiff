@@ -855,6 +855,14 @@ static skiff_err download(app_call *call, apply_scratch *a) {
                         game->server_hash);
         err = SKIFF_ERR_ROMM_SAVE_MISMATCH;
     }
+    /* Checked again right before anything is replaced: the download can take a while. */
+    if (err == SKIFF_OK) {
+        err = confirm_local(call, a, game);
+    }
+    if (err == SKIFF_OK && call->saves.stale) {
+        (void)skiff_storage_remove(call->storage, a->real_path);
+        return SKIFF_OK;
+    }
     if (err == SKIFF_OK) {
         err = skiff_saves_restore(call->storage, &call->roots, a->unit_path, game->save_target,
                                   &a->report);

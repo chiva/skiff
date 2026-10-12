@@ -4706,12 +4706,135 @@ static void test_a_pairing_approved_across_a_suspend_still_pairs(void) {
     frame(0);
     TEST_ASSERT_FALSE(app->net_joined);
     TEST_ASSERT_NOT_NULL_MESSAGE(app->transport, "the client stays until the poll is taken");
+    const int joins = env_state.net_starts;
     env_state.hold_calls = 0;
     run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(joins + 1, env_state.net_starts,
+                                  "the Wi-Fi is joined again before the walk's next request");
     char config[TEXT_MAX];
     read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
     TEST_ASSERT_NOT_NULL(strstr(config, "token = " PAIRED_TOKEN));
     TEST_ASSERT_EQUAL_STRING("Bearer " PAIRED_TOKEN, env_state.spec.romm->authorization);
+}
+
+static void test_a_suspend_mid_connect_joins_again_before_the_next_step(void) {
+    write_config("[server]\nurl = " SERVER "\n[auth]\ntoken = " TOKEN "\n[network]\nprofile = 1\n");
+    serve_library(1);
+    env_state.hold_calls = 1;
+    create_app();
+    for (int i = 0; i < FRAMES_MAX && !(env_state.call_pending && app->call.kind == CALL_HEARTBEAT);
+         i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_HEARTBEAT, app->call.kind);
+    TEST_ASSERT_EQUAL_INT(1, env_state.net_starts);
+    TEST_PRINTF("the PSP sleeps while the heartbeat is out; RomM's answer is taken after waking");
+    env_state.suspends++;
+    frame(0);
+    env_state.hold_calls = 0;
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, env_state.net_starts,
+                                  "joined again before the platform request");
+    const size_t platforms = first_request_from(0, "/api/platforms");
+    const size_t second_heartbeat =
+        first_request_from(first_request_from(0, "/api/heartbeat") + 1, "/api/heartbeat");
+    TEST_PRINTF("requests: platforms at %zu, the second heartbeat at %zu of %zu", platforms,
+                second_heartbeat, transport.log_count);
+    TEST_ASSERT_TRUE_MESSAGE(second_heartbeat < platforms,
+                             "the walk starts again from the join, then goes on");
+}
+
+static void test_a_retry_dropped_by_a_blocked_sync_leaves_the_next_transfer_its_own(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    unsigned char unit[UNIT_BYTES_MAX];
+    char server_hash[HASH_TEXT_MAX];
+    const size_t unit_size = server_unit(GAME_UP, UP_LOCAL, unit, sizeof unit, server_hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    serve_content_of(SAVE_UP, unit, unit_size);
+    serve_downloaded(SAVE_UP, ROM_UP, hash);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    TEST_PRINTF("a retry waits, then save sync is blocked (RomM refused the token) and drops it");
+    app->saves->apply_retry_pending = 1;
+    app->saves->want_apply = 1;
+    app->saves->forbidden = 1;
+    frame(0);
+    TEST_ASSERT_FALSE(app->saves->want_apply);
+    TEST_ASSERT_FALSE_MESSAGE(app->saves->apply_retry_pending, "dropped with its transfer");
+    app->saves->forbidden = 0;
+    TEST_PRINTF("the player's next transfer is cut by a suspend: it still gets its retry");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+    part_opens = 0;
+    storage.on_call = sleep_at_first_part;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVES);
+    run_saves();
+    storage.on_call = NULL;
+    TEST_ASSERT_EQUAL_INT(2, part_opens);
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(UP_LOCAL, data);
+    TEST_ASSERT_FALSE(shows("[111]"));
+}
+
+/* S1.7 on hardware (2026-10-12): the retry's join was taken as done at once and its request failed
+ * with 102. The retried transfer waits until the join has ended, however long it takes. */
+static void test_a_retried_transfer_waits_until_the_wifi_is_joined(void) {
+    char hash[HASH_TEXT_MAX];
+    delete_synced_save(hash);
+    unsigned char unit[UNIT_BYTES_MAX];
+    char server_hash[HASH_TEXT_MAX];
+    const size_t unit_size = server_unit(GAME_UP, UP_LOCAL, unit, sizeof unit, server_hash);
+    char item[SAVE_JSON_MAX];
+    saves_item(item, sizeof item, ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list(item, 1);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "download", ROM_UP, SAVE_UP, hash, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_complete();
+    serve_content_of(SAVE_UP, unit, unit_size);
+    serve_downloaded(SAVE_UP, ROM_UP, hash);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_SAVE_CHOICE);
+    part_opens = 0;
+    storage.on_call = sleep_at_first_part;
+    enum { JOIN_POLLS = 40 };
+    env_state.join_polls = JOIN_POLLS;
+    const int joins = env_state.net_starts;
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && env_state.net_starts == joins; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(joins + 1, env_state.net_starts);
+    TEST_PRINTF("the join started; the access point answers only after %d polls", JOIN_POLLS);
+    const size_t requests = transport.log_count;
+    for (int i = 0; i < JOIN_POLLS - 1; i++) {
+        frame(0);
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(requests, transport.log_count,
+                                         "no request while the Wi-Fi is still joining");
+        TEST_ASSERT_FALSE(app->net_joined);
+    }
+    run_until(SKIFF_APP_SCREEN_SAVES);
+    run_saves();
+    storage.on_call = NULL;
+    TEST_ASSERT_TRUE(app->net_joined);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, part_opens, "the transfer ran again once joined");
+    TEST_ASSERT_FALSE(shows("[102]"));
+    char data[64];
+    read_save(GAME_UP, data, sizeof data);
+    TEST_ASSERT_EQUAL_STRING(UP_LOCAL, data);
 }
 
 static void test_a_restore_cut_mid_way_is_settled_and_stops_save_sync(void) {
@@ -5440,6 +5563,9 @@ int main(void) {
     RUN_TEST(test_a_table_added_to_the_view_starts_empty);
     RUN_TEST(test_a_transfer_cut_by_a_suspend_after_leaving_keeps_the_players_screen);
     RUN_TEST(test_a_pairing_approved_across_a_suspend_still_pairs);
+    RUN_TEST(test_a_suspend_mid_connect_joins_again_before_the_next_step);
+    RUN_TEST(test_a_retry_dropped_by_a_blocked_sync_leaves_the_next_transfer_its_own);
+    RUN_TEST(test_a_retried_transfer_waits_until_the_wifi_is_joined);
     RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
     RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);

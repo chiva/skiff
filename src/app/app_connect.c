@@ -303,6 +303,13 @@ void app_connect_update(skiff_app *app, unsigned actions) {
         return;
     case CONNECT_HEARTBEAT:
     case CONNECT_PLATFORM:
+        /* A suspend mid-walk took the Wi-Fi (app_notice_suspend()): join it again first, rather
+         * than send the step's request over a connection that is gone. */
+        if (!app->net_joined) {
+            app->connect = CONNECT_NETWORK;
+            app->dirty = 1;
+            return;
+        }
         /* The step's request runs off this thread; its result moves the walk on. */
         if (!app_call_busy(app)) {
             app_call_start(app, app->connect == CONNECT_HEARTBEAT ? CALL_HEARTBEAT : CALL_PLATFORM);

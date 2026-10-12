@@ -102,6 +102,9 @@ static skiff_err rejoin(void *ctx) {
     if (err == SKIFF_OK) {
         err = skiff_psp_net_connect(net, worker->config.profile, SKIFF_PSP_WORKER_JOIN_TIMEOUT_US);
     }
+    if (err == SKIFF_OK) {
+        net->joined_suspends = skiff_psp_power_events_now().suspends;
+    }
     unlock_network(worker);
     skiff_log_write(worker->config.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, LOG_TAG,
                     "rejoin profile %d: %s (%d), %s 0x%08X", worker->config.profile,
@@ -127,6 +130,9 @@ static skiff_err reload(void *ctx) {
     }
     if (err == SKIFF_OK) {
         err = skiff_psp_net_connect(net, worker->config.profile, SKIFF_PSP_WORKER_JOIN_TIMEOUT_US);
+    }
+    if (err == SKIFF_OK) {
+        net->joined_suspends = skiff_psp_power_events_now().suspends;
     }
     unlock_network(worker);
     skiff_log_write(worker->config.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, LOG_TAG,

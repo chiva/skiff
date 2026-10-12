@@ -152,6 +152,7 @@ static void reset(skiff_app *app) {
     saves->want_check = 0;
     saves->want_one = 0;
     saves->want_apply = 0;
+    saves->apply_retry_pending = 0;
     saves->batch = 0;
     saves->batch_session = 0;
     saves->activity.text[0] = '\0';
@@ -505,7 +506,9 @@ void app_saves_update(skiff_app *app) {
     if (app_saves_blocked(app) != SAVES_OK) {
         saves->want_check = 0;
         saves->want_one = 0;
+        /* A retry dropped with its transfer: the next one the player starts gets its own. */
         saves->want_apply = 0;
+        saves->apply_retry_pending = 0;
         saves->batch = 0;
         saves->batch_session = 0;
         for (size_t i = 0; i < saves->shown->count; i++) {

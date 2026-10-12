@@ -7,13 +7,14 @@
  * claim that fails on the network never joins the Wi-Fi again: claims wait for whatever joins it
  * next.
  *
- * A round is two calls on the browsing thread, with the sorting between them on the screen's:
+ * A round is three calls on the browsing thread, with the sorting on the screen's:
  *   1. CALL_SENDS_CLAIM: remote_install sent once per connection, the claim, each claimed game's
  *      details (one request each) and the Memory Stick's free space;
  *   2. each send sorted: a PSP game, one file, then Download all's rules (app_batch_take()) on a
  *      batch of the round's own, cut to what fits the free space;
- *   3. CALL_SENDS_QUEUE: the chosen games queued with one save (app_batch_queue_run()), then every
- *      send reported, only after that save.
+ *   3. CALL_SENDS_QUEUE: the chosen games queued with one save (app_batch_queue_run());
+ *   4. CALL_SENDS_REPORT: every send reported, only after that save. The queue is free again
+ *      meanwhile: a slow RomM holds no download, cancel or retry of the player's.
  *
  * Skiff keeps no record of sends: one claimed and not reported (Skiff quit, the Wi-Fi went, the
  * report failed) comes back on the next claim and finds its game in Downloads (done) or installed
@@ -97,7 +98,7 @@ static const char *const FATE_NAMES[] = {
 /* ---- The round ---- */
 
 static int is_sends_call(app_call_kind kind) {
-    return kind == CALL_SENDS_CLAIM || kind == CALL_SENDS_QUEUE;
+    return kind == CALL_SENDS_CLAIM || kind == CALL_SENDS_QUEUE || kind == CALL_SENDS_REPORT;
 }
 
 static void end_round(skiff_app *app) {
@@ -167,10 +168,9 @@ static int wanted(const skiff_app *app) {
         sends->round != NULL) {
         return 0;
     }
-    if (!app->settings.from_romm) {
-        return sends->unregister_pending;
-    }
-    return app_now(app) >= sends->next_claim_ms;
+    /* One that failed waits for the interval, as a claim does. */
+    const int due = app_now(app) >= sends->next_claim_ms;
+    return app->settings.from_romm ? due : sends->unregister_pending && due;
 }
 
 /* Sends wait for any other call and the library's requests, "Download all", and never run while
@@ -190,6 +190,10 @@ static int may_run(const skiff_app *app) {
 int app_sends_busy(const skiff_app *app) { return app->sends.round != NULL || wanted(app); }
 
 int app_sends_queueing(const skiff_app *app) { return app->call.kind == CALL_SENDS_QUEUE; }
+
+int app_sends_taking_room(const skiff_app *app) {
+    return app->sends.round != NULL && app->call.kind != CALL_SENDS_REPORT;
+}
 
 /* A claim that did not happen: tried again after the interval, unless RomM refused the token or no
  * longer knows the device, or the connection went (claims then wait for the next join). Logged
@@ -444,7 +448,7 @@ static void sort_sends(skiff_app *app, app_sends_round *round) {
     }
 }
 
-/* ---- On the browsing thread: queueing and reports ---- */
+/* ---- On the browsing thread: queueing, then reports ---- */
 
 /* The queued sends' fates: added, left out by a full queue, or failed with their game's plan or
  * the queue's save. */
@@ -517,10 +521,10 @@ skiff_err app_sends_queue_run(app_call *call) {
         round->queue_err = app_batch_queue_run(app, batch);
     }
     settle_queued(app, round);
-    /* After a connection lost while the details were read, every send waits for the next claim,
-     * which finds the queued ones in Downloads. */
-    return round->lost != SKIFF_OK ? round->lost : report_all(call, round);
+    return SKIFF_OK;
 }
+
+skiff_err app_sends_report_run(app_call *call) { return report_all(call, call->app->sends.round); }
 
 /* ---- Back on the screen's thread ---- */
 
@@ -640,6 +644,21 @@ void app_sends_claimed(skiff_app *app) {
 }
 
 void app_sends_queued(skiff_app *app) {
+    const app_sends_round *round = app->sends.round;
+    if (round == NULL) {
+        return;
+    }
+    /* The queue call could not start, or the connection went while the details were read: every
+     * send waits for the next claim, which finds the queued ones in Downloads. */
+    if (app->call.err != SKIFF_OK || round->lost != SKIFF_OK) {
+        finish(app, app->call.err != SKIFF_OK ? app->call.err : round->lost);
+        return;
+    }
+    app->call.app = app;
+    app_call_start(app, CALL_SENDS_REPORT);
+}
+
+void app_sends_reported(skiff_app *app) {
     if (app->sends.round != NULL) {
         finish(app, app->call.err);
     }

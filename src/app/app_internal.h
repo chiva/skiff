@@ -136,10 +136,11 @@ typedef enum app_call_kind {
     CALL_SAVES_COMPLETE,
     CALL_SAVES_BACKUPS,
     /* Games sent from RomM (app_sends.c): remote_install registered when needed, the claim, each
-     * claimed game's details and the free space; then the chosen games queued with one save, and
-     * every send reported after it. */
+     * claimed game's details and the free space; then the chosen games queued with one save (only
+     * the Memory Stick); then every send reported, after that save. */
     CALL_SENDS_CLAIM,
     CALL_SENDS_QUEUE,
+    CALL_SENDS_REPORT,
     /* The Memory Stick's free space at startup: its first count reads the whole FAT (3 s on a
      * PSP-1000, S1), so it runs off the screen while the Wi-Fi joins. */
     CALL_FREE_SPACE,
@@ -691,6 +692,9 @@ int app_sends_busy(const skiff_app *app);
 /* The queue call runs: a single download, "Download all", a cancel, a server change and a new
  * pairing wait for it. */
 int app_sends_queueing(const skiff_app *app);
+/* A round is under way and has not queued its games yet (or queues them): the room in the queue
+ * and installed.json counted now may still be theirs. */
+int app_sends_taking_room(const skiff_app *app);
 app_sends_block app_sends_blocked(const skiff_app *app);
 /* Settings' row: its label (SKIFF_APP_LABEL_MAX), whether it is dimmed, and its button. */
 void app_sends_row(const skiff_app *app, char *label, size_t size, int *dim);
@@ -698,9 +702,11 @@ void app_sends_choose(skiff_app *app);
 /* On the browsing thread (call->app's round). */
 skiff_err app_sends_claim_run(app_call *call);
 skiff_err app_sends_queue_run(app_call *call);
+skiff_err app_sends_report_run(app_call *call);
 /* Back on the screen's thread. */
 void app_sends_claimed(skiff_app *app);
 void app_sends_queued(skiff_app *app);
+void app_sends_reported(skiff_app *app);
 
 /* ---- app_saves.c ---- */
 

@@ -6614,6 +6614,65 @@ static void test_switching_games_from_romm_off_tells_romm_and_stops_claims(void)
     TEST_ASSERT_NOT_NULL(strstr(config, "from_romm = on\n"));
 }
 
+static void test_a_failed_switch_off_is_tried_again_after_the_interval(void) {
+    serve_register(1)->max_uses = 1;
+    serve_raw(DEVICE_PATH,
+              "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n"
+              "\r\n{}")
+        ->max_uses = 1;
+    serve_register(0);
+    serve_empty_claim();
+    open_sends_library();
+    open_sends_row();
+    TEST_PRINTF("off: RomM fails the first time");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(0);
+    run_sends();
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+    TEST_PRINTF("not again before the interval, then once");
+    wait_ms(CLAIM_INTERVAL - 200);
+    TEST_ASSERT_EQUAL_size_t(2, requests_to(DEVICE_PATH));
+    wait_ms(400);
+    run_sends();
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_STRING("{\"capabilities\":{\"remote_install\":false}}",
+                             last_request_to(DEVICE_PATH)->body);
+    TEST_PRINTF("told: nothing more");
+    wait_ms(2 * CLAIM_INTERVAL);
+    TEST_ASSERT_EQUAL_size_t(3, requests_to(DEVICE_PATH));
+    TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
+}
+
+static void test_download_all_waits_for_a_round_that_may_take_its_room(void) {
+    serve_register(1);
+    serve_empty_claim()->max_uses = 1;
+    const unsigned roms[] = {2};
+    serve_claim(roms, NULL, 1)->max_uses = 1;
+    serve_empty_claim();
+    serve_rom(2);
+    open_sends_library();
+    serve_favourites(2);
+    frame(SKIFF_UI_ACTION_SELECT);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    serve_batch_favourites(2);
+    TEST_PRINTF("the next claim runs: START does nothing until its games are queued");
+    for (int i = 0; i < 2 * FRAMES_MAX && app->call.kind != CALL_SENDS_CLAIM; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_EQUAL_INT(CALL_SENDS_CLAIM, (int)app->call.kind);
+    env_state.hold_calls = 1;
+    frame(SKIFF_UI_ACTION_START);
+    TEST_ASSERT_EQUAL_INT(BATCH_NONE, (int)app->batch.step);
+    env_state.hold_calls = 0;
+    run_sends();
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_PRINTF("then Download all counts the room as it is");
+    start_download_all(SKIFF_APP_SCREEN_CONFIRM);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_JOBS_MAX - 1, app->batch.queue_room);
+    TEST_ASSERT_TRUE(shows("Download 2 favourites"));
+}
+
 static void test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing(void) {
     serve_register(1);
     serve_empty_claim()->max_uses = 1;
@@ -6636,12 +6695,17 @@ static void test_a_press_that_would_change_the_queue_waits_for_the_sends_queuein
     skiff_job jobs[SKIFF_JOBS_MAX];
     TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
     env_state.hold_calls = 0;
-    run_sends();
+    frame(0);
     TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
-    TEST_PRINTF("then it works");
+    TEST_PRINTF("the reports to RomM hold nothing of the player's, however long they take");
+    TEST_ASSERT_EQUAL_INT(CALL_SENDS_REPORT, (int)app->call.kind);
+    env_state.hold_calls = 1;
     frame(SKIFF_UI_ACTION_CONFIRM);
-    run_until(SKIFF_APP_SCREEN_LIBRARY);
     TEST_ASSERT_EQUAL_size_t(2, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_LIBRARY, view()->screen);
+    env_state.hold_calls = 0;
+    run_sends();
+    assert_reported(1, "done", NULL);
 }
 
 static void test_a_refusal_is_said_in_the_psps_language(void) {
@@ -6835,6 +6899,8 @@ int main(void) {
     RUN_TEST(test_a_send_seen_again_finds_its_game_in_downloads);
     RUN_TEST(test_a_send_whose_game_is_lost_with_the_connection_stays_in_romm);
     RUN_TEST(test_switching_games_from_romm_off_tells_romm_and_stops_claims);
+    RUN_TEST(test_a_failed_switch_off_is_tried_again_after_the_interval);
+    RUN_TEST(test_download_all_waits_for_a_round_that_may_take_its_room);
     RUN_TEST(test_a_press_that_would_change_the_queue_waits_for_the_sends_queueing);
     RUN_TEST(test_a_refusal_is_said_in_the_psps_language);
     return UNITY_END();

@@ -99,6 +99,9 @@ static void run(void *arg) {
     case CALL_SENDS_QUEUE:
         call->err = app_sends_queue_run(call);
         break;
+    case CALL_SENDS_REPORT:
+        call->err = app_sends_report_run(call);
+        break;
     case CALL_NONE:
         call->err = SKIFF_ERR_INVALID_ARG;
         break;
@@ -108,11 +111,13 @@ static void run(void *arg) {
 /* ---- On the screen's thread ---- */
 
 /* Whether the call's work needs the Wi-Fi: leaving a save deleted, restoring a backup, settling a
- * restore a suspend cut, listing backups and queueing "Download all" only touch the Memory Stick.
+ * restore a suspend cut, listing backups and queueing "Download all" or games sent from RomM only
+ * touch the Memory Stick.
  */
 static int uses_network(const app_call *call) {
     if (call->kind == CALL_BATCH_SPACE || call->kind == CALL_BATCH_QUEUE ||
-        call->kind == CALL_SAVES_BACKUPS || call->kind == CALL_FREE_SPACE) {
+        call->kind == CALL_SENDS_QUEUE || call->kind == CALL_SAVES_BACKUPS ||
+        call->kind == CALL_FREE_SPACE) {
         return 0;
     }
     return call->kind != CALL_SAVES_APPLY ||
@@ -232,6 +237,9 @@ static void apply(skiff_app *app, app_call_kind kind) {
     case CALL_SENDS_QUEUE:
         app_sends_queued(app);
         break;
+    case CALL_SENDS_REPORT:
+        app_sends_reported(app);
+        break;
     case CALL_FREE_SPACE:
         app_free_space_done(app);
         break;
@@ -261,7 +269,7 @@ void app_call_update(skiff_app *app) {
                         "call %d: dropped after %s (%d)", (int)kind, skiff_err_name(call->err),
                         (int)call->err);
         app_network_failed(app, call->err);
-        if (kind == CALL_SENDS_CLAIM || kind == CALL_SENDS_QUEUE) {
+        if (kind == CALL_SENDS_CLAIM || kind == CALL_SENDS_QUEUE || kind == CALL_SENDS_REPORT) {
             app_sends_dropped(app);
         }
     } else {

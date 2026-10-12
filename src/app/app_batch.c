@@ -26,9 +26,8 @@ static void end_batch(skiff_app *app) {
 }
 
 void app_batch_start(skiff_app *app) {
-    /* Not while a round of games sent from RomM runs (a moment): the room the batch counts now
-     * would be theirs too. */
-    if (app->batch.step != BATCH_NONE || app->sends.round != NULL) {
+    /* Not while a round of games sent from RomM may still take room the batch would count. */
+    if (app->batch.step != BATCH_NONE || app_sends_taking_room(app)) {
         return;
     }
     /* The batch's calls are the only ones while it runs: a library page still on its way is

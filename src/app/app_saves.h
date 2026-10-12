@@ -38,6 +38,9 @@
 /* Installed games whose save ID one check asks RomM for (a ROM's details, about 0.3 s each on a
  * PSP-1000): the rest wait for the next check, since the answers are remembered. */
 #define APP_SAVES_LOOKUPS_MAX 16
+/* ROMs one negotiate asks about: RomM answers for every slot of each, and Skiff reads at most
+ * SKIFF_ROMM_SYNC_OPERATIONS_MAX operations, so this allows 8 slots a game. */
+#define APP_SAVES_NEGOTIATE_ROMS 32
 /* Conflicts whose RomM side one check asks the device of. */
 #define APP_SAVES_DEVICE_LOOKUPS_MAX 8
 /* Folders of PSP/SAVEDATA one check reads; a Memory Stick holds far fewer. */

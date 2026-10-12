@@ -346,7 +346,10 @@ static skiff_err read_installed(app_call *call, check_scratch *s) {
     size_t asked = 0;
     for (size_t i = 0; i < call->saves.installed_count && asked < APP_SAVES_LOOKUPS_MAX; i++) {
         const uint64_t id = call->saves.installed[i];
-        if (skiff_saves_baseline_rom_target(call->saves.baseline, id) != NULL) {
+        /* A ROM remembered without a save ID is asked again on Sync all: RomM may have rescanned
+         * it since. */
+        const char *known = skiff_saves_baseline_rom_target(call->saves.baseline, id);
+        if (known != NULL && (known[0] != '\0' || !call->saves.force_hash)) {
             continue;
         }
         asked++;
@@ -525,11 +528,6 @@ static void add_target(app_call *call, check_scratch *s, const char *save_target
     }
     if (several) {
         game->problem = SAVE_PROBLEM_SEVERAL_GAMES;
-        for (size_t i = 0; i < s->rom_count; i++) {
-            if (strcmp(s->roms[i].save_target, save_target) == 0) {
-                add_rom_id(s, s->roms[i].id);
-            }
-        }
     }
 }
 
@@ -651,6 +649,76 @@ static void drop_empty(app_save_list *list) {
     list->count = kept;
 }
 
+/* The ROMs a game asks negotiate about: its own, or every candidate of a save ID several share. */
+static size_t game_roms(const check_scratch *s, const app_save_game *game) {
+    if (game->problem == SAVE_PROBLEM_NONE) {
+        return 1;
+    }
+    size_t count = 0;
+    for (size_t i = 0; game->problem == SAVE_PROBLEM_SEVERAL_GAMES && i < s->rom_count; i++) {
+        count += strcmp(s->roms[i].save_target, game->save_target) == 0;
+    }
+    return count;
+}
+
+static void add_game_roms(app_call *call, check_scratch *s, const app_save_game *game) {
+    if (game->problem == SAVE_PROBLEM_NONE) {
+        add_rom_id(s, game->rom_id);
+        add_save_state(s, game, call->saves.now_utc_ms);
+        return;
+    }
+    for (size_t i = 0; game->problem == SAVE_PROBLEM_SEVERAL_GAMES && i < s->rom_count; i++) {
+        if (strcmp(s->roms[i].save_target, game->save_target) == 0) {
+            add_rom_id(s, s->roms[i].id);
+        }
+    }
+}
+
+/* Negotiates the games from first on, as many as fit APP_SAVES_NEGOTIATE_ROMS ROMs (negotiate
+ * answers for every slot of each ROM, so fewer ROMs keep its plan within the operations Skiff
+ * reads), and decides them. *end is the first game left for the next round. A round before the last
+ * has its session closed at once; the last one's stays for the transfers. */
+static skiff_err check_round(app_call *call, check_scratch *s, size_t first, size_t *end,
+                             size_t *devices) {
+    app_save_list *list = call->saves.list;
+    s->rom_id_count = 0;
+    s->state_count = 0;
+    s->plan.count = 0;
+    size_t next = first;
+    for (; next < list->count; next++) {
+        const size_t need = game_roms(s, &list->games[next]);
+        if (s->rom_id_count > 0 && s->rom_id_count + need > APP_SAVES_NEGOTIATE_ROMS) {
+            break;
+        }
+        add_game_roms(call, s, &list->games[next]);
+    }
+    *end = next;
+    skiff_err err = SKIFF_OK;
+    if (s->rom_id_count > 0) {
+        if (list->session_id != 0) {
+            (void)skiff_romm_saves_complete(call->romm, list->session_id, 0, 0);
+        }
+        err = negotiate(call, s);
+        list->session_id = err == SKIFF_OK ? s->plan.session_id : 0;
+    }
+    for (size_t i = first; err == SKIFF_OK && i < next; i++) {
+        app_save_game *game = &list->games[i];
+        if (game->problem == SAVE_PROBLEM_SEVERAL_GAMES) {
+            resolve_several(s, game);
+        }
+        if (game->problem != SAVE_PROBLEM_NONE) {
+            continue;
+        }
+        read_server(&s->plan, game);
+        decide(call, s, game);
+        if (asks(game) && *devices < APP_SAVES_DEVICE_LOOKUPS_MAX) {
+            (*devices)++;
+            read_device(call, s, game);
+        }
+    }
+    return err;
+}
+
 static skiff_err check_all(app_call *call, check_scratch *s) {
     app_save_list *list = call->saves.list;
     memset(list, 0, sizeof *list);
@@ -671,30 +739,12 @@ static skiff_err check_all(app_call *call, check_scratch *s) {
             continue;
         }
         err = read_local(call, &s->unit, call->saves.force_hash, game);
-        if (err == SKIFF_OK && game->problem == SAVE_PROBLEM_NONE) {
-            add_rom_id(s, game->rom_id);
-            add_save_state(s, game, call->saves.now_utc_ms);
-        }
-    }
-    if (err == SKIFF_OK && s->rom_id_count > 0) {
-        err = negotiate(call, s);
-        list->session_id = s->plan.session_id;
     }
     size_t devices = 0;
-    for (size_t i = 0; err == SKIFF_OK && i < list->count; i++) {
-        app_save_game *game = &list->games[i];
-        if (game->problem == SAVE_PROBLEM_SEVERAL_GAMES) {
-            resolve_several(s, game);
-        }
-        if (game->problem != SAVE_PROBLEM_NONE) {
-            continue;
-        }
-        read_server(&s->plan, game);
-        decide(call, s, game);
-        if (asks(game) && devices < APP_SAVES_DEVICE_LOOKUPS_MAX) {
-            devices++;
-            read_device(call, s, game);
-        }
+    for (size_t first = 0; err == SKIFF_OK && first < list->count;) {
+        size_t next = first;
+        err = check_round(call, s, first, &next, &devices);
+        first = next;
     }
     if (err == SKIFF_OK) {
         drop_empty(list);

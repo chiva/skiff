@@ -4400,6 +4400,97 @@ static void test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here(v
     TEST_ASSERT_EQUAL_STRING(GAME_UP ": save synced", view()->status);
 }
 
+/* PSP ROMs with saves, ids from first_id, on the list's page at offset of a list of total. */
+static void serve_saves_page(unsigned offset, unsigned first_id, unsigned count, unsigned total) {
+    static char raw[RAW_MAX];
+    int used = snprintf(raw, sizeof raw, JSON_OK "{\"items\":[");
+    for (unsigned i = 0; i < count; i++) {
+        char title[32];
+        char target[SKIFF_SAVES_TARGET_SIZE];
+        snprintf(title, sizeof title, "Many %03u", first_id + i);
+        snprintf(target, sizeof target, "SKIM%05u", first_id + i);
+        used += snprintf(raw + used, sizeof raw - (size_t)used, i > 0 ? "," : "");
+        used += saves_item(raw + used, sizeof raw - (size_t)used, first_id + i, title, target);
+    }
+    snprintf(raw + used, sizeof raw - (size_t)used, "],\"total\":%u,\"limit\":%d,\"offset\":%u}",
+             total, SKIFF_ROMM_PAGE_SIZE, offset);
+    char path[256];
+    snprintf(path, sizeof path,
+             "/api/roms?platform_ids=1&limit=25&offset=%u" LIST_QUERY "&has_saves=true", offset);
+    serve_raw(path, raw);
+}
+
+#define MANY_FIRST_ID 300U
+#define MANY_GAMES 33U
+
+static void test_many_games_are_negotiated_in_rounds(void) {
+    serve_saves_page(0, MANY_FIRST_ID, SKIFF_ROMM_PAGE_SIZE, MANY_GAMES);
+    serve_saves_page(SKIFF_ROMM_PAGE_SIZE, MANY_FIRST_ID + SKIFF_ROMM_PAGE_SIZE,
+                     MANY_GAMES - SKIFF_ROMM_PAGE_SIZE, MANY_GAMES);
+    serve_negotiate("");
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    size_t negotiations = 0;
+    size_t first_round = 0;
+    for (size_t i = 0; i < transport.log_count; i++) {
+        const fake_request *request = &transport.log[i];
+        if (strcmp(request->url + strlen(SERVER), NEGOTIATE_PATH) != 0) {
+            continue;
+        }
+        size_t ids = 0;
+        const char *list = strstr(request->body, "\"rom_ids\":[");
+        for (const char *c = list; c != NULL && *c != ']'; c++) {
+            ids += *c == ',';
+        }
+        TEST_PRINTF("negotiate %zu: %zu ROM(s)", negotiations + 1, list != NULL ? ids + 1 : 0);
+        if (negotiations == 0) {
+            first_round = ids + 1;
+        }
+        negotiations++;
+    }
+    TEST_PRINTF(
+        "33 games with saves: two rounds of at most 32 ROMs, the first one's session closed");
+    TEST_ASSERT_EQUAL_size_t(2, negotiations);
+    TEST_ASSERT_EQUAL_size_t(APP_SAVES_NEGOTIATE_ROMS, first_round);
+    TEST_ASSERT_TRUE(requested_path(COMPLETE_PATH));
+}
+
+static void test_sync_all_asks_again_about_a_game_once_without_a_save_id(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_installed(ROM_UP, body_crc);
+    TEST_PRINTF("RomM has no save ID for the installed game yet");
+    char raw[SAVE_JSON_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK
+             "{\"id\":101,\"platform_id\":1,\"name\":\"Up Game\",\"fs_name\":\"Up Game.iso\","
+             "\"fs_size_bytes\":%u,\"save_target\":null,\"save_target_layout\":null,"
+             "\"files\":[{\"rom_id\":101,\"file_name\":\"Up Game.iso\",\"file_size_bytes\":%u}]}",
+             BODY_BYTES, BODY_BYTES);
+    serve_raw("/api/roms/101", raw)->max_uses = 1;
+    serve_rom_with_save(ROM_UP, "Up Game", GAME_UP);
+    serve_saves_list("", 0);
+    char ops[OPS_MAX];
+    sync_op(ops, sizeof ops, "upload", ROM_UP, 0, NULL, APP_SAVES_SLOT);
+    serve_negotiate(ops);
+    serve_upload(ROM_UP, hash, "false", SAVE_UP);
+    serve_complete();
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_ASSERT_FALSE(requested_path(NEGOTIATE_PATH));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("Can't sync"));
+    TEST_PRINTF("rescanned in RomM since: Sync all asks again and syncs it");
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    char path[512];
+    upload_path(ROM_UP, hash, "false", path, sizeof path);
+    TEST_ASSERT_TRUE(requested_path(path));
+    TEST_ASSERT_TRUE(shows("Synced"));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4523,5 +4614,7 @@ int main(void) {
     RUN_TEST(test_a_baseline_the_memory_stick_refused_is_written_by_the_next_call);
     RUN_TEST(test_a_roms_details_skiff_refuses_cost_only_that_game);
     RUN_TEST(test_a_save_deleted_in_romm_asks_and_says_removing_deletes_it_here);
+    RUN_TEST(test_many_games_are_negotiated_in_rounds);
+    RUN_TEST(test_sync_all_asks_again_about_a_game_once_without_a_save_id);
     return UNITY_END();
 }

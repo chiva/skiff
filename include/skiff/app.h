@@ -147,6 +147,10 @@ typedef struct skiff_app_row {
     char detail[SKIFF_APP_DETAIL_MAX];
     /* Shown but not usable (a ROM Skiff cannot download): draw it dimmed. */
     int dim;
+    /* Starts a new group (Settings' Saves, after the server rows): drawn SKIFF_APP_BLOCK_GAP below
+     * the row above it. Only in a list that never scrolls, whose rows and gaps fit the list's
+     * rows of SKIFF_APP_LINE_HEIGHT. */
+    int new_group;
 } skiff_app_row;
 
 typedef struct skiff_app_hint {

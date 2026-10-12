@@ -125,11 +125,14 @@ void skiff_psp_ui_list(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
                        skiff_psp_ui_label_fn label, void *label_ctx);
 
 /* A row of skiff_psp_ui_rows(): its label, already fitted; a detail drawn right-aligned in the
- * row (NULL or "" for none); and whether to draw it dimmed (shown but not usable). */
+ * row (NULL or "" for none); whether to draw it dimmed (shown but not usable); and the pixels
+ * between it and the row above (none above the first row shown). Gaps are for a list that never
+ * scrolls: the scroll bar spans the rows alone. */
 typedef struct skiff_psp_ui_row {
     const char *label;
     const char *detail;
     int dim;
+    int gap_above;
 } skiff_psp_ui_row;
 
 /* Fills *row for item index of the list. */

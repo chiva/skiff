@@ -712,6 +712,11 @@ static void queue_view(skiff_app *app) {
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
 }
 
+/* Saves starts a new group: the list never scrolls, with room for the gap above it. */
+_Static_assert(SKIFF_APP_BLOCK_GAP + SKIFF_APP_LINE_HEIGHT * APP_SETTINGS_ROW_COUNT <=
+                   SKIFF_APP_LINE_HEIGHT * APP_SETTINGS_ROWS,
+               "Settings' rows and the gap above Saves must fit its list");
+
 static void settings_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_SETTINGS));
@@ -739,6 +744,7 @@ static void settings_view(skiff_app *app) {
     app_fit(app, app_text(app, SKIFF_TEXT_TITLE_SAVES), SKIFF_APP_LABEL_WIDTH, view->rows[2].label,
             sizeof view->rows[2].label);
     view->rows[2].dim = app->connect != CONNECT_DONE;
+    view->rows[2].new_group = 1;
     view->row_count = APP_SETTINGS_ROW_COUNT;
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);

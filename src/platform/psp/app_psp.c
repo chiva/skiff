@@ -533,6 +533,7 @@ static void view_row(void *ctx, size_t index, skiff_psp_ui_row *row) {
     row->label = view->rows[shown].label;
     row->detail = view->rows[shown].detail;
     row->dim = view->rows[shown].dim;
+    row->gap_above = view->rows[shown].new_group ? BLOCK_GAP : 0;
 }
 
 /* The view's QR code in the body's top right corner, as large as SKIFF_APP_QR_WIDTH and the body's

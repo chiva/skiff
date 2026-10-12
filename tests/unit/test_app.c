@@ -4776,8 +4776,11 @@ static void test_a_suspend_mid_connect_joins_again_before_the_next_step(void) {
     create_app();
     for (int i = 0; i < FRAMES_MAX && !(env_state.call_pending && app->call.kind == CALL_HEARTBEAT);
          i++) {
+        /* Only the heartbeat is held: the free-space count at startup comes back. */
+        env_state.hold_calls = !app_call_busy(app) || app->call.kind == CALL_HEARTBEAT;
         frame(0);
     }
+    env_state.hold_calls = 1;
     TEST_ASSERT_EQUAL_INT(CALL_HEARTBEAT, app->call.kind);
     TEST_ASSERT_EQUAL_INT(1, env_state.net_starts);
     TEST_PRINTF("the PSP sleeps while the heartbeat is out; RomM's answer is taken after waking");

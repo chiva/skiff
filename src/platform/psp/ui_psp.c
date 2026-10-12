@@ -50,7 +50,7 @@ enum {
     /* A button symbol: its size, where it sits against the baseline, and the gap after it. */
     SYMBOL_SIZE = 9,
     SYMBOL_RISE = 9,
-    SYMBOL_GAP = 4,
+    SYMBOL_GAP = SKIFF_PSP_UI_SYMBOL_WIDTH - SYMBOL_SIZE,
     HINT_GAP = 16,
     /* Where a row's text sits in it, and the scroll bar on the right. */
     ROW_BASELINE = 10,
@@ -371,14 +371,20 @@ static const char *button_name(unsigned action) {
     }
 }
 
+void skiff_psp_ui_symbol(const skiff_psp_ui *ui, unsigned action, int x, int y) {
+    const unsigned button = symbol_button(ui, action);
+    if (button != 0) {
+        draw_symbol(button, x, y - SYMBOL_RISE);
+    }
+}
+
 void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints, size_t count) {
     skiff_psp_ui_rect(ui, 0, FOOTER_RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, COLOUR_RULE);
     float x = (float)SKIFF_PSP_UI_MARGIN;
     for (size_t i = 0; hints != NULL && i < count; i++) {
-        const unsigned button = symbol_button(ui, hints[i].action);
-        if (button != 0) {
-            draw_symbol(button, (int)x, FOOTER_BASELINE - SYMBOL_RISE);
-            x += (float)(SYMBOL_SIZE + SYMBOL_GAP);
+        if (symbol_button(ui, hints[i].action) != 0) {
+            skiff_psp_ui_symbol(ui, hints[i].action, (int)x, FOOTER_BASELINE);
+            x += (float)SKIFF_PSP_UI_SYMBOL_WIDTH;
         } else {
             x = print_aligned(ui, (int)x, FOOTER_BASELINE, SKIFF_PSP_UI_HINT_SIZE,
                               SKIFF_PSP_UI_COLOUR_DIM_TEXT, INTRAFONT_ALIGN_LEFT,
@@ -400,7 +406,7 @@ void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
     int gaps = 0;
     for (size_t shown = 0; shown < list->rows && list->first + shown < list->count; shown++) {
         const size_t index = list->first + shown;
-        skiff_psp_ui_row item = {NULL, NULL, 0, 0};
+        skiff_psp_ui_row item = {NULL, NULL, 0, 0, 0};
         row(row_ctx, index, &item);
         if (shown > 0) {
             gaps += item.gap_above;
@@ -417,7 +423,9 @@ void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
         if (item.detail != NULL && item.detail[0] != '\0') {
             (void)print_aligned(ui, SKIFF_PSP_UI_SCREEN_WIDTH - LIST_TEXT_RIGHT - SCROLL_BAR_RIGHT,
                                 top + ROW_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
-                                SKIFF_PSP_UI_COLOUR_DIM_TEXT, INTRAFONT_ALIGN_RIGHT, item.detail);
+                                item.attention ? SKIFF_PSP_UI_COLOUR_ATTENTION
+                                               : SKIFF_PSP_UI_COLOUR_DIM_TEXT,
+                                INTRAFONT_ALIGN_RIGHT, item.detail);
         }
     }
     if (list->count <= list->rows) {

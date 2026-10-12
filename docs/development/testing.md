@@ -716,9 +716,14 @@ client that does not register itself.
    Settings → Saves → the game → △ Backups lists Backup 1, and the game on the PSP loads the save
    (PPSSPP → PSP, PPSSPP's `EncryptSave` at its default).
 5. S1.5: change the save on the PSP, upload another from PPSSPP's side, launch Skiff. Pass: "1 need
-   you"; on the Saves screen ✕ Sync opens the choice with both dates and the device RomM's save
-   came from; □ Use RomM's restores it and the backup is listed. Repeat and choose ✕ Keep this
-   PSP's: RomM's history keeps the other save.
+   you"; once that note is gone the library's footer still shows △ Settings (1), and Settings'
+   Saves row "1 needs you" in amber; on the Saves screen the game is first, its state in amber;
+   ✕ Sync opens the choice with the game in the header, both sides' dates and times in aligned
+   columns with the device RomM's save came from, and each button's symbol (✕/○ as the console's
+   confirm button is set) beside what it does, all within the screen in English and Spanish;
+   □ Use RomM's restores it and the backup is listed. Repeat and choose ✕ Keep this PSP's: RomM's
+   history keeps the other save, and the count is gone from Settings. A game with a long name
+   shows "Synced: <name>..." in the header, the name cut, never the action.
 6. S1.6: open Skiff Save Disc's details in the library (its line says what Skiff knows of its
    save) and press □ Sync save, then turn the Wi-Fi switch off while "Syncing" shows. Pass: an
    error (111 or 103) and no save in RomM for the disc; switch on, □ Sync save again: it uploads,

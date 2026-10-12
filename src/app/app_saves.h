@@ -233,7 +233,7 @@ typedef struct app_saves {
     int backups_known;
     skiff_err backups_error;
     /* The header's note while a check or transfer runs; empty otherwise. */
-    char activity[SKIFF_TEXT_MAX];
+    app_header_text activity;
     /* What the recovery at startup found (SKIFF_OK, 308 or 309), and where its notice goes on. */
     skiff_err recovered;
 } app_saves;

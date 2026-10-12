@@ -168,6 +168,7 @@ static void list_rows(skiff_app *app) {
         app_saves_state_text(app, game, 0, state);
         app_fit(app, state, SKIFF_APP_DETAIL_WIDTH, row->detail, sizeof row->detail);
         row->dim = game->problem != SAVE_PROBLEM_NONE && game->problem != SAVE_PROBLEM_ERROR;
+        row->attention = app_saves_needs_player(game);
     }
 }
 
@@ -280,67 +281,120 @@ void app_saves_backups_view(skiff_app *app) {
 
 /* ---- Two saves, or one deleted ---- */
 
-static void add_formatted_line(skiff_app *app, skiff_text_id id, const char *const *args,
-                               size_t count) {
-    char text[SKIFF_TEXT_MAX];
-    app_format(app, id, args, count, text);
-    app_view_add_wrapped(app, text, SKIFF_APP_TEXT_WIDTH);
+/* The comparison's columns: the side, its save's day and time, and the device RomM's came from. */
+enum { SIDE_COLUMN, DAY_COLUMN, TIME_COLUMN, SOURCE_COLUMN, SIDE_COLUMNS };
+_Static_assert(SIDE_COLUMNS <= SKIFF_APP_TABLE_COLUMNS, "a side's row must fit a table row");
+
+/* A choice's row: its button, what it does, and what that means for the other save. */
+typedef struct choice_option {
+    unsigned action;
+    skiff_text_id label;
+    skiff_text_id detail;
+} choice_option;
+
+/* Each choice's row: its label, then its detail, dimmed. */
+enum { CHOICE_OPTIONS = 3, CHOICE_DETAIL_COLUMN = 1 };
+_Static_assert(CHOICE_OPTIONS <= SKIFF_APP_TABLE_ROWS_MAX, "every option must fit the table");
+
+/* What happened to the game's saves, in one line. */
+static skiff_text_id situation_text(const app_save_game *game) {
+    if (game->decision.action == SKIFF_SAVES_ASK_DELETED_LOCAL) {
+        return SKIFF_TEXT_SAVE_DELETED_LOCAL_CHOICE;
+    }
+    if (game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER) {
+        return SKIFF_TEXT_SAVE_DELETED_SERVER_CHOICE;
+    }
+    return game->decision.reason == SKIFF_SAVES_REASON_NO_BASELINE ? SKIFF_TEXT_SAVE_CONFLICT_FIRST
+                                                                   : SKIFF_TEXT_SAVE_CONFLICT;
 }
 
-/* "In RomM: 11 Oct 18:19, from Argosy on Pixel", as far as RomM said. */
-static void server_line(skiff_app *app, const app_save_game *game) {
-    save_date date;
-    char when[SKIFF_APP_DETAIL_MAX] = "";
-    if (parse_iso(game->server_updated_at, &date)) {
-        format_date(app, &date, 1, when, sizeof when);
+/* A side's row: its name, then its save's day and time, "Deleted" when it has none, or nothing
+ * when the date is not known. */
+static void add_side(const skiff_app *app, skiff_app_table *table, skiff_text_id side, int deleted,
+                     const save_date *date, const char *source) {
+    char day[SKIFF_APP_DETAIL_MAX] = "";
+    char time[SKIFF_APP_DETAIL_MAX] = "";
+    if (deleted) {
+        snprintf(day, sizeof day, "%s", app_text(app, SKIFF_TEXT_SAVE_GONE));
+    } else if (date != NULL) {
+        format_date(app, date, 0, day, sizeof day);
+        snprintf(time, sizeof time, "%02d:%02d", date->hour, date->minute);
     }
-    if (game->server_device[0] != '\0') {
-        const char *args[] = {when, game->server_device};
-        add_formatted_line(app, SKIFF_TEXT_SAVE_IN_ROMM_FROM, args, 2);
+    const char *cells[SIDE_COLUMNS] = {app_text(app, side), day, time, source};
+    app_view_add_table_row(app, table, 0, cells, SIDE_COLUMNS);
+}
+
+/* Both sides aligned: this PSP's save by the Memory Stick's clock, RomM's by RomM's, and the device
+ * RomM's came from (or the emulator, when RomM names no device). */
+static void add_sides(skiff_app *app, const app_save_game *game) {
+    skiff_app_table *table = app_view_add_table(app, SOURCE_COLUMN);
+    if (table == NULL) {
+        return;
+    }
+    save_date local;
+    const int has_local = date_of_ms(game->local_mtime * APP_MS_PER_S, &local);
+    save_date server;
+    const int has_server = parse_iso(game->server_updated_at, &server);
+    add_side(app, table, SKIFF_TEXT_SIDE_THIS_PSP,
+             game->decision.action == SKIFF_SAVES_ASK_DELETED_LOCAL, has_local ? &local : NULL, "");
+    add_side(app, table, SKIFF_TEXT_SIDE_ROMM,
+             game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER, has_server ? &server : NULL,
+             game->server_device);
+    app_view_layout_table(app, table);
+}
+
+/* The buttons, as the choice's update reads them (app_saves_choice_update()), each with what it
+ * does to the other save; Later changes nothing. */
+static void choice_options(const app_save_game *game, choice_option *out) {
+    const choice_option later = {SKIFF_UI_ACTION_BACK, SKIFF_TEXT_LATER, SKIFF_TEXT_LATER_DETAIL};
+    out[CHOICE_OPTIONS - 1] = later;
+    if (game->decision.action == SKIFF_SAVES_ASK_DELETED_LOCAL) {
+        const choice_option again = {SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_DOWNLOAD_AGAIN,
+                                     SKIFF_TEXT_DOWNLOAD_AGAIN_DETAIL};
+        const choice_option leave = {SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_LEAVE_IT,
+                                     SKIFF_TEXT_LEAVE_IT_DETAIL};
+        out[0] = again;
+        out[1] = leave;
+    } else if (game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER) {
+        /* RomM's side is no save at all: taking it removes this PSP's, which is said as such. */
+        const choice_option keep = {SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_KEEP_THIS_PSP,
+                                    SKIFF_TEXT_UPLOAD_AGAIN_DETAIL};
+        const choice_option remove = {SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_REMOVE_THIS_PSP,
+                                      SKIFF_TEXT_REMOVE_THIS_PSP_DETAIL};
+        out[0] = keep;
+        out[1] = remove;
     } else {
-        const char *args[] = {when};
-        add_formatted_line(app, SKIFF_TEXT_SAVE_IN_ROMM, args, 1);
+        const choice_option keep = {SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_KEEP_THIS_PSP,
+                                    SKIFF_TEXT_KEEP_THIS_PSP_DETAIL};
+        const choice_option use = {SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_USE_ROMM,
+                                   SKIFF_TEXT_USE_ROMM_DETAIL};
+        out[0] = keep;
+        out[1] = use;
     }
 }
 
 void app_saves_choice_view(skiff_app *app) {
     const app_save_game *game = &app->saves->choice;
     app_view_set_title(app, app_text(app, SKIFF_TEXT_TITLE_SAVE_CHOICE));
-    const char *name[] = {app_saves_title(game)};
-    const int deleted_here = game->decision.action == SKIFF_SAVES_ASK_DELETED_LOCAL;
-    if (deleted_here) {
-        add_formatted_line(app, SKIFF_TEXT_SAVE_DELETED_LOCAL_CHOICE, name, 1);
-    } else if (game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER) {
-        add_formatted_line(app, SKIFF_TEXT_SAVE_DELETED_SERVER_CHOICE, name, 1);
-    } else {
-        add_formatted_line(app,
-                           game->decision.reason == SKIFF_SAVES_REASON_NO_BASELINE
-                               ? SKIFF_TEXT_SAVE_CONFLICT_FIRST
-                               : SKIFF_TEXT_SAVE_CONFLICT,
-                           name, 1);
+    app_view_set_status(app, app_saves_title(game));
+    app_view_add_wrapped(app, app_text(app, situation_text(game)), SKIFF_APP_TEXT_WIDTH);
+    add_sides(app, game);
+    choice_option options[CHOICE_OPTIONS];
+    choice_options(game, options);
+    skiff_app_table *table = app_view_add_table(app, CHOICE_DETAIL_COLUMN);
+    for (size_t i = 0; i < CHOICE_OPTIONS; i++) {
+        if (table != NULL) {
+            const char *cells[] = {app_text(app, options[i].label),
+                                   app_text(app, options[i].detail)};
+            app_view_add_table_row(app, table, options[i].action, cells,
+                                   sizeof cells / sizeof cells[0]);
+        }
+        /* The footer names them too, as on every screen. */
+        app_view_add_hint(app, options[i].action, options[i].label);
     }
-    save_date date;
-    if (!deleted_here && date_of_ms(game->local_mtime * APP_MS_PER_S, &date)) {
-        char when[SKIFF_APP_DETAIL_MAX];
-        format_date(app, &date, 1, when, sizeof when);
-        const char *args[] = {when};
-        add_formatted_line(app, SKIFF_TEXT_SAVE_ON_THIS_PSP, args, 1);
+    if (table != NULL) {
+        app_view_layout_table(app, table);
     }
-    server_line(app, game);
-    /* RomM's side is no save at all: taking it removes this PSP's, which is said as such. */
-    const int deleted_there = game->decision.action == SKIFF_SAVES_ASK_DELETED_SERVER;
-    app_view_add_wrapped(app,
-                         app_text(app, deleted_here    ? SKIFF_TEXT_SAVE_LEAVE_NOTE
-                                       : deleted_there ? SKIFF_TEXT_SAVE_REMOVE_NOTE
-                                                       : SKIFF_TEXT_SAVE_KEEP_NOTE),
-                         SKIFF_APP_TEXT_WIDTH);
-    app_view_add_hint(app, SKIFF_UI_ACTION_CONFIRM,
-                      deleted_here ? SKIFF_TEXT_DOWNLOAD_AGAIN : SKIFF_TEXT_KEEP_THIS_PSP);
-    app_view_add_hint(app, SKIFF_UI_ACTION_EXTRA,
-                      deleted_here    ? SKIFF_TEXT_LEAVE_IT
-                      : deleted_there ? SKIFF_TEXT_REMOVE_THIS_PSP
-                                      : SKIFF_TEXT_USE_ROMM);
-    app_view_add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_LATER);
 }
 
 /* ---- The game's details ---- */

@@ -32,6 +32,19 @@ void app_fit(const skiff_app *app, const char *text, float width, char *out, siz
     }
 }
 
+void app_format_fit_name(const skiff_app *app, skiff_text_id id, const char *name, float width,
+                         char *out, size_t out_size) {
+    const char *none[] = {""};
+    char rest[SKIFF_TEXT_MAX];
+    app_format(app, id, none, 1, rest);
+    char fitted[SKIFF_TEXT_MAX];
+    app_fit(app, name, width - app->env.measure(app->env.ctx, rest), fitted, sizeof fitted);
+    const char *args[] = {fitted};
+    char text[SKIFF_TEXT_MAX];
+    app_format(app, id, args, 1, text);
+    app_fit(app, text, width, out, out_size);
+}
+
 static int is_continuation(char c) { return ((unsigned char)c & 0xC0U) == 0x80U; }
 
 /* The longest start of text, at most length bytes and ending between UTF-8 characters, whose
@@ -202,18 +215,56 @@ static void add_error(skiff_app *app, skiff_err err) {
     add_wrapped(app, text);
 }
 
-static void add_hint(skiff_app *app, unsigned action, skiff_text_id label) {
+static void add_hint_text(skiff_app *app, unsigned action, const char *label) {
     skiff_app_view *view = &app->view;
     if (view->hint_count == SKIFF_APP_HINTS_MAX) {
         return;
     }
     view->hints[view->hint_count].action = action;
-    snprintf(view->hints[view->hint_count].label, SKIFF_APP_HINT_MAX, "%s", app_text(app, label));
+    snprintf(view->hints[view->hint_count].label, SKIFF_APP_HINT_MAX, "%s", label);
     view->hint_count++;
 }
 
+static void add_hint(skiff_app *app, unsigned action, skiff_text_id label) {
+    add_hint_text(app, action, app_text(app, label));
+}
+
+/* Settings' hint, with the saves that need the player when some do ("Settings (1)"): seen from the
+ * library, where the launch check's note is gone after a few seconds. */
+static void add_settings_hint(skiff_app *app) {
+    const size_t waiting = app_saves_waiting(app);
+    if (waiting == 0) {
+        add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+        return;
+    }
+    char count[24];
+    snprintf(count, sizeof count, "%zu", waiting);
+    const char *args[] = {count};
+    char label[SKIFF_APP_HINT_MAX];
+    (void)skiff_text_format(app_text(app, SKIFF_TEXT_SETTINGS_WAITING), args, 1, label,
+                            sizeof label);
+    add_hint_text(app, SKIFF_UI_ACTION_MENU, label);
+}
+
+float app_view_status_width(const skiff_app *app) {
+    const float title = app->env.measure(app->env.ctx, app->view.title) * SKIFF_APP_TITLE_SCALE;
+    const float width =
+        (SKIFF_APP_TEXT_WIDTH - title - SKIFF_APP_HEADER_GAP) / SKIFF_APP_STATUS_SCALE;
+    return width > SKIFF_APP_STATUS_MIN_WIDTH ? width : SKIFF_APP_STATUS_MIN_WIDTH;
+}
+
 static void set_status(skiff_app *app, const char *text) {
-    app_fit(app, text, SKIFF_APP_STATUS_WIDTH, app->view.status, sizeof app->view.status);
+    app_fit(app, text, app_view_status_width(app), app->view.status, sizeof app->view.status);
+}
+
+/* A note or activity in the header, its name shortened when the header is too narrow for it. */
+static void set_header_text(skiff_app *app, const app_header_text *header) {
+    if (header->named == SKIFF_TEXT_COUNT) {
+        set_status(app, header->text);
+        return;
+    }
+    app_format_fit_name(app, header->named, header->text, app_view_status_width(app),
+                        app->view.status, sizeof app->view.status);
 }
 
 static void set_title(skiff_app *app, const char *title) {
@@ -231,6 +282,57 @@ void app_view_add_wrapped(skiff_app *app, const char *text, float width) {
 void app_view_set_status(skiff_app *app, const char *text) { set_status(app, text); }
 
 void app_view_set_title(skiff_app *app, const char *title) { set_title(app, title); }
+
+skiff_app_table *app_view_add_table(skiff_app *app, size_t dim_from) {
+    skiff_app_view *view = &app->view;
+    if (view->table_count == SKIFF_APP_TABLES_MAX) {
+        return NULL;
+    }
+    skiff_app_table *table = &view->tables[view->table_count++];
+    table->dim_from = dim_from;
+    return table;
+}
+
+void app_view_add_table_row(const skiff_app *app, skiff_app_table *table, unsigned action,
+                            const char *const *cells, size_t count) {
+    if (table->row_count == SKIFF_APP_TABLE_ROWS_MAX) {
+        return;
+    }
+    skiff_app_table_row *row = &table->rows[table->row_count++];
+    row->action = action;
+    for (size_t i = 0; i < count && i < SKIFF_APP_TABLE_COLUMNS; i++) {
+        /* Cut between UTF-8 characters when longer than a cell holds; laid out later. */
+        app_fit(app, cells[i] != NULL ? cells[i] : "", SKIFF_APP_TEXT_WIDTH, row->cells[i],
+                sizeof row->cells[i]);
+    }
+}
+
+void app_view_layout_table(const skiff_app *app, skiff_app_table *table) {
+    float x = 0.0f;
+    for (size_t r = 0; r < table->row_count; r++) {
+        if (table->rows[r].action != 0) {
+            x = (float)SKIFF_APP_SYMBOL_WIDTH;
+        }
+    }
+    for (size_t c = 0; c < SKIFF_APP_TABLE_COLUMNS; c++) {
+        table->column_x[c] = x;
+        float widest = 0.0f;
+        for (size_t r = 0; r < table->row_count; r++) {
+            char *cell = table->rows[r].cells[c];
+            if (cell[0] == '\0') {
+                continue;
+            }
+            char fitted[SKIFF_APP_CELL_MAX];
+            app_fit(app, cell, SKIFF_APP_TEXT_WIDTH - x, fitted, sizeof fitted);
+            memcpy(cell, fitted, sizeof fitted);
+            const float width = app->env.measure(app->env.ctx, cell);
+            widest = width > widest ? width : widest;
+        }
+        if (widest > 0.0f) {
+            x += widest + SKIFF_APP_COLUMN_GAP;
+        }
+    }
+}
 
 static void add_free_space_within(skiff_app *app, float width) {
     if (!app->free_known) {
@@ -406,7 +508,7 @@ static void collections_view(skiff_app *app) {
         add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
     }
     add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_DOWNLOADS);
-    add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+    add_settings_hint(app);
     add_hint(app, SKIFF_UI_ACTION_SELECT, SKIFF_TEXT_SHOW_ALL_GAMES);
 }
 
@@ -510,7 +612,7 @@ static void library_view(skiff_app *app) {
     if (app->source == SOURCE_COLLECTIONS) {
         add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
     } else {
-        add_hint(app, SKIFF_UI_ACTION_MENU, SKIFF_TEXT_SETTINGS);
+        add_settings_hint(app);
     }
     if (app->has_platform) {
         add_hint(app, SKIFF_UI_ACTION_SELECT, next_source_label(app));
@@ -745,6 +847,17 @@ static void settings_view(skiff_app *app) {
             sizeof view->rows[2].label);
     view->rows[2].dim = app->connect != CONNECT_DONE;
     view->rows[2].new_group = 1;
+    const size_t waiting = app_saves_waiting(app);
+    if (waiting > 0) {
+        char count[24];
+        snprintf(count, sizeof count, "%zu", waiting);
+        const char *args[] = {count};
+        app_format(app, waiting == 1 ? SKIFF_TEXT_SAVES_WAITING_ONE : SKIFF_TEXT_SAVES_WAITING,
+                   args, 1, text);
+        app_fit(app, text, SKIFF_APP_DETAIL_WIDTH, view->rows[2].detail,
+                sizeof view->rows[2].detail);
+        view->rows[2].attention = 1;
+    }
     view->row_count = APP_SETTINGS_ROW_COUNT;
     add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_SELECT);
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
@@ -854,11 +967,12 @@ void app_view_build(skiff_app *app) {
     const int browsing =
         app->screen == SKIFF_APP_SCREEN_LIBRARY || app->screen == SKIFF_APP_SCREEN_DETAILS ||
         app->screen == SKIFF_APP_SCREEN_SAVES || app->screen == SKIFF_APP_SCREEN_SAVE_BACKUPS;
-    if (browsing && app->saves->activity[0] != '\0' && app->batch.step == BATCH_NONE) {
-        set_status(app, app->saves->activity);
+    if (browsing && app->saves->activity.text[0] != '\0' && app->batch.step == BATCH_NONE) {
+        set_header_text(app, &app->saves->activity);
     }
-    if (app->note[0] != '\0') {
-        set_status(app, app->note);
+    /* Not over the choice between two saves: its header names the game it asks about. */
+    if (app->note.text[0] != '\0' && app->screen != SKIFF_APP_SCREEN_SAVE_CHOICE) {
+        set_header_text(app, &app->note);
     }
     view->dialog = app->dialog;
     if (app->dialog == SKIFF_APP_DIALOG_KEYBOARD) {

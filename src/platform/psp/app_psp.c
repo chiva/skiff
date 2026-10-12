@@ -45,6 +45,8 @@ _Static_assert(SKIFF_APP_BLOCK_GAP + SKIFF_COVER_HEIGHT <= SKIFF_APP_BODY_HEIGHT
                "the cover box must fit the body");
 _Static_assert(SKIFF_APP_LINE_HEIGHT == SKIFF_PSP_UI_ROW_HEIGHT,
                "skiff/app.h's line height must be a list row's");
+_Static_assert(SKIFF_APP_SYMBOL_WIDTH == SKIFF_PSP_UI_SYMBOL_WIDTH,
+               "skiff/app.h's tables leave a button symbol the room the renderer draws it in");
 
 /* ---- Measurements (hardware row A1, debug level) ---- */
 
@@ -533,6 +535,7 @@ static void view_row(void *ctx, size_t index, skiff_psp_ui_row *row) {
     row->label = view->rows[shown].label;
     row->detail = view->rows[shown].detail;
     row->dim = view->rows[shown].dim;
+    row->attention = view->rows[shown].attention;
     row->gap_above = view->rows[shown].new_group ? BLOCK_GAP : 0;
 }
 
@@ -576,6 +579,35 @@ static int draw_details(const skiff_psp_ui *ui, const skiff_app_view *view, int 
     return y;
 }
 
+/* The view's tables from y down, each an empty line under what is above it: where they end. Cells
+ * start at their column's x (body text is drawn at the measure's size, so its units are pixels). */
+static int draw_tables(const skiff_psp_ui *ui, const skiff_app_view *view, int y) {
+    for (size_t t = 0; t < view->table_count; t++) {
+        const skiff_app_table *table = &view->tables[t];
+        if (y > SKIFF_PSP_UI_CONTENT_TOP + BLOCK_GAP) {
+            y += LINE_HEIGHT;
+        }
+        for (size_t r = 0; r < table->row_count; r++) {
+            const skiff_app_table_row *row = &table->rows[r];
+            if (row->action != 0) {
+                skiff_psp_ui_symbol(ui, row->action, SKIFF_PSP_UI_MARGIN, y + LINE_BASELINE);
+            }
+            for (size_t c = 0; c < SKIFF_APP_TABLE_COLUMNS; c++) {
+                if (row->cells[c][0] == '\0') {
+                    continue;
+                }
+                skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN + (int)table->column_x[c],
+                                  y + LINE_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
+                                  c >= table->dim_from ? SKIFF_PSP_UI_COLOUR_DIM_TEXT
+                                                       : SKIFF_PSP_UI_COLOUR_TEXT,
+                                  row->cells[c]);
+            }
+            y += LINE_HEIGHT;
+        }
+    }
+    return y;
+}
+
 static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view) {
     const skiff_psp_ui *ui = &platform->ui;
     skiff_psp_ui_header(ui, view->title, view->status[0] != '\0' ? view->status : NULL);
@@ -594,7 +626,7 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
                            (view->has_progress ? BLOCK_GAP + PROGRESS_HEIGHT : 0);
         (void)draw_details(ui, view, SKIFF_PSP_UI_CONTENT_BOTTOM - height);
     } else {
-        int y = draw_details(ui, view, top);
+        int y = draw_tables(ui, view, draw_details(ui, view, top));
         if (view->has_list) {
             if (view->line_count > 0 || view->has_progress) {
                 y += BLOCK_GAP;

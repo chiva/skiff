@@ -379,9 +379,19 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     skiff_config_issue issue;
     memset(&issue, 0, sizeof issue);
     const int had_token = app->settings.token[0] != '\0';
-    skiff_err err = skiff_romm_pairing_config_text(
-        app->config_text, app->config_length, app->settings.device_identifier, result,
-        app->edit_text, sizeof app->edit_text, &length, &issue);
+    /* Perhaps another RomM user: without a baseline, any difference asks the player. Forgotten
+     * before the token is saved, so a restart never meets the old baselines with the new token. */
+    skiff_err err = had_token ? app_saves_forget(app, 0) : SKIFF_OK;
+    if (err != SKIFF_OK) {
+        skiff_romm_pairing_clear(&app->pairing.pairing, result);
+        app->pairing.active = 0;
+        app_show_error(app, err, NULL, MESSAGE_NEW_PAIRING, MESSAGE_SETTINGS, SKIFF_TEXT_SETTINGS,
+                       SKIFF_APP_SCREEN_PAIR);
+        return;
+    }
+    err = skiff_romm_pairing_config_text(app->config_text, app->config_length,
+                                         app->settings.device_identifier, result, app->edit_text,
+                                         sizeof app->edit_text, &length, &issue);
     if (err == SKIFF_OK) {
         err = app_config_replace(app, app->edit_text, length);
     }
@@ -399,10 +409,6 @@ static void paired(skiff_app *app, skiff_romm_pairing_result *result) {
     char text[SKIFF_TEXT_MAX];
     app_format(app, SKIFF_TEXT_PAIR_DONE, args, 1, text);
     app_note(app, text);
-    /* Perhaps another RomM user: without a baseline, any difference asks the player. */
-    if (had_token) {
-        app_saves_forget(app, 0);
-    }
     if (had_token || app->worker_running) {
         /* A new token for a running app: the worker and the queue start again with it. */
         if (!app_stop_worker(app)) {

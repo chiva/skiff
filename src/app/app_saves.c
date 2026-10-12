@@ -94,7 +94,17 @@ int app_saves_has_scopes(const skiff_config *settings) {
     return 1;
 }
 
+static int recovery_failed(skiff_err recovered) {
+    return recovered != SKIFF_OK && recovered != SKIFF_ERR_STORAGE_SAVE_RESTORE_FINISHED &&
+           recovered != SKIFF_ERR_STORAGE_SAVE_RESTORE_UNFINISHED;
+}
+
 app_saves_block app_saves_blocked(const skiff_app *app) {
+    /* A restore cut short could not be finished: its game's folders may be half replaced, which a
+     * check would read as a change to upload. Nothing syncs until a launch finishes it. */
+    if (recovery_failed(app->saves->recovered)) {
+        return SAVES_UNRECOVERED;
+    }
     if (!app->has_server) {
         return SAVES_NOT_CONNECTED;
     }
@@ -148,21 +158,54 @@ static void reset(skiff_app *app) {
     skiff_ui_list_init(&saves->list, 0, APP_SAVES_ROWS);
 }
 
-void app_saves_forget(skiff_app *app, int server_changed) {
-    app_saves *saves = app->saves;
-    reset(app);
-    skiff_saves_baseline_forget_all(saves->baseline);
-    if (server_changed) {
-        skiff_saves_baseline_forget_roms(saves->baseline);
+/* Removes saves.json and what a cut replacement of it left (its .new would otherwise come back as
+ * the file on the next read). */
+static skiff_err remove_baseline(skiff_app *app, const char *path) {
+    static const char *const SUFFIXES[] = {SKIFF_STORAGE_PENDING_SUFFIX, SKIFF_STORAGE_DRAFT_SUFFIX,
+                                           ""};
+    skiff_err err = SKIFF_OK;
+    for (size_t i = 0; err == SKIFF_OK && i < sizeof SUFFIXES / sizeof SUFFIXES[0]; i++) {
+        char file[SKIFF_STORAGE_PATH_MAX + sizeof SKIFF_STORAGE_PENDING_SUFFIX];
+        snprintf(file, sizeof file, "%s%s", path, SUFFIXES[i]);
+        err = skiff_storage_remove(app->config.storage, file);
+        err = err == SKIFF_ERR_STORAGE_NOT_FOUND ? SKIFF_OK : err;
     }
+    return err;
+}
+
+skiff_err app_saves_forget(skiff_app *app, int server_changed) {
+    app_saves *saves = app->saves;
     char path[SKIFF_STORAGE_PATH_MAX];
     skiff_err err = baseline_path(app, path, sizeof path);
-    if (err == SKIFF_OK) {
-        err = skiff_saves_baseline_save(saves->baseline, app->config.storage, path);
+    /* A new server's ROM ids mean other games, and a saves.json that could not be read is not one
+     * to rewrite: either way the file goes whole. */
+    const int whole = server_changed || saves->baseline->load_error != SKIFF_OK;
+    skiff_saves_baseline *forgotten = NULL;
+    if (err == SKIFF_OK && !whole) {
+        err = skiff_saves_baseline_create(&forgotten);
     }
-    skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN, SKIFF_APP_LOG_TAG,
+    if (err == SKIFF_OK && !whole) {
+        *forgotten = *saves->baseline;
+        skiff_saves_baseline_forget_all(forgotten);
+        err = skiff_saves_baseline_save(forgotten, app->config.storage, path);
+    } else if (err == SKIFF_OK) {
+        err = remove_baseline(app, path);
+    }
+    skiff_saves_baseline_destroy(forgotten);
+    skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "save baselines forgotten (%s): %s (%d)",
                     server_changed ? "new server" : "paired again", skiff_err_name(err), (int)err);
+    if (err != SKIFF_OK) {
+        return err;
+    }
+    reset(app);
+    skiff_saves_baseline_forget_all(saves->baseline);
+    if (whole) {
+        skiff_saves_baseline_forget_roms(saves->baseline);
+        saves->baseline->load_error = SKIFF_OK;
+        saves->baseline->set_aside_damaged = 0;
+    }
+    return SKIFF_OK;
 }
 
 /* ---- The list ---- */

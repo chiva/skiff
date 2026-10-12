@@ -179,6 +179,10 @@ void app_saves_view(skiff_app *app) {
     view->lines_below = 1;
     skiff_ui_list_init(&view->list, 0, APP_SAVES_ROWS);
     switch (app_saves_blocked(app)) {
+    case SAVES_UNRECOVERED:
+        add_error_text(app, saves->recovered);
+        app_view_add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
+        return;
     case SAVES_NOT_CONNECTED:
         app_view_add_wrapped(app, app_text(app, SKIFF_TEXT_SAVES_OFFLINE), SKIFF_APP_TEXT_WIDTH);
         app_view_add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);

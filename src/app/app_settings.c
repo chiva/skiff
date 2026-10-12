@@ -151,6 +151,10 @@ static void apply_server(skiff_app *app, const char *url) {
     if (err == SKIFF_OK) {
         err = forget_installed(app);
     }
+    /* The old server's baselines and ROM ids say nothing about the new one. */
+    if (err == SKIFF_OK) {
+        err = app_saves_forget(app, 1);
+    }
     if (err == SKIFF_OK) {
         err = app_config_replace(app, text, length);
     }
@@ -158,8 +162,6 @@ static void apply_server(skiff_app *app, const char *url) {
         keep_old_server(app, err, &issue);
         return;
     }
-    /* The old server's baselines and ROM ids say nothing about the new one. */
-    app_saves_forget(app, 1);
     err = app_reset_server(app);
     skiff_log_write(app->log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_ERROR, SKIFF_APP_LOG_TAG,
                     "server address changed: %s (%d)", skiff_err_name(err), (int)err);

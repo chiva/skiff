@@ -156,6 +156,9 @@ typedef enum app_saves_origin {
 /* Why save sync cannot run, in the order the Saves screen says it. */
 typedef enum app_saves_block {
     SAVES_OK,
+    /* The restore journal left at launch could not be replayed (the storage error in
+     * app_saves.recovered): the journal stays for the next launch. */
+    SAVES_UNRECOVERED,
     /* Not connected to RomM yet (nothing is known about the server). */
     SAVES_NOT_CONNECTED,
     /* RomM before 5.4 (SKIFF_ERR_ROMM_SAVES_UNSUPPORTED). */

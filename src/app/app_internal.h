@@ -575,8 +575,10 @@ app_saves_block app_saves_blocked(const skiff_app *app);
 /* A save call runs or waits to. */
 int app_saves_busy(const skiff_app *app);
 /* Forgets every game's baseline (pairing again), and the ROMs' save IDs too after a new server
- * (server_changed), and saves saves.json; backups and the saves themselves stay. */
-void app_saves_forget(skiff_app *app, int server_changed);
+ * (server_changed), on the Memory Stick first: before the new token or address is saved, so a
+ * restart can never pair the old baselines with the new identity. Backups and the saves themselves
+ * stay. On an error nothing in memory changes and the caller keeps the old identity. */
+skiff_err app_saves_forget(skiff_app *app, int server_changed);
 /* Once a frame, after app_call_update(): starts the next save call when nothing else waits. */
 void app_saves_update(skiff_app *app);
 /* What a finished save call returned, applied on the screen's thread. */

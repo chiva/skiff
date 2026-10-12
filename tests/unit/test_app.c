@@ -4119,6 +4119,54 @@ static void test_a_lost_connection_stops_the_batch_for_the_next_check(void) {
     TEST_ASSERT_TRUE(shows("Changed on this PSP"));
 }
 
+static void test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync(void) {
+    char work[TEMP_DIR_PATH_MAX];
+    app_file("saves-work", work, sizeof work);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_mkdirs(posix, work));
+    char journal[TEMP_DIR_PATH_MAX];
+    app_file("saves-work/journal", journal, sizeof journal);
+    write_file(journal, "not a journal", strlen("not a journal"));
+    TEST_PRINTF("the Memory Stick refuses to let the journal go");
+    storage.fail_suffix = "journal";
+    storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    put_save(GAME_UP, UP_LOCAL);
+    record_installed(ROM_UP, body_crc);
+    open_saves_library(SAVE_SCOPES, SAVES_ROMM);
+    run_saves();
+    TEST_PRINTF("browsing works; nothing about saves is asked of RomM");
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+    TEST_ASSERT_FALSE(requested_prefix("/api/sync"));
+    open_saves_screen();
+    TEST_ASSERT_TRUE(shows("[302]"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_EXTRA, english(SKIFF_TEXT_SYNC_ALL)));
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    TEST_ASSERT_FALSE(requested_prefix(SAVES_LIST_PATH));
+}
+
+static void test_a_new_server_waits_until_the_old_baselines_are_gone(void) {
+    put_save(GAME_UP, UP_LOCAL);
+    char hash[HASH_TEXT_MAX];
+    local_hash(GAME_UP, hash);
+    record_saves_baseline(GAME_UP, ROM_UP, SAVE_UP, hash, hash);
+    open_saves_library(BROWSE_SCOPES, "5.3.1");
+    serve_heartbeat("5.3.1");
+    storage.fail_suffix = "saves.json";
+    storage.remove_error = SKIFF_ERR_STORAGE_IO;
+    frame(SKIFF_UI_ACTION_MENU);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    skiff_app_dialog_done(app, SKIFF_APP_DIALOG_ACCEPTED, "https://other.test");
+    frame(0);
+    print_view();
+    TEST_PRINTF("saves.json could not be dropped: the old server stays, said with the error");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_MESSAGE, view()->screen);
+    TEST_ASSERT_TRUE(shows("[302]"));
+    char config[TEXT_MAX];
+    read_app_file(SKIFF_CONFIG_FILE_NAME, config, sizeof config);
+    TEST_ASSERT_NOT_NULL(strstr(config, "url = " SERVER));
+    TEST_ASSERT_NOT_NULL(strstr(config, "token = " TOKEN));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4233,5 +4281,7 @@ int main(void) {
     RUN_TEST(test_a_game_without_a_save_id_says_so_on_its_details);
     RUN_TEST(test_a_save_that_fails_romms_checksum_is_never_restored);
     RUN_TEST(test_a_lost_connection_stops_the_batch_for_the_next_check);
+    RUN_TEST(test_a_restore_that_cannot_be_finished_at_launch_stops_save_sync);
+    RUN_TEST(test_a_new_server_waits_until_the_old_baselines_are_gone);
     return UNITY_END();
 }

@@ -397,15 +397,19 @@ void skiff_psp_ui_rows(const skiff_psp_ui *ui, const skiff_ui_list *list, int y,
         return;
     }
     const int track_height = (int)list->rows * SKIFF_PSP_UI_ROW_HEIGHT;
+    int gaps = 0;
     for (size_t shown = 0; shown < list->rows && list->first + shown < list->count; shown++) {
         const size_t index = list->first + shown;
-        const int top = y + (int)shown * SKIFF_PSP_UI_ROW_HEIGHT;
+        skiff_psp_ui_row item = {NULL, NULL, 0, 0};
+        row(row_ctx, index, &item);
+        if (shown > 0) {
+            gaps += item.gap_above;
+        }
+        const int top = y + (int)shown * SKIFF_PSP_UI_ROW_HEIGHT + gaps;
         if (index == list->selected) {
             skiff_psp_ui_rect(ui, 0, top, SKIFF_PSP_UI_SCREEN_WIDTH - LIST_TEXT_RIGHT,
                               SKIFF_PSP_UI_ROW_HEIGHT, SKIFF_PSP_UI_COLOUR_SELECTION);
         }
-        skiff_psp_ui_row item = {NULL, NULL, 0};
-        row(row_ctx, index, &item);
         const unsigned int colour =
             item.dim ? SKIFF_PSP_UI_COLOUR_DIM_TEXT : SKIFF_PSP_UI_COLOUR_TEXT;
         skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, top + ROW_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,

@@ -450,8 +450,22 @@ static void create_app(void) {
 
 static const skiff_app_view *view(void) { return skiff_app_view_now(app); }
 
+/* Only Settings sets a row apart (Saves), and only in a list that never scrolls (skiff/app.h). */
+static void check_new_groups(void) {
+    const skiff_app_view *v = view();
+    for (size_t i = 0; i < v->row_count; i++) {
+        if (v->rows[i].new_group) {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_APP_SCREEN_SETTINGS, v->screen,
+                                          "only Settings starts a new group of rows");
+            TEST_ASSERT_TRUE_MESSAGE(v->list.count <= v->list.rows,
+                                     "a list with a new group never scrolls");
+        }
+    }
+}
+
 static void frame(unsigned actions) {
     skiff_app_update(app, actions);
+    check_new_groups();
     env_state.now_ms += FRAME_MS;
 }
 
@@ -469,6 +483,9 @@ static void print_view(void) {
         TEST_PRINTF("   %s", v->lines[i]);
     }
     for (size_t i = 0; i < v->row_count; i++) {
+        if (v->rows[i].new_group) {
+            TEST_PRINTF("    (new group)");
+        }
         TEST_PRINTF("  %c %s | %s%s", v->list.first + i == v->list.selected ? '>' : ' ',
                     v->rows[i].label, v->rows[i].detail, v->rows[i].dim ? " (dim)" : "");
     }
@@ -2123,6 +2140,33 @@ static void test_downloading_lasts_while_the_worker_has_a_download_to_run(void) 
 }
 
 /* ---- Settings ---- */
+
+static void test_saves_is_set_apart_from_the_server_rows_in_settings(void) {
+    open_paired_library(1);
+    TEST_PRINTF("the library's rows never start a new group");
+    for (size_t i = 0; i < view()->row_count; i++) {
+        TEST_ASSERT_FALSE(view()->rows[i].new_group);
+    }
+    serve_heartbeat("5.3.1");
+    frame(SKIFF_UI_ACTION_MENU);
+    run_until(SKIFF_APP_SCREEN_SETTINGS);
+    TEST_ASSERT_EQUAL_size_t(APP_SETTINGS_ROW_COUNT, view()->row_count);
+    TEST_ASSERT_TRUE(view()->list.count <= view()->list.rows);
+    TEST_ASSERT_TRUE(shows("Server: " SERVER));
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_PAIR_AGAIN), view()->rows[1].label);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_TITLE_SAVES), view()->rows[2].label);
+    TEST_PRINTF("the server and Pair again form one group, Saves starts the next");
+    TEST_ASSERT_FALSE(view()->rows[0].new_group);
+    TEST_ASSERT_FALSE(view()->rows[1].new_group);
+    TEST_ASSERT_TRUE(view()->rows[2].new_group);
+    TEST_PRINTF("moving the selection keeps the group where it is");
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_EQUAL_size_t(2, view()->list.selected);
+    TEST_ASSERT_FALSE(view()->rows[1].new_group);
+    TEST_ASSERT_TRUE(view()->rows[2].new_group);
+    TEST_PRINTF("every other screen is checked on every frame (check_new_groups)");
+}
 
 static void test_a_new_server_stops_the_worker_and_asks_to_pair(void) {
     open_paired_library(1);
@@ -4623,6 +4667,7 @@ int main(void) {
     RUN_TEST(test_every_error_fits_under_the_downloads_list);
     RUN_TEST(test_cancel_retry_and_clear_from_the_downloads_screen);
     RUN_TEST(test_downloading_lasts_while_the_worker_has_a_download_to_run);
+    RUN_TEST(test_saves_is_set_apart_from_the_server_rows_in_settings);
     RUN_TEST(test_a_new_server_stops_the_worker_and_asks_to_pair);
     RUN_TEST(test_a_worker_that_will_not_stop_changes_nothing);
     RUN_TEST(test_an_address_without_a_scheme_is_refused);

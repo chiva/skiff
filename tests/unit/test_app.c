@@ -849,10 +849,7 @@ static void test_the_first_free_space_count_runs_off_the_screen_while_the_wifi_j
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_SETTINGS, view()->screen);
     TEST_ASSERT_EQUAL_INT(2, storage.free_space_queries);
     TEST_ASSERT_TRUE(shows("Free space"));
-    static char log_text[64 * 1024];
-    skiff_log_flush(app->log);
-    read_app_file(SKIFF_APP_LOG_FILE_NAME, log_text, sizeof log_text);
-    TEST_ASSERT_NOT_NULL(strstr(log_text, "free space: 1536 MiB in"));
+    TEST_ASSERT_EQUAL_UINT64(storage.free_bytes, app->free_bytes);
 }
 
 static void test_a_failed_free_space_count_shows_none_and_is_asked_again_later(void) {

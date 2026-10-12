@@ -29,6 +29,7 @@ as orders of magnitude.
 | Client certificate type | handshake 0.69 s with ECDSA P-256, 2.07 s with RSA-2048 | the guide recommends ECDSA P-256 ([TLS](#tls)) |
 | curl buffer, socket receive buffer | no effect beyond noise; a 128 KB receive buffer broke the network stack | defaults; never raise `SO_RCVBUF` to 128 KB |
 | How downloads write | while the Memory Stick writes, Wi-Fi data stops arriving; 64 MiB took 221 s with 128 KB writes, 160 s with 1 MiB writes, 211 s with a writer thread | 1 MiB writes on the download's thread, no writer thread ([download speed](#download-speed)) |
+| How save uploads read | S1.6: 8 MB in 68 s (123 KB/s) read 16 KB at a time, against 290 KB/s for a save download in the same session; the 0.1 s pick-up after each Memory Stick pause, 512 times, is about the 50 s lost | 1 MiB reads (`SKIFF_ROMM_UPLOAD_BUFFER_BYTES`); to measure again in S1 |
 | Integrity check | zlib CRC-32 33 MB/s, MD5 11 MB/s, SHA-1 8.2 MB/s | CRC-32 computed inline, against RomM's |
 | Warm-up after joining, WLAN Power Save | Power Save adds 100–200 ms jitter to some requests, no throughput loss | no warm-up; both settings supported |
 | Network picker | a saved profile joins without it in 7.3 s | join the profile; the picker is the fallback ([Wi-Fi](#wi-fi-and-memory)) |
@@ -384,11 +385,28 @@ only frames over 16 ms were one 33 ms frame in each of the two 10 s windows that
 confirmation and the "Added 34 downloads" message. One library page requested seconds after the
 64 MiB download started took 5.1 s (the next took 191 ms).
 
+### Save sync (S1, 2026-10-12)
+
+PSP-1000 with ARK, RomM 5.4.0 on the LAN, the **debug** EBOOT (`scripts/memstick.sh` installs
+`build/psp`, built `-O0`), an 8 MB synthetic save:
+
+| Item | Value |
+|---|---|
+| Hashing the save's folders | 8 MB in 7.8–8.3 s (about 1 MB/s: Skiff's MD5 at `-O0`; the benchmark's PSA MD5, optimised, ran 11 MB/s) |
+| Upload | 8 MB in 68 s of request (85 s with hashing and writing the unit) |
+| Download, then restore | 8 MB in 29 s, then 39 s to restore: the unit read whole three times (RomM's hash, the restore's check, the extraction), each with CRC-32 and MD5 |
+| First free-space count at launch | 3.0 s, on the screen's thread |
+
+Since: MD5 is unrolled by round (2.4 times faster on the host at `-O2`) and built `-O2` in the debug
+EBOOTs too; hashing for RomM skips the CRC-32 a zip needs; the restore checks RomM's hash on its own
+first read (the unit is read twice, not three times); uploads read 1 MiB at a time; the launch's
+free-space count runs on the browsing thread while the Wi-Fi joins. To measure again in S1.
+
 ## Open questions
 
 - ~~**Stalls while browsing.**~~ Answered: the 2.6 s frame was the first free-space query (now at
   launch, #59), and requests to RomM now run on the browsing thread (#67): no frame over 16 ms
-  while browsing on 2026-10-10. Left: the launch's free-space query, TLS start (467 ms),
+  while browsing on 2026-10-10. Left: TLS start (467 ms),
   queueing a download (up to 233 ms) and saving `config.ini` (about 110 ms, after the network
   picker and after pairing) still block a frame, and so does the free-space query a game's details
   make on the screen's thread: 6–10 ms, but 200 ms while a download writes (A2).

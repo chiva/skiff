@@ -6384,12 +6384,11 @@ static void test_claims_go_on_once_something_else_joins_the_wifi_again(void) {
     TEST_ASSERT_TRUE(env_state.online_asks <=
                      (int)(2 * CLAIM_INTERVAL / APP_SENDS_JOIN_PROBE_MS) + 1);
     TEST_ASSERT_EQUAL_size_t(1, requests_to(CLAIM_PATH));
-    TEST_PRINTF("the download worker rejoins (a PSP left on Downloads): the claim follows at its "
-                "interval");
+    TEST_PRINTF("the download worker rejoins (a PSP left on Downloads): the claim, overdue, "
+                "follows");
     env_state.online = 1;
     wait_ms(APP_SENDS_JOIN_PROBE_MS + 100);
-    TEST_ASSERT_TRUE(app->net_joined);
-    wait_for_claim();
+    run_sends();
     TEST_ASSERT_EQUAL_size_t(2, requests_to(CLAIM_PATH));
     TEST_ASSERT_TRUE(app->net_joined);
     TEST_ASSERT_EQUAL_INT(joins, env_state.net_starts);

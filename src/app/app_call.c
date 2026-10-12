@@ -76,7 +76,7 @@ static void run(void *arg) {
         break;
     }
     case CALL_BATCH_QUEUE:
-        call->err = app_batch_queue_run(call);
+        call->err = app_batch_queue_run(call->app, &call->app->batch);
         break;
     case CALL_COLLECTIONS:
         call->err = skiff_romm_list_collections(call->romm, &call->collections);

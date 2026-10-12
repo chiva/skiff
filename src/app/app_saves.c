@@ -199,6 +199,7 @@ skiff_err app_saves_forget(skiff_app *app, int server_changed) {
         return err;
     }
     reset(app);
+    saves->baseline_dirty = 0;
     skiff_saves_baseline_forget_all(saves->baseline);
     if (whole) {
         skiff_saves_baseline_forget_roms(saves->baseline);
@@ -296,6 +297,8 @@ static void prepare(skiff_app *app) {
     }
     snprintf(saves->device_id, sizeof saves->device_id, "%s", app->settings.device_id);
     saves->stale = 0;
+    saves->baseline_pending = app->saves->baseline_dirty;
+    saves->baseline_saved = 0;
     saves->baseline_error = SKIFF_OK;
 }
 
@@ -661,6 +664,9 @@ static void one_checked(skiff_app *app) {
 
 void app_saves_checked(skiff_app *app) {
     app_saves *saves = app->saves;
+    if (app->call.saves.baseline_saved) {
+        saves->baseline_dirty = 0;
+    }
     if (app->call.saves.op == SAVES_OP_CHECK_ONE) {
         one_checked(app);
         return;
@@ -692,6 +698,9 @@ void app_saves_checked(skiff_app *app) {
 
 void app_saves_applied(skiff_app *app) {
     app_saves *saves = app->saves;
+    if (app->call.saves.baseline_saved) {
+        saves->baseline_dirty = 0;
+    }
     const skiff_err err = app->call.err;
     const app_saves_call *call = &app->call.saves;
     const app_saves_origin origin = saves->running_origin;
@@ -961,7 +970,9 @@ void app_saves_rom_loaded(skiff_app *app) {
         snprintf(target, sizeof target, "%.*s", SKIFF_SAVES_TARGET_MAX, rom->save_target);
     }
     /* Kept in memory; the next save call writes saves.json with it. */
-    (void)skiff_saves_baseline_remember_rom(app->saves->baseline, rom->id, target, NULL);
+    int changed = 0;
+    (void)skiff_saves_baseline_remember_rom(app->saves->baseline, rom->id, target, &changed);
+    app->saves->baseline_dirty |= changed;
 }
 
 int app_saves_details_offered(const skiff_app *app) {

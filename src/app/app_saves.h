@@ -142,7 +142,10 @@ typedef struct app_saves_call {
     /* A transfer found the game's saves changed since its check (nothing was sent or restored):
      * check it again. */
     int stale;
-    /* The baseline could not be saved (the transfer itself happened). */
+    /* In: the baseline holds changes not saved yet (a ROM's save ID learnt from its details), so
+     * the call saves it. Out: it was saved; else why not (the transfer itself happened). */
+    int baseline_pending;
+    int baseline_saved;
     skiff_err baseline_error;
     /* A restore that failed was settled at once (skiff_saves_recover()): SKIFF_OK, 308, 309, or
      * the error that left its journal for the next launch. */
@@ -178,6 +181,8 @@ typedef struct app_saves {
     app_save_list *work;
     char labels[APP_SAVES_GAMES_MAX][SKIFF_APP_LABEL_MAX];
     skiff_ui_list list;
+    /* The baseline in memory holds what saves.json does not yet (written by the next save call). */
+    int baseline_dirty;
     /* The backup the player picked to restore. */
     uint32_t backups_pick;
     /* A check ran (the list is RomM's answer), or failed with check_error; RomM refused a save

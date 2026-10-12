@@ -4267,6 +4267,26 @@ static void test_leave_it_compares_again_when_the_save_came_back(void) {
     TEST_ASSERT_TRUE(shows("Synced"));
 }
 
+static void test_a_save_id_learnt_from_details_reaches_saves_json(void) {
+    serve_rom_with_save(ROM_UP, "Game 101", GAME_UP);
+    open_saves_library_with_rom_up();
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    frame(SKIFF_UI_ACTION_BACK);
+    skiff_saves_baseline *baseline = NULL;
+    read_baseline(&baseline);
+    TEST_ASSERT_NULL_MESSAGE(skiff_saves_baseline_rom_target(baseline, ROM_UP),
+                             "the details screen writes nothing itself");
+    skiff_saves_baseline_destroy(baseline);
+    TEST_PRINTF("the next save call writes it, though it changes nothing else");
+    open_saves_screen();
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_saves();
+    read_baseline(&baseline);
+    TEST_ASSERT_EQUAL_STRING(GAME_UP, skiff_saves_baseline_rom_target(baseline, ROM_UP));
+    skiff_saves_baseline_destroy(baseline);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_a_first_launch_asks_for_the_server_then_pairs);
@@ -4386,5 +4406,6 @@ int main(void) {
     RUN_TEST(test_a_transfer_that_ends_after_leaving_keeps_the_players_screen);
     RUN_TEST(test_a_restore_cut_mid_way_is_settled_and_stops_save_sync);
     RUN_TEST(test_leave_it_compares_again_when_the_save_came_back);
+    RUN_TEST(test_a_save_id_learnt_from_details_reaches_saves_json);
     return UNITY_END();
 }

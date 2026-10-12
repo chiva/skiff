@@ -51,6 +51,7 @@ static skiff_err save_baseline(app_call *call) {
     if (err == SKIFF_OK) {
         err = skiff_saves_baseline_save(call->saves.baseline, call->storage, path);
     }
+    call->saves.baseline_saved = err == SKIFF_OK;
     skiff_log_write(call->saves.log, err == SKIFF_OK ? SKIFF_LOG_DEBUG : SKIFF_LOG_WARN,
                     SAVES_LOG_TAG, "baseline saved, %zu game(s), %zu ROM(s): %s (%d)",
                     call->saves.baseline->count, call->saves.baseline->rom_count,
@@ -698,7 +699,7 @@ skiff_err app_saves_check_run(app_call *call) {
     const int one = call->saves.op == SAVES_OP_CHECK_ONE;
     skiff_err err = one ? check_one(call, s) : check_all(call, s);
     call->saves.baseline_error = SKIFF_OK;
-    if (s->dirty) {
+    if (s->dirty || call->saves.baseline_pending) {
         call->saves.baseline_error = save_baseline(call);
     }
     skiff_log_write(call->saves.log, err == SKIFF_OK ? SKIFF_LOG_INFO : SKIFF_LOG_WARN,
@@ -954,8 +955,10 @@ skiff_err app_saves_apply_run(app_call *call) {
     free(a);
     const int recorded =
         err == SKIFF_OK && !call->saves.stale && call->saves.op != SAVES_OP_RESTORE_BACKUP;
-    if (recorded) {
+    if (recorded || call->saves.baseline_pending) {
         call->saves.baseline_error = save_baseline(call);
+    }
+    if (recorded) {
         call->saves.game.decided = 1;
         call->saves.game.decision.action = SKIFF_SAVES_IN_SYNC;
         call->saves.game.decision.reason = SKIFF_SAVES_REASON_UNCHANGED;

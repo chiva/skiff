@@ -16,7 +16,7 @@ as orders of magnitude.
 | Console | PSP-1000 (32 MB RAM), firmware 6.61 with ARK-5, on AC power |
 | Memory Stick | 64 GB, 84% full during the resume and speed runs |
 | Wi-Fi | open access point on channel 6, signal 95–100%, WLAN Power Save off unless stated (the W7 resume runs did not record it) |
-| Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy, 5.4.0 for save sync) on a Mac on the same LAN; TCP connect ≈10 ms |
+| Server | the [test RomM](testing.md#integration-server) (RomM 5.3.1 behind Caddy, 5.4.0 for save sync and sends) on a Mac on the same LAN; TCP connect ≈10 ms |
 | Dates | 2026-10-04 to 2026-10-12 |
 
 ## Decisions at a glance
@@ -43,6 +43,7 @@ as orders of magnitude.
 | Trusted CAs | the full Mozilla bundle costs about 200 ms and 280 KB of heap per new connection | ship it whole ([the app](#the-app)) |
 | Queue and the UI | the UI waited 113 ms on the queue's lock while the worker saved the queue file | two locks: the UI's reads never wait for a save |
 | Screen during downloads | user mode can set the firmware's backlight-off time (30–120 s took); the screen went dark on battery and AC; the press that lights it reaches the program; a power cycle brings the player's time back | 60 s while downloading, the player's time after and at quit, the waking press held back ([backlight](#backlight)); the app does so (B5) |
+| How often to claim games sent from RomM | I1: an empty claim took a median 168 ms while idle (5% took 0.8–1.6 s, two about 7 s); with claims every 20 s a send was too slow to wait for | every 10 s (#108); 5 s would double the claims for 2.5 s less wait on average ([sends](#games-sent-from-romm-i1)) |
 
 ## Entropy
 
@@ -432,6 +433,49 @@ writes every byte twice. Renaming the staged files into place would halve that; 
 The UI changes from the session are in #97 and #98. The PSP's GE left a corner pixel out of the
 □ symbol drawn with lines, so button symbols are now drawn pixel by pixel.
 
+### Games sent from RomM (I1)
+
+[The app on a PSP](testing.md#the-app-on-a-psp), 2026-10-12 (row I1), the same PSP-1000: the test
+RomM 5.4.0 on the LAN with a 60-ROM library and the 64 MiB payload
+(`SKIFF_PAYLOAD_BYTES=67108864 SKIFF_LIBRARY_ROMS=60`), games sent from RomM's web UI (**Install on
+device**), `[log] level = debug`. The steps ran on the release EBOOT of `main` at 09a514e, which
+claims every 20 s; the last one (the sleep in I1.6) ran on #108's release EBOOT, which claims every
+10 s. Design: [Architecture](architecture.md#the-app).
+
+| Step | Result |
+|---|---|
+| I1.1 Listed in RomM | "Skiff on PSP" listed online (green dot) |
+| I1.2 A send from the library | queued on the next claim; header "From RomM: 1 added to Downloads", and RomM says "Added to downloads" |
+| I1.3 Sent while Skiff was closed | two sends RomM showed as "Waiting for device" came in one claim right after connecting, before save sync's check, and both installed |
+| I1.4 Refusals | the GBA ROM failed with 219 (not a PSP game), the `.zip` with the "not a disc image" reason (iso, cso, zso), an installed game "Already installed"; the header said "not added" |
+| I1.5 A send during the 64 MiB download | claimed and queued 32 s into the download, which went on |
+| I1.6 Wi-Fi switch off with nothing downloading; sleep and wake | the claim then running timed out silently (103 after 30 s, logged only) and claims paused until the player's next press joined the Wi-Fi again; the claim right after connecting brought the send. After a sleep and wake, the press joined again, and with Games from RomM back On (I1.7 had turned it Off) claims ran every 10 s and the send landed |
+| I1.6b Wi-Fi switch off during the download | the claim then running timed out silently (103 after 30 s, logged only); the worker's rejoin failed once (0x80410106) and the module reload worked; the app saw the join about 1 s later, and the next send landed without a press |
+| I1.7 Off | `remote_install: false` sent at once, and once per connection after relaunching; RomM stopped listing the PSP; no claims |
+| I1.8 Read back | no token outside `config.ini`; the browsing thread's lowest free stack 21,488 bytes, the worker's 20,336 of 32,768; 84 KB of system memory free; frames mean 16 ms, longest 33 ms but for those below |
+
+| Item | Value |
+|---|---|
+| Empty claim on the kept connection, half an hour idle on the library (92 claims) | 56–300 ms for 83% of them, median 168 ms; five took 0.8–1.6 s and two about 7 s |
+| Empty claims over the whole session (138) | median 189 ms; one more of about 7 s while idle between I1.4's sends, and three of 1.9–2.8 s during the 64 MiB download |
+| A claim that brought sends (9) | 56–708 ms |
+| From the claim to the game queued / reported to RomM | 0.2–1.5 s / 0.4–1.8 s; a refusal reported in 0.1–1.0 s |
+| Time between claims | 20.1–22.8 s on the 20 s EBOOT (the interval runs from the end of the last claim), 10.2 s on #108's |
+| 64 MiB download with sends claimed during it | about 250 KB/s leaving out the Wi-Fi outage, the same as other runs from that distance |
+
+An empty claim takes about three times a request on a kept connection in the
+[TLS](#tls) measurements (48 ms); RomM's side was not timed. The frames over 33 ms came at launch,
+when the player queued a game by hand (183 ms) or changed the Games from RomM switch (116–133 ms,
+saving `config.ini`), on the frame after waking (250–266 ms), while the worker recovered the Wi-Fi
+(93 ms), and once on the first press after waking: 2.6 s, the free-space query of a game's details
+on the screen's thread (see [open questions](#open-questions)). Sent games were queued without a
+frame over 16 ms, once 50 ms.
+
+Decision (#108): claims every 10 s. With 20 s the maintainer found a send too slow to wait for: it
+lands up to one interval and a claim after it is made. 5 s was rejected: twice the claims of 10 s
+for 2.5 s less wait on average, and the slow claims would come every few minutes. On the PSP,
+10 s was confirmed as fine.
+
 ## Open questions
 
 - ~~**Stalls while browsing.**~~ Answered: the 2.6 s frame was the first free-space query (now at
@@ -439,7 +483,8 @@ The UI changes from the session are in #97 and #98. The PSP's GE left a corner p
   while browsing on 2026-10-10. Left: TLS start (467 ms),
   queueing a download (up to 233 ms) and saving `config.ini` (about 110 ms, after the network
   picker and after pairing) still block a frame, and so does the free-space query a game's details
-  make on the screen's thread: 6–10 ms, but 200 ms while a download writes (A2).
+  make on the screen's thread: 6–10 ms, but 200 ms while a download writes (A2) and 2.6 s on the
+  first press after waking (I1).
 - **Rejoin failures.** About a third of rejoins failed (0x80410106, 0x80410D16), after a suspend
   or the Wi-Fi switch; reloading the modules straight away would save the 2–7 s a failed rejoin
   costs. Watch the app's logs.

@@ -853,7 +853,10 @@ About CHD:
 - `chdman createcd` compresses CD hunks with `cdlz` (LZMA), `cdzl` (deflate) and `cdfl` (FLAC)
   by default;
 - a CD hunk is 19,584 bytes: 8 frames of 2,448 bytes (2,352 bytes of sector plus 96 of subcode);
-  drop the subcode for the PBP;
+  drop the subcode for the PBP. A PBP carries no subchannel Q data, so a LibCrypt-protected
+  disc cannot pass its check from the image itself: POPS relies on the LibCrypt magic word at
+  PSISOIMG+0x12B0 instead, which ARK computes from the disc ID at 0x400 when the field is zero
+  (documented; we have not tested a LibCrypt title, see [Open questions](#open-questions));
 - in CHD v5 the hunk map sits at the **end** of the file, so nothing can be decoded until the end
   has arrived: a download cannot be converted as it streams in, unless the tail is fetched first;
 - `CHT2` metadata lists the tracks (type, frames, pregap). Compare your decoder's output with
@@ -1079,6 +1082,7 @@ reader and pcsx_rearmed, is a different matter: nothing of them ships.
 | A disc with no `SYSTEM.CNF`, or a non-Sony-shaped ID | homebrew discs and fallbacks | variants with `SKIF00001` and similar IDs; check the boot and the SAVEDATA folder name |
 | Deflate and stored-deflate blocks mixed in one file | a deflate writer's fallback for incompressible blocks | a variant that stores alternate blocks each way |
 | PS1 saves: can a tool write `SCEVMC0.VMP` from a raw memory card, and does POPS accept its HMAC? | save sync, importing saves | write a card image with a known save, sign it, check the game sees it |
+| LibCrypt-protected discs: does ARK's magic word (0x12B0 zero, computed from the disc ID) pass the check in an EBOOT built without subchannel data? | some PAL titles refuse to run, or misbehave later, when the check fails | a LibCrypt title the tester owns, converted locally; play past its known check point |
 | In-game load speed of stored deflate against deflate | stored files are larger, but need no inflating | time a long read in a test program, both encodings |
 | Other POPS versions, other models (2000, 3000, Go, Street), ARK-4 against ARK-5, popsloader | everything above is one PSP-1000; analysis says the table's key is the same in every 6.61 POPS module, but other firmware versions were not analysed | rerun the passing variants, M1K included, elsewhere |
 | Adrenaline on PS Vita | 2017 forum reports say uncompressed EBOOTs fail there; stored deflate is not uncompressed to a deflate reader | run T4T and T4D under Adrenaline |

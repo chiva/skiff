@@ -11,9 +11,10 @@
   must be on a network that can reach it (see [Wi-Fi](02-wifi.md#extra-safety-optional-for-people-with-a-capable-router)).
 - A RomM user that can see your PSP games. A dedicated user that can read the library and keep
   its own saves (RomM's default Viewer group) is the safest choice.
-- Your games under RomM's **PSP** platform, each one a single `.iso`, `.cso` or `.zso` file. Skiff
-  lists the others but cannot download them: a game stored as a folder of several files, or in
-  another format, says why on its details screen.
+- Your games under RomM's **PSP** platform, each one a single `.iso`, `.cso` or `.zso` file, or a
+  `.chd` file when RomM converts downloads ([below](#games-stored-as-chd)). Skiff lists the others
+  but cannot download them: a game stored as a folder of several files, or in another format, says
+  why on its details screen.
 
 ## First start
 
@@ -121,6 +122,34 @@ installed. The games themselves stay on the Memory Stick.
 - Quitting Skiff (HOME, then quit) pauses the downloads; the next start carries on where they
   stopped. After sleep mode or a Wi-Fi drop, Skiff reconnects by itself.
 
+### Games stored as CHD
+
+The PSP cannot run a `.chd` file. From Skiff 0.7.0, RomM 5.4 can convert one into a `.cso` as it
+sends it, if the server's admin turns that on (it is off by default):
+
+- set `ROM_CONVERTO_ENABLED=true` in the RomM container's environment (RomM's image includes the
+  converter, [rom-converto](https://github.com/DevYukine/rom-converto));
+- and allow converting downloads in RomM's settings (`converto.download_conversion_enabled: true`
+  in `config.yml`).
+
+Then:
+
+- A CHD game's details say **Downloads as CSO: RomM converts it first**. Skiff asks for a CSO, the
+  smallest download over the PSP's Wi-Fi, or a ZSO or ISO when RomM offers only those. Where RomM
+  does not convert downloads, the details say so instead, and the game cannot be downloaded.
+- **Downloads** shows **RomM is converting it; asking again in 30 s** while RomM converts the game:
+  a whole UMD takes RomM a few minutes, during which the PSP stays awake. You can cancel it as any
+  download. RomM keeps the converted copy for a while (a day by default), so downloading it again
+  soon starts at once.
+- The game goes to `ISO/` as a `.cso` with the CHD's name, and shows as installed; when RomM gets a
+  different CHD for it, it shows **Changed in RomM** as any game does.
+- A converted download that is interrupted starts over from the beginning: RomM 5.4.0 serves the
+  converted copy as a new version every time, so Skiff cannot safely continue it. Keep the PSP
+  charging and near the router for these.
+- **Download all** and games sent from RomM take CHD games when RomM says it converts downloads.
+  Their size is only known once RomM has converted them, so Skiff counts each one as a quarter
+  larger than its CHD when it checks the free space, and checks again when the download starts.
+
 ## Games sent from RomM
 
 From Skiff 0.5.0, with RomM 5.4 or newer, you can pick a game in RomM's web UI, on your phone or
@@ -148,7 +177,8 @@ added, 1 not added (see RomM)":
 
 - a game of another platform: RomM offers Install on device for games of any platform, but Skiff
   only installs PSP games (error 219);
-- a game Skiff cannot install: a folder of several files, or not an `.iso`, `.cso` or `.zso` file;
+- a game Skiff cannot install: a folder of several files, not an `.iso`, `.cso` or `.zso` file, or
+  a `.chd` file when RomM does not convert downloads;
 - a game Skiff installed that RomM has changed since: open it in Skiff to replace your copy;
 - a game whose download failed in Downloads: retry it there;
 - no room: Downloads holds 64 unfinished downloads, Skiff keeps track of 512 installed games, and

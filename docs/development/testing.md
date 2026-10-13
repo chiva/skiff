@@ -647,7 +647,9 @@ to the ISO). Launched, it reads a 256 KiB pattern file back from its disc, so th
 read back through the custom firmware's ISO loader (and its CSO decompression), then shows `SKIFF
 LAUNCH CHECK OK` and writes it to `result.txt` in Skiff's folder (its disc is read-only).
 `scripts/dev.sh launch-check` boots both images in PPSSPPHeadless; CI does not, because building
-the disc needs both the PSP build and the host image.
+the disc needs both the PSP build and the host image. The seed also compresses the ISO to `Skiff
+Launch Check CHD.chd` with the rom-converto RomM ships, which the test server converts back to a
+CSO when the PSP downloads it (C1, below).
 
 1. On the computer: `SKIFF_PAYLOAD_BYTES=67108864 SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp
    launch-disc romm-lan` (the disc images must exist before the seed runs).
@@ -903,6 +905,28 @@ neither the token pairing wrote nor the `X-Skiff-Test` value appears in any file
 `PSP/GAME/Skiff*` but `config.ini` (and its temporary copies).
 
 Afterwards restore Skiff's folder from the backup (`cp -RX`, then check for `._` files).
+
+**Games RomM converts (C1).** PSP games stored as CHD, which RomM converts to CSO as the PSP
+downloads them ([Architecture](architecture.md#installers-the-platform-plugin-seam)). The test
+server converts downloads (`compose.yaml`, `config.yml`), and its library holds three CHDs: `Skiff
+Launch Check CHD.chd`, made from the launch check's ISO, so the CSO rom-converto makes is launched
+for real; and the synthetic `Skiff Convert Disc.chd` and `Skiff Convert Slow.chd` (64 KiB, not
+bootable), whose conversion `rom-converto-delay.sh` holds back 20 s, so the "converting" line shows.
+**First back up Skiff's folder** as for I1. Prepare with `SKIFF_LIBRARY_ROMS=60 scripts/dev.sh psp
+launch-disc romm-lan` and `scripts/memstick.sh install`.
+
+| # | Step | Pass criteria |
+|---|---|---|
+| C1.1 | Open Skiff Launch Check CHD's details | "Downloads as CSO: RomM converts it first", and Download offered |
+| C1.2 | Download it | it downloads as `ISO/Skiff Launch Check CHD.cso`; the log has `RomM converted it to cso, <n> bytes`; the row says Installed |
+| C1.3 | XMB → Game → Memory Stick → launch it | `SKIFF LAUNCH CHECK OK`, also in `result.txt` in Skiff's folder: ARK reads the whole CSO |
+| C1.4 | Quit, launch Skiff, open the library | the launch check CHD still says Installed, not Changed in RomM |
+| C1.5 | Download Skiff Convert Slow; watch Downloads | about 15 s after it starts, "RomM is converting it; asking again in 30 s"; the next ask brings the CSO; the screen stays lit or dims as for any download, the PSP does not sleep |
+| C1.6 | Empty RomM's conversion cache (`scripts/dev.sh romm-check` does), delete the slow CSO, download Skiff Convert Slow again and cancel it on the "converting" line | cancelled at once; no `.part` file left in `ISO/` |
+| C1.7 | Again with the cache emptied: start Skiff Convert Slow, sleep the PSP on the "converting" line, wake after 10 s | the log has `rejoin` before the next ask; the CSO arrives |
+| C1.8 | Read back | `jobs:` lines (`RomM is converting it to cso`, `RomM converted it to cso`), no error screens; `scripts/memstick.sh results` |
+
+Afterwards restore Skiff's folder from the backup, and delete the three `.cso` files from `ISO/`.
 
 ## UI prototype
 

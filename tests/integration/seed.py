@@ -17,7 +17,9 @@ A2): that many small numbered ROMs (several pages), every third with a PNG cover
 Skiff Library 02 with a JPEG one; a file the app cannot install (.zip), a name with a control
 character and a name too long for the Memory Stick. Files already in the platform's folder are
 scanned too: scripts/dev.sh copies the launch check's disc images there first
-(tests/hardware/make_launch_disc.py).
+(tests/hardware/make_launch_disc.py). From its ISO the seed makes Skiff Launch Check CHD.chd, which
+RomM converts on download (compose.yaml turns that on), so the PSP launches a CSO rom-converto
+made.
 
 The admin's favourites are kept as RomM's web UI keeps them, in a private collection marked as
 favourites: the payload ROM, and with SKIFF_LIBRARY_ROMS also the first LIBRARY_FAVOURITES numbered
@@ -137,6 +139,10 @@ CONVERT_DISCS = (
 CONVERT_DISC_SECTORS = 32
 CONVERT_NOISE_SECTORS = 4
 CONVERT_SEED = b"skiff-integration-convert"
+# The launch check's disc (scripts/dev.sh copies it in), and the CHD made of it for the PSP to get
+# converted.
+LAUNCH_ISO_NAME = "Skiff Launch Check.iso"
+LAUNCH_CHD_NAME = "Skiff Launch Check CHD.chd"
 # The rom-converto RomM ships, by its own path: rom-converto-delay.sh stands in front of it on PATH.
 ROM_CONVERTO = "/usr/bin/rom-converto"
 # What RomM must offer a converted disc's download as (DetailedRomSchema.download_formats).
@@ -349,11 +355,20 @@ def write_convert_disc(name, disc_id):
     )
     image[noise_at : noise_at + len(noise)] = noise
     chd_name = f"{name}.chd"
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
         iso = Path(work) / f"{name}.iso"
-        chd = Path(work) / chd_name
         iso.write_bytes(bytes(image))
+        compress_to_chd(iso, chd_name)
+    stored = hashes((LIBRARY_DIR / chd_name).read_bytes())
+    return {"file_name": chd_name, **stored, "iso": hashes(bytes(image))}
+
+
+def compress_to_chd(iso, chd_name):
+    """The disc image at iso compressed to a DVD-mode CHD named chd_name in the platform's folder,
+    by the rom-converto RomM ships."""
+    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as work:
+        chd = Path(work) / chd_name
         subprocess.run(
             [ROM_CONVERTO, "--no-update-check", "chd", "compress", "--dvd", "--quiet", str(iso),
              str(chd)],
@@ -363,8 +378,6 @@ def write_convert_disc(name, disc_id):
             timeout=CONVERT_TIMEOUT_SECONDS,
         )
         shutil.move(chd, LIBRARY_DIR / chd_name)
-    stored = hashes((LIBRARY_DIR / chd_name).read_bytes())
-    return {"file_name": chd_name, **stored, "iso": hashes(bytes(image))}
 
 
 def convert_discs(auth, cookie):
@@ -657,6 +670,9 @@ def write_library(count):
     for name in (UNSUPPORTED_NAME, CONTROL_NAME, LONG_NAME):
         write_payload(SPECIAL_BYTES, name, LIBRARY_SEED + name.encode())
         names.append(name)
+    if (LIBRARY_DIR / LAUNCH_ISO_NAME).is_file():
+        compress_to_chd(LIBRARY_DIR / LAUNCH_ISO_NAME, LAUNCH_CHD_NAME)
+        log(f"launch check: {LAUNCH_CHD_NAME} made from {LAUNCH_ISO_NAME}")
     return names
 
 

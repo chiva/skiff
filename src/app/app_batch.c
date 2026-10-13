@@ -113,9 +113,13 @@ app_batch_outcome app_batch_take(skiff_app *app, app_batch *batch,
         }
     }
     /* An empty file is refused by the queue, and would take the whole batch down with it. */
+    const skiff_install_support support = skiff_install_check(app->installer, rom, &rom->file);
+    /* A game stored as CHD comes converted when the heartbeat says RomM converts downloads: a
+     * list has no download_formats, and a RomM that will not convert it fails its job (221). */
     const int installable =
         rom->has_file && rom->file.size > 0 && rom->file.size <= SKIFF_STORAGE_MAX_FILE_BYTES &&
-        skiff_install_check(app->installer, rom, &rom->file) == SKIFF_INSTALL_SUPPORTED;
+        (support == SKIFF_INSTALL_SUPPORTED ||
+         (support == SKIFF_INSTALL_NEEDS_CONVERSION && app->server.conversion_enabled));
     if (!installable) {
         batch->refused++;
         return OUTCOME_REFUSED;
@@ -143,6 +147,11 @@ app_batch_outcome app_batch_take(skiff_app *app, app_batch *batch,
         batch->over_records++;
         return OUTCOME_OVER_RECORDS;
     }
+    /* A CHD comes as a CSO, whose size only its download tells: reckoned (the first format the
+     * installer asks for, as the queue run plans it). */
+    batch->game_bytes[batch->count] = skiff_install_expected_bytes(
+        rom->file.size,
+        skiff_install_format_for(app->installer, rom->file.file_name, SKIFF_INSTALL_ANY_FORMAT));
     batch->games[batch->count++] = *rom;
     return OUTCOME_TAKEN;
 }
@@ -184,15 +193,15 @@ static void fit_space(app_batch *batch) {
     batch->bytes = 0;
     if (!batch->free_known) {
         for (size_t i = 0; i < batch->count; i++) {
-            batch->bytes += batch->games[i].file.size;
+            batch->bytes += batch->game_bytes[i];
         }
         return;
     }
     const uint64_t reserved = batch->pending_bytes + SKIFF_STORAGE_FREE_MARGIN_BYTES;
     const uint64_t room = batch->free_bytes > reserved ? batch->free_bytes - reserved : 0;
     size_t fits = 0;
-    while (fits < batch->count && batch->games[fits].file.size <= room - batch->bytes) {
-        batch->bytes += batch->games[fits].file.size;
+    while (fits < batch->count && batch->game_bytes[fits] <= room - batch->bytes) {
+        batch->bytes += batch->game_bytes[fits];
         fits++;
     }
     batch->over_space = batch->count - fits;
@@ -369,8 +378,11 @@ skiff_err app_batch_queue_run(skiff_app *app, app_batch *batch) {
     for (size_t i = 0; i < batch->count; i++) {
         const skiff_romm_rom_summary *rom = &batch->games[i];
         skiff_install_plan *plan = &batch->plans[i];
+        /* The first format the installer asks for: only the heartbeat said RomM converts. */
+        const skiff_romm_format format =
+            skiff_install_format_for(app->installer, rom->file.file_name, SKIFF_INSTALL_ANY_FORMAT);
         const skiff_err planned =
-            skiff_install_plan_download(app->installer, rom, &rom->file, &app->config.roots,
+            skiff_install_plan_download(app->installer, rom, &rom->file, format, &app->config.roots,
                                         snapshot, app->config.storage, promised, &promise, plan);
         batch->planned[i] = planned == SKIFF_OK;
         batch->plan_errors[i] = planned;
@@ -384,6 +396,7 @@ skiff_err app_batch_queue_run(skiff_app *app, app_batch *batch) {
             .rom_id = rom->id,
             .title = app_rom_name(rom),
             .file_name = rom->file.file_name,
+            .format = format,
             .target = plan->path,
             .size = rom->file.size,
             .has_crc32 = rom->file.has_crc32,

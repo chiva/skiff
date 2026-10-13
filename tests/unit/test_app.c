@@ -2120,6 +2120,133 @@ static void test_a_changed_game_and_a_hand_copy(void) {
     TEST_ASSERT_NOT_NULL(strstr(jobs[0].target, "Game 2 [2].iso"));
 }
 
+/* ---- Games RomM converts ---- */
+
+/* ROM id's details as a game stored as CHD, RomM offering it converted into formats (a JSON list's
+ * contents: "\"cso\",\"iso\"", or "" for none). */
+static void serve_chd_rom(unsigned id, const char *formats) {
+    char raw[2048];
+    snprintf(raw, sizeof raw,
+             JSON_OK
+             "{\"id\":%u,\"platform_id\":1,\"name\":\"Game %u\",\"fs_name\":\"Game %u.chd\","
+             "\"fs_size_bytes\":%u,\"crc_hash\":\"%08x\",\"files\":[{\"rom_id\":%u,"
+             "\"file_name\":\"Game %u.chd\",\"file_size_bytes\":%u,\"crc_hash\":\"%08x\"}],"
+             "\"download_formats\":[%s]}",
+             id, id, id, BODY_BYTES, (unsigned)body_crc, id, id, BODY_BYTES, (unsigned)body_crc,
+             formats);
+    char path[64];
+    snprintf(path, sizeof path, "/api/roms/%u", id);
+    serve_raw(path, raw);
+}
+
+/* A CSO of one sector, as RomM converts Game <id>.chd into: header, two index entries, the sector
+ * stored as it is. */
+#define CONVERTED_CSO_BYTES (24U + 8U + 2048U)
+static void serve_converted_content(unsigned id) {
+    static char raw[CONVERTED_CSO_BYTES + 256];
+    static const unsigned char HEADER[] = {'C', 'I', 'S', 'O', 24, 0,    0,    0, 0, 8, 0,
+                                           0,   0,   0,   0,   0,  0,    8,    0, 0, 1, 0,
+                                           0,   0,   32,  0,   0,  0x80, 0x20, 8, 0, 0};
+    const int used =
+        snprintf(raw, sizeof raw, "HTTP/1.1 200 OK\r\nETag: \"c1\"\r\nContent-Length: %u\r\n\r\n",
+                 CONVERTED_CSO_BYTES);
+    memset(raw + used, 0, CONVERTED_CSO_BYTES);
+    memcpy(raw + used, HEADER, sizeof HEADER);
+    char path[96];
+    snprintf(path, sizeof path, "/api/roms/%u/content/Game%%20%u.chd?format=cso", id, id);
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&transport, path, raw, (size_t)used + CONVERTED_CSO_BYTES));
+}
+
+static void test_a_chd_downloads_as_a_cso_romm_converts(void) {
+    open_paired_library(1);
+    serve_chd_rom(1, "\"cso\",\"iso\",\"zso\"");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    print_view();
+    TEST_ASSERT_TRUE(shows("Downloads as CSO: RomM converts it first"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD)));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_CSO, jobs[0].format);
+    TEST_ASSERT_EQUAL_STRING("Game 1.chd", jobs[0].file_name);
+    assert_job_target(&jobs[0], 1, "ISO/Game 1.cso");
+    TEST_PRINTF("the worker downloads the CSO; installed.json keeps RomM's CHD as its source");
+    serve_converted_content(1);
+    run_worker_once();
+    char manifest[RAW_MAX];
+    read_app_file(SKIFF_INSTALL_MANIFEST_NAME, manifest, sizeof manifest);
+    TEST_PRINTF("installed.json: %s", manifest);
+    TEST_ASSERT_NOT_NULL(strstr(manifest, "\"path\":\"games:/Game 1.cso\""));
+    char size[32];
+    snprintf(size, sizeof size, "\"size\":%u,", CONVERTED_CSO_BYTES);
+    TEST_ASSERT_NOT_NULL(strstr(manifest, size));
+    char source[64];
+    snprintf(source, sizeof source, "\"source\":{\"size\":%u,\"crc32\":\"%08x\"}", BODY_BYTES,
+             (unsigned)body_crc);
+    TEST_ASSERT_NOT_NULL(strstr(manifest, source));
+    frame(0);
+    TEST_PRINTF("the library compares RomM's file with the source: installed, not changed");
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_INSTALLED), view()->rows[0].detail);
+}
+
+static void test_a_chd_romm_will_not_convert_says_why(void) {
+    open_paired_library(1);
+    serve_chd_rom(1, "");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    print_view();
+    TEST_ASSERT_FALSE(shows("Downloads as CSO: RomM converts it first"));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD)));
+    TEST_ASSERT_EQUAL_INT(SKIFF_TEXT_INSTALL_NO_CONVERSION, app_details_refusal(app));
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(0, list_jobs(jobs));
+    TEST_PRINTF("a game sent from RomM's web UI says the same");
+    TEST_ASSERT_EQUAL_INT(SKIFF_TEXT_INSTALL_NO_CONVERSION,
+                          app_install_support_text(SKIFF_INSTALL_NEEDS_CONVERSION));
+}
+
+static void test_download_all_takes_a_chd_when_romm_converts(void) {
+    open_paired_library(1);
+    const skiff_romm_rom_summary chd = listed_game(4, "Game 4.chd", BODY_BYTES);
+    app_batch *own = calloc(1, sizeof *own);
+    TEST_ASSERT_NOT_NULL(own);
+    app_batch_reset(app, own);
+    TEST_PRINTF("the heartbeat says nothing of conversion: the CHD is left out, and dimmed");
+    TEST_ASSERT_FALSE(app_rom_downloadable(app, &chd));
+    TEST_ASSERT_EQUAL_INT(OUTCOME_REFUSED, app_batch_take(app, own, &chd));
+    TEST_PRINTF("RomM converts downloads: the CHD comes as a CSO");
+    app->server.conversion_enabled = 1;
+    TEST_ASSERT_TRUE(app_rom_downloadable(app, &chd));
+    app_batch_reset(app, own);
+    TEST_ASSERT_EQUAL_INT(OUTCOME_TAKEN, app_batch_take(app, own, &chd));
+    TEST_PRINTF("room for the CHD but not the CSO it is reckoned to become: left out");
+    const uint64_t reckoned = skiff_install_expected_bytes(BODY_BYTES, SKIFF_ROMM_FORMAT_CSO);
+    TEST_ASSERT_GREATER_THAN_UINT64(BODY_BYTES, reckoned);
+    app_batch_fit(app, own, SKIFF_OK, SKIFF_STORAGE_FREE_MARGIN_BYTES + reckoned - 1);
+    TEST_ASSERT_EQUAL_size_t(0, own->count);
+    TEST_ASSERT_EQUAL_size_t(1, own->over_space);
+    app_batch_reset(app, own);
+    TEST_ASSERT_EQUAL_INT(OUTCOME_TAKEN, app_batch_take(app, own, &chd));
+    app_batch_fit(app, own, SKIFF_OK, SKIFF_STORAGE_FREE_MARGIN_BYTES + reckoned);
+    TEST_ASSERT_EQUAL_size_t(1, own->count);
+    TEST_ASSERT_EQUAL_UINT64(reckoned, own->bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, app_batch_queue_run(app, own));
+    TEST_ASSERT_EQUAL_size_t(1, own->added);
+    TEST_PRINTF("and the queued CSO keeps that much aside for the next batch");
+    app_queue_refresh(app);
+    TEST_ASSERT_EQUAL_UINT64(reckoned, app_queue_unfinished_bytes(app));
+    free(own);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    TEST_ASSERT_EQUAL_size_t(1, list_jobs(jobs));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_CSO, jobs[0].format);
+    assert_job_target(&jobs[0], 4, "ISO/Game 4.cso");
+}
+
 /* Clear of every ROM id the library and the favourites use. */
 #define QUEUED_ID_BASE 1000
 static void write_full_queue(void) {
@@ -7499,6 +7626,9 @@ int main(void) {
     RUN_TEST(test_a_batch_of_its_own_sorts_and_queues_apart_from_download_all);
     RUN_TEST(test_a_download_is_queued_into_the_iso_folder);
     RUN_TEST(test_a_finished_download_shows_as_installed);
+    RUN_TEST(test_a_chd_downloads_as_a_cso_romm_converts);
+    RUN_TEST(test_a_chd_romm_will_not_convert_says_why);
+    RUN_TEST(test_download_all_takes_a_chd_when_romm_converts);
     RUN_TEST(test_a_changed_game_and_a_hand_copy);
     RUN_TEST(test_a_full_queue_shows_its_hint);
     RUN_TEST(test_a_full_installed_list_shows_its_hint);

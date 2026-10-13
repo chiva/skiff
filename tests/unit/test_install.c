@@ -33,6 +33,8 @@ static const skiff_installer *psp;
 static skiff_romm_rom_summary rom;
 static skiff_romm_file file;
 static skiff_install_plan plan;
+/* The format plan_with() asks for. */
+static skiff_romm_format format;
 
 void setUp(void) {
     TEST_ASSERT_EQUAL_INT(0, temp_dir_create(dir, sizeof dir));
@@ -58,6 +60,7 @@ void setUp(void) {
     snprintf(file.file_name, sizeof file.file_name, "Game.iso");
     file.size = GAME_SIZE;
     memset(&plan, 0xAB, sizeof plan);
+    format = SKIFF_ROMM_FORMAT_STORED;
 }
 
 void tearDown(void) {
@@ -107,9 +110,10 @@ static int queued_game_iso(void *ctx, const char *logical) {
 }
 
 static skiff_err plan_with(skiff_install_taken_fn taken) {
-    const skiff_err err = skiff_install_plan_download(psp, &rom, &file, &roots, manifest,
+    const skiff_err err = skiff_install_plan_download(psp, &rom, &file, format, &roots, manifest,
                                                       &storage.base, taken, NULL, &plan);
-    TEST_PRINTF("plan %s -> %s: %s (renamed %d, replaces own %d)", file.file_name,
+    TEST_PRINTF("plan %s as %s -> %s: %s (renamed %d, replaces own %d)", file.file_name,
+                format == SKIFF_ROMM_FORMAT_STORED ? "stored" : skiff_romm_format_name(format),
                 skiff_err_name(err), plan.logical_path, plan.renamed, plan.replaces_own);
     return err;
 }
@@ -340,17 +344,126 @@ static void test_an_unreadable_memory_stick_stops_the_plan(void) {
 
 static void test_planning_refuses_null_arguments(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_install_plan_download(NULL, &rom, &file, &roots, manifest,
-                                                      &storage.base, NULL, NULL, &plan));
+                          skiff_install_plan_download(NULL, &rom, &file, SKIFF_ROMM_FORMAT_STORED,
+                                                      &roots, manifest, &storage.base, NULL, NULL,
+                                                      &plan));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_install_plan_download(psp, &rom, &file, &roots, NULL, &storage.base,
-                                                      NULL, NULL, &plan));
-    TEST_ASSERT_EQUAL_INT(
-        SKIFF_ERR_INVALID_ARG,
-        skiff_install_plan_download(psp, &rom, &file, &roots, manifest, NULL, NULL, NULL, &plan));
+                          skiff_install_plan_download(psp, &rom, &file, SKIFF_ROMM_FORMAT_STORED,
+                                                      &roots, NULL, &storage.base, NULL, NULL,
+                                                      &plan));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_install_plan_download(psp, &rom, &file, &roots, manifest,
-                                                      &storage.base, NULL, NULL, NULL));
+                          skiff_install_plan_download(psp, &rom, &file, SKIFF_ROMM_FORMAT_STORED,
+                                                      &roots, manifest, NULL, NULL, NULL, &plan));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
+                          skiff_install_plan_download(psp, &rom, &file, SKIFF_ROMM_FORMAT_STORED,
+                                                      &roots, manifest, &storage.base, NULL, NULL,
+                                                      NULL));
+}
+
+/* ---- Games RomM converts ---- */
+
+/* rom and file as RomM lists a game stored as CHD. */
+static void stored_as_chd(void) {
+    snprintf(rom.fs_name, sizeof rom.fs_name, "Game.chd");
+    snprintf(file.file_name, sizeof file.file_name, "Game.chd");
+}
+
+static void test_a_chd_needs_romm_to_convert_it(void) {
+    stored_as_chd();
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_NEEDS_CONVERSION, skiff_install_check(psp, &rom, &file));
+    snprintf(file.file_name, sizeof file.file_name, "Game.CHD");
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_NEEDS_CONVERSION, skiff_install_check(psp, &rom, &file));
+    TEST_PRINTF("a PSP .pbp is not converted: homebrew and store games belong in PSP/GAME");
+    snprintf(file.file_name, sizeof file.file_name, "EBOOT.PBP");
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_UNKNOWN_EXTENSION, skiff_install_check(psp, &rom, &file));
+}
+
+typedef struct format_case {
+    const char *file_name;
+    unsigned offered;
+    skiff_romm_format expected;
+} format_case;
+
+#define OFFERS(format) (1U << (unsigned)(format))
+
+static void test_the_format_asked_for_is_the_first_romm_offers(void) {
+    static const format_case CASES[] = {
+        {"Game.chd", SKIFF_INSTALL_ANY_FORMAT, SKIFF_ROMM_FORMAT_CSO},
+        {"Game.chd", OFFERS(SKIFF_ROMM_FORMAT_ISO) | OFFERS(SKIFF_ROMM_FORMAT_ZSO),
+         SKIFF_ROMM_FORMAT_ZSO},
+        {"Game.chd", OFFERS(SKIFF_ROMM_FORMAT_ISO), SKIFF_ROMM_FORMAT_ISO},
+        {"Game.chd", 0, SKIFF_ROMM_FORMAT_STORED},
+        {"Game.chd", OFFERS(SKIFF_ROMM_FORMAT_STORED), SKIFF_ROMM_FORMAT_STORED},
+        {"Game.iso", SKIFF_INSTALL_ANY_FORMAT, SKIFF_ROMM_FORMAT_STORED},
+        {"Game.zip", SKIFF_INSTALL_ANY_FORMAT, SKIFF_ROMM_FORMAT_STORED},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        const skiff_romm_format got =
+            skiff_install_format_for(psp, CASES[i].file_name, CASES[i].offered);
+        TEST_PRINTF("%s offered 0x%x -> %d", CASES[i].file_name, CASES[i].offered, (int)got);
+        TEST_ASSERT_EQUAL_INT(CASES[i].expected, got);
+    }
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_STORED,
+                          skiff_install_format_for(NULL, "Game.chd", SKIFF_INSTALL_ANY_FORMAT));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_STORED,
+                          skiff_install_format_for(psp, NULL, SKIFF_INSTALL_ANY_FORMAT));
+}
+
+static void test_a_converted_file_is_reckoned_larger_than_romms(void) {
+    TEST_ASSERT_EQUAL_UINT64(1000, skiff_install_expected_bytes(1000, SKIFF_ROMM_FORMAT_STORED));
+    TEST_ASSERT_EQUAL_UINT64(1250, skiff_install_expected_bytes(1000, SKIFF_ROMM_FORMAT_CSO));
+    TEST_ASSERT_EQUAL_UINT64(1250, skiff_install_expected_bytes(1000, SKIFF_ROMM_FORMAT_ISO));
+    TEST_PRINTF("never more than FAT32 holds, and no overflow on the way");
+    TEST_ASSERT_EQUAL_UINT64(
+        SKIFF_STORAGE_MAX_FILE_BYTES,
+        skiff_install_expected_bytes(SKIFF_STORAGE_MAX_FILE_BYTES, SKIFF_ROMM_FORMAT_CSO));
+    TEST_ASSERT_EQUAL_UINT64(SKIFF_STORAGE_MAX_FILE_BYTES,
+                             skiff_install_expected_bytes(UINT64_MAX, SKIFF_ROMM_FORMAT_ZSO));
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX,
+                             skiff_install_expected_bytes(UINT64_MAX, SKIFF_ROMM_FORMAT_STORED));
+}
+
+static void test_a_converted_game_is_named_by_its_format(void) {
+    stored_as_chd();
+    format = SKIFF_ROMM_FORMAT_CSO;
+    assert_planned("games:/Game.cso", 0, 0);
+    format = SKIFF_ROMM_FORMAT_ISO;
+    assert_planned("games:/Game.iso", 0, 0);
+    TEST_PRINTF("a CSO copied there by hand is never replaced");
+    format = SKIFF_ROMM_FORMAT_CSO;
+    put_file_of("games:/Game.cso", 3);
+    assert_planned("games:/Game [12].cso", 1, 0);
+}
+
+static void test_a_format_the_file_does_not_take_is_refused(void) {
+    stored_as_chd();
+    TEST_PRINTF("a CHD as stored: the PSP cannot run it");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, plan_download());
+    TEST_ASSERT_EQUAL_STRING("", plan.logical_path);
+    TEST_PRINTF("an ISO converted: Skiff downloads it as RomM stores it");
+    snprintf(file.file_name, sizeof file.file_name, "Game.iso");
+    format = SKIFF_ROMM_FORMAT_CSO;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, plan_download());
+    TEST_PRINTF("a CHD as a format out of range");
+    stored_as_chd();
+    format = SKIFF_ROMM_FORMAT_COUNT;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, plan_download());
+}
+
+static void test_skiffs_converted_copy_is_replaced_in_its_format_only(void) {
+    stored_as_chd();
+    skiff_install_record record = record_of(ROM_ID, "Game.chd", "games:/Game.cso");
+    record.size = 5;
+    record.has_source = 1;
+    record.source_size = GAME_SIZE;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    put_file_of("games:/Game.cso", 5);
+    format = SKIFF_ROMM_FORMAT_CSO;
+    assert_planned("games:/Game.cso", 0, 1);
+    TEST_ASSERT_EQUAL_UINT64(5, plan.own_size);
+    TEST_PRINTF("asked for as ZSO, the CSO is not a copy of that: it stays");
+    format = SKIFF_ROMM_FORMAT_ZSO;
+    assert_planned("games:/Game.zso", 0, 0);
 }
 
 /* ---- Library status ---- */
@@ -832,6 +945,12 @@ int main(void) {
     RUN_TEST(test_a_long_name_is_shortened_between_characters_to_fit_the_id);
     RUN_TEST(test_an_unreadable_memory_stick_stops_the_plan);
     RUN_TEST(test_planning_refuses_null_arguments);
+    RUN_TEST(test_a_chd_needs_romm_to_convert_it);
+    RUN_TEST(test_the_format_asked_for_is_the_first_romm_offers);
+    RUN_TEST(test_a_converted_file_is_reckoned_larger_than_romms);
+    RUN_TEST(test_a_converted_game_is_named_by_its_format);
+    RUN_TEST(test_a_format_the_file_does_not_take_is_refused);
+    RUN_TEST(test_skiffs_converted_copy_is_replaced_in_its_format_only);
     RUN_TEST(test_the_library_shows_installed_and_changed_games);
     RUN_TEST(test_the_manifest_round_trips_through_the_memory_stick);
     RUN_TEST(test_a_converted_record_round_trips_with_its_source);

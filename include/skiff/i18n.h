@@ -168,6 +168,13 @@ typedef enum skiff_language {
       "Skiff can't install this file: PSP games must be .iso, .cso or .zso files",                 \
       "Skiff no puede instalar este archivo: los juegos de PSP deben ser archivos .iso, .cso o "   \
       ".zso")                                                                                      \
+    X(SKIFF_TEXT_INSTALL_NO_CONVERSION, 0,                                                         \
+      "This RomM doesn't convert this file for the PSP; its admin can turn on download "           \
+      "conversion",                                                                                \
+      "Este RomM no convierte este archivo para la PSP; su administrador puede activar la "        \
+      "conversión de descargas")                                                                   \
+    X(SKIFF_TEXT_DETAILS_CONVERTED, 1, "Downloads as {1}: RomM converts it first",                 \
+      "Se descarga como {1}: RomM lo convierte antes")                                             \
     X(SKIFF_TEXT_CONFIRM_REPLACE, 0,                                                               \
       "This game is already installed. Replace your installed copy?",                              \
       "Este juego ya está instalado. ¿Quieres sustituir la copia instalada?")                      \

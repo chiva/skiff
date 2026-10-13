@@ -349,7 +349,10 @@ static skiff_install_support support_of(const skiff_app *app, const skiff_romm_r
 }
 
 int app_rom_downloadable(const skiff_app *app, const skiff_romm_rom_summary *rom) {
-    return support_of(app, rom, NULL) == SKIFF_INSTALL_SUPPORTED;
+    const skiff_install_support support = support_of(app, rom, NULL);
+    /* A list has no download_formats: the heartbeat says whether RomM may convert it. */
+    return support == SKIFF_INSTALL_SUPPORTED ||
+           (support == SKIFF_INSTALL_NEEDS_CONVERSION && app->server.conversion_enabled);
 }
 
 void app_rom_detail(skiff_app *app, const skiff_romm_rom_summary *rom, char *out, size_t size) {
@@ -526,11 +529,22 @@ skiff_text_id app_install_support_text(skiff_install_support support) {
         return SKIFF_TEXT_INSTALL_MULTIPLE_FILES;
     case SKIFF_INSTALL_UNUSABLE_NAME:
         return SKIFF_TEXT_NAME_UNSUPPORTED;
+    case SKIFF_INSTALL_NEEDS_CONVERSION:
+        return SKIFF_TEXT_INSTALL_NO_CONVERSION;
     case SKIFF_INSTALL_UNKNOWN_EXTENSION:
     case SKIFF_INSTALL_SUPPORTED:
         break;
     }
     return SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION;
+}
+
+/* The format the details' game downloads in: RomM converts it into the first of the installer's
+ * formats its details offer; SKIFF_ROMM_FORMAT_STORED for a file downloaded as stored, or none. */
+skiff_romm_format app_details_format(const skiff_app *app) {
+    const skiff_romm_file *file = only_file(&app->rom);
+    return file != NULL ? skiff_install_format_for(app->installer, file->file_name,
+                                                   app->rom.download_formats)
+                        : SKIFF_ROMM_FORMAT_STORED;
 }
 
 skiff_text_id app_details_refusal(const skiff_app *app) {
@@ -542,6 +556,10 @@ skiff_text_id app_details_refusal(const skiff_app *app) {
         return SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION;
     }
     const skiff_install_support support = support_of(app, &app->rom.summary, file);
+    if (support == SKIFF_INSTALL_NEEDS_CONVERSION &&
+        app_details_format(app) != SKIFF_ROMM_FORMAT_STORED) {
+        return SKIFF_TEXT_COUNT;
+    }
     return support == SKIFF_INSTALL_SUPPORTED ? SKIFF_TEXT_COUNT
                                               : app_install_support_text(support);
 }
@@ -564,11 +582,12 @@ static int promised(void *ctx, const char *logical_path) {
 
 static void queue_download(skiff_app *app) {
     const skiff_romm_file *file = only_file(&app->rom);
+    const skiff_romm_format format = app_details_format(app);
     skiff_install_plan plan;
     app_lock_manifest(app);
-    skiff_err err =
-        skiff_install_plan_download(app->installer, &app->rom.summary, file, &app->config.roots,
-                                    app->manifest, app->config.storage, promised, app, &plan);
+    skiff_err err = skiff_install_plan_download(app->installer, &app->rom.summary, file, format,
+                                                &app->config.roots, app->manifest,
+                                                app->config.storage, promised, app, &plan);
     app_unlock_manifest(app);
     char games[SKIFF_STORAGE_PATH_MAX];
     if (err == SKIFF_OK) {
@@ -584,6 +603,7 @@ static void queue_download(skiff_app *app) {
             .rom_id = app->rom.summary.id,
             .title = app_rom_name(&app->rom.summary),
             .file_name = file->file_name,
+            .format = format,
             .target = plan.path,
             .size = file->size,
             .has_crc32 = file->has_crc32,

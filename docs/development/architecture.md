@@ -845,13 +845,23 @@ An installer maps a RomM platform to where its games go:
 typedef struct skiff_installer {
     const char *romm_platform_slug;     /* "psp" */
     const char *const *extensions;      /* {".iso", ".cso", ".zso", NULL} */
+    const char *const *convert_extensions;      /* {".chd", NULL}: RomM converts them */
+    const skiff_romm_format *convert_formats;   /* CSO, ZSO, ISO, then STORED: by preference */
     const char *target_dir;             /* "games:", which is <device>/ISO */
     skiff_err (*post_install)(const char *installed_path); /* optional */
 } skiff_installer;
 ```
 
 The first release registers one installer, PSP: `psp` → `.iso`, `.cso`, `.zso` (any case) →
-`games:`, which is `<device>/ISO` (`src/install/install.c`). PS1 and emulated systems are new
+`games:`, which is `<device>/ISO` (`src/install/install.c`). A PSP game stored as `.chd`, which
+the PSP cannot run, is installable when RomM converts downloads (RomM 5.4, `?format=`):
+`skiff_install_check()` says `SKIFF_INSTALL_NEEDS_CONVERSION`, and `skiff_install_format_for()`
+picks the first of CSO (the smallest download over the PSP's Wi-Fi), ZSO and ISO that RomM offers.
+The details screen knows what RomM offers (the ROM's `download_formats`) and says "Downloads as
+CSO: RomM converts it first", or why it cannot be downloaded; lists, Download all and games sent
+from RomM go by the heartbeat's `CONVERTO.ENABLED` and ask for CSO (a RomM that will not convert
+one fails its download with 221). The file is named after the format (`Game.chd` →
+`games:/Game.cso`), and Skiff's own converted copy keeps its place only in that format. PS1 and emulated systems are new
 table entries; see [Adding a platform](adding-a-platform.md). A ROM that is a folder of several
 files, a file with another extension, or a name RomM gives in a way Skiff cannot use
 (`skiff_romm_name_status`) is listed but not installable, with the reason the UI shows.

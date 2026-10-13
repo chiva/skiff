@@ -978,6 +978,23 @@ _Static_assert(SKIFF_APP_BLOCK_GAP + APP_DETAILS_NAME_LINES * SKIFF_APP_HEADING_
                    SKIFF_APP_BODY_HEIGHT,
                "the name, the file name, the facts, the state and the free space fit the body");
 
+/* "Downloads as CSO: RomM converts it first" for a game RomM converts; 0 for one it does not. */
+static int conversion_line(const skiff_app *app, char *out) {
+    const char *name = skiff_romm_format_name(app_details_format(app));
+    if (name == NULL) {
+        return 0;
+    }
+    char upper[8];
+    size_t i = 0;
+    for (; name[i] != '\0' && i + 1 < sizeof upper; i++) {
+        upper[i] = (char)(name[i] >= 'a' && name[i] <= 'z' ? name[i] - 'a' + 'A' : name[i]);
+    }
+    upper[i] = '\0';
+    const char *args[] = {upper};
+    app_format(app, SKIFF_TEXT_DETAILS_CONVERTED, args, 1, out);
+    return 1;
+}
+
 static void details_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_DETAILS));
@@ -1000,10 +1017,13 @@ static void details_view(skiff_app *app) {
     const skiff_text_id refusal = app_details_refusal(app);
     char detail[SKIFF_APP_DETAIL_MAX];
     app_rom_detail(app, rom, detail, sizeof detail);
+    char converted[SKIFF_TEXT_MAX];
     if (refusal != SKIFF_TEXT_COUNT) {
         add_text_within(app, refusal, width);
     } else if (detail[0] != '\0') {
         add_wrapped_within(app, detail, width);
+    } else if (conversion_line(app, converted)) {
+        add_wrapped_within(app, converted, width);
     }
     char save[SKIFF_TEXT_MAX];
     if (app_saves_details_line(app, save)) {

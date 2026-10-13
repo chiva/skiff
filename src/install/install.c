@@ -15,10 +15,16 @@
 #define UTF8_CONTINUATION 0x80U
 
 static const char *const PSP_EXTENSIONS[] = {".iso", ".cso", ".zso", NULL};
+/* A PSP game stored as CHD, which the PSP cannot run: RomM converts it, to CSO first (the smallest
+ * download over the PSP's Wi-Fi), else ZSO, else ISO. */
+static const char *const PSP_CONVERT_EXTENSIONS[] = {".chd", NULL};
+static const skiff_romm_format PSP_CONVERT_FORMATS[] = {
+    SKIFF_ROMM_FORMAT_CSO, SKIFF_ROMM_FORMAT_ZSO, SKIFF_ROMM_FORMAT_ISO, SKIFF_ROMM_FORMAT_STORED};
 
 /* One entry per platform Skiff installs (docs/development/adding-a-platform.md). */
 static const skiff_installer INSTALLERS[] = {
-    {"psp", PSP_EXTENSIONS, SKIFF_STORAGE_ROOT_GAMES, NULL},
+    {"psp", PSP_EXTENSIONS, PSP_CONVERT_EXTENSIONS, PSP_CONVERT_FORMATS, SKIFF_STORAGE_ROOT_GAMES,
+     NULL},
 };
 
 static char ascii_lower(char c) {
@@ -55,9 +61,11 @@ static const char *extension_of(const char *name) {
     return dot != NULL && dot != name ? dot : name + strlen(name);
 }
 
-static int has_extension(const skiff_installer *installer, const char *name) {
+/* Whether name's extension is one of extensions (NULL-terminated; NULL for none). */
+static int has_extension(const char *const *extensions, const char *name) {
     const char *extension = extension_of(name);
-    for (const char *const *accepted = installer->extensions; *accepted != NULL; accepted++) {
+    for (const char *const *accepted = extensions; accepted != NULL && *accepted != NULL;
+         accepted++) {
         if (equals_ignoring_case(extension, *accepted)) {
             return 1;
         }
@@ -77,8 +85,48 @@ skiff_install_support skiff_install_check(const skiff_installer *installer,
     if (rom->name_status != SKIFF_ROMM_NAME_OK || file->name_status != SKIFF_ROMM_NAME_OK) {
         return SKIFF_INSTALL_UNUSABLE_NAME;
     }
-    return has_extension(installer, file->file_name) ? SKIFF_INSTALL_SUPPORTED
-                                                     : SKIFF_INSTALL_UNKNOWN_EXTENSION;
+    if (has_extension(installer->extensions, file->file_name)) {
+        return SKIFF_INSTALL_SUPPORTED;
+    }
+    return has_extension(installer->convert_extensions, file->file_name)
+               ? SKIFF_INSTALL_NEEDS_CONVERSION
+               : SKIFF_INSTALL_UNKNOWN_EXTENSION;
+}
+
+skiff_romm_format skiff_install_format_for(const skiff_installer *installer, const char *file_name,
+                                           unsigned offered) {
+    if (installer == NULL || file_name == NULL || installer->convert_formats == NULL ||
+        !has_extension(installer->convert_extensions, file_name)) {
+        return SKIFF_ROMM_FORMAT_STORED;
+    }
+    for (const skiff_romm_format *f = installer->convert_formats; *f != SKIFF_ROMM_FORMAT_STORED;
+         f++) {
+        if ((offered & (1U << (unsigned)*f)) != 0) {
+            return *f;
+        }
+    }
+    return SKIFF_ROMM_FORMAT_STORED;
+}
+
+uint64_t skiff_install_expected_bytes(uint64_t stored_size, skiff_romm_format format) {
+    if (format == SKIFF_ROMM_FORMAT_STORED) {
+        return stored_size;
+    }
+    if (stored_size >= SKIFF_STORAGE_MAX_FILE_BYTES / SKIFF_INSTALL_CONVERTED_PERCENT * 100U) {
+        return SKIFF_STORAGE_MAX_FILE_BYTES;
+    }
+    return stored_size * SKIFF_INSTALL_CONVERTED_PERCENT / 100U;
+}
+
+/* Whether installer asks RomM for format: one of its convert_formats. */
+static int converts_to(const skiff_installer *installer, skiff_romm_format format) {
+    for (const skiff_romm_format *f = installer->convert_formats;
+         f != NULL && *f != SKIFF_ROMM_FORMAT_STORED; f++) {
+        if (*f == format) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 skiff_install_state skiff_install_state_of(const skiff_install_manifest *manifest,
@@ -111,6 +159,9 @@ typedef enum candidate_use {
 typedef struct planner {
     const skiff_romm_rom_summary *rom;
     const skiff_romm_file *file;
+    /* What the downloaded file is named from: the file's name, or for a file RomM converts that
+     * name with the format's extension. */
+    const char *name;
     const skiff_storage_roots *roots;
     const skiff_install_manifest *manifest;
     skiff_storage *storage;
@@ -254,7 +305,9 @@ static skiff_err plan(const skiff_installer *installer, const planner *p, skiff_
     /* Skiff's own recorded copy keeps its place, whatever RomM's name cleans to today. */
     const skiff_install_record *own =
         skiff_install_manifest_find(p->manifest, p->rom->id, p->file->file_name);
-    if (own != NULL && in_folder(installer->target_dir, own->path)) {
+    /* ...as long as it is a file of the format asked for. */
+    if (own != NULL && in_folder(installer->target_dir, own->path) &&
+        equals_ignoring_case(extension_of(own->path), extension_of(p->name))) {
         const skiff_err err = try_candidate(p, own->path, 0, out, &placed);
         if (err != SKIFF_OK && err != SKIFF_ERR_INVALID_ARG && err != SKIFF_ERR_BUFFER_TOO_SMALL) {
             return err;
@@ -265,7 +318,7 @@ static skiff_err plan(const skiff_installer *installer, const planner *p, skiff_
     }
     char name[SKIFF_STORAGE_NAME_MAX];
     char logical[SKIFF_STORAGE_PATH_MAX];
-    skiff_err err = skiff_storage_safe_name(p->file->file_name, name, sizeof name);
+    skiff_err err = skiff_storage_safe_name(p->name, name, sizeof name);
     if (err != SKIFF_OK) {
         return err;
     }
@@ -288,9 +341,31 @@ static skiff_err plan(const skiff_installer *installer, const planner *p, skiff_
     return placed ? SKIFF_OK : SKIFF_ERR_STORAGE_NAME_TAKEN;
 }
 
+/* name with format's extension in place of its own into out; 0 if it does not fit. */
+static int converted_name(const char *name, skiff_romm_format format, char *out, size_t out_size) {
+    const int written = snprintf(out, out_size, "%.*s%c%s", (int)(extension_of(name) - name), name,
+                                 EXTENSION_MARK, skiff_romm_format_name(format));
+    return written > 0 && (size_t)written < out_size;
+}
+
+/* Whether file may be downloaded as format: as stored when the installer runs it, converted into
+ * one of the installer's formats when it needs that. */
+static int format_fits(const skiff_installer *installer, const skiff_romm_rom_summary *rom,
+                       const skiff_romm_file *file, skiff_romm_format format) {
+    switch (skiff_install_check(installer, rom, file)) {
+    case SKIFF_INSTALL_SUPPORTED:
+        return format == SKIFF_ROMM_FORMAT_STORED;
+    case SKIFF_INSTALL_NEEDS_CONVERSION:
+        return converts_to(installer, format);
+    default:
+        return 0;
+    }
+}
+
 skiff_err skiff_install_plan_download(const skiff_installer *installer,
                                       const skiff_romm_rom_summary *rom,
-                                      const skiff_romm_file *file, const skiff_storage_roots *roots,
+                                      const skiff_romm_file *file, skiff_romm_format format,
+                                      const skiff_storage_roots *roots,
                                       const skiff_install_manifest *manifest,
                                       skiff_storage *storage, skiff_install_taken_fn taken,
                                       void *taken_ctx, skiff_install_plan *out) {
@@ -298,14 +373,21 @@ skiff_err skiff_install_plan_download(const skiff_installer *installer,
         memset(out, 0, sizeof *out);
     }
     if (installer == NULL || rom == NULL || file == NULL || roots == NULL || manifest == NULL ||
-        storage == NULL || out == NULL ||
-        skiff_install_check(installer, rom, file) != SKIFF_INSTALL_SUPPORTED) {
+        storage == NULL || out == NULL || !format_fits(installer, rom, file, format)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     if (rom->id > SKIFF_INSTALL_ROM_ID_MAX) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    const planner p = {rom, file, roots, manifest, storage, taken, taken_ctx};
+    char converted[SKIFF_ROMM_FILE_NAME_MAX];
+    const char *name = file->file_name;
+    if (format != SKIFF_ROMM_FORMAT_STORED) {
+        if (!converted_name(file->file_name, format, converted, sizeof converted)) {
+            return SKIFF_ERR_BUFFER_TOO_SMALL;
+        }
+        name = converted;
+    }
+    const planner p = {rom, file, name, roots, manifest, storage, taken, taken_ctx};
     skiff_err err = plan(installer, &p, out);
     /* A download the manifest cannot record would leave a file Skiff no longer knows it owns. */
     if (err == SKIFF_OK && manifest->count == SKIFF_INSTALL_RECORDS_MAX &&

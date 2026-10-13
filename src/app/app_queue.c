@@ -31,7 +31,8 @@ uint64_t app_queue_unfinished_bytes(const skiff_app *app) {
     uint64_t bytes = 0;
     for (size_t i = 0; i < app->queue.count; i++) {
         if (app_job_unfinished(&app->queue.jobs[i])) {
-            bytes += app->queue.jobs[i].size;
+            bytes +=
+                skiff_install_expected_bytes(app->queue.jobs[i].size, app->queue.jobs[i].format);
         }
     }
     return bytes;

@@ -14,6 +14,7 @@ it will look. Supporting a new system means describing that once.
 |---|---|---|
 | RomM platform slug | `psp` | `nes` |
 | Accepted file extensions | `.iso .cso .zso` | `.nes .zip` |
+| Files RomM converts on download (RomM 5.4 `?format=`), and into what | `.chd` → CSO, else ZSO, else ISO | none |
 | Target folder | `games:` (`ms0:/ISO`) | the emulator's ROM folder, e.g. `ms0:/PSP/GAME/<emulator>/ROMS` |
 | Post-install step | none | none |
 | Saves location | `ms0:/PSP/SAVEDATA/<game id>*` | emulator-specific |
@@ -23,9 +24,10 @@ and the storage layer resolves the device.
 
 ## Rules
 
-- **Placement only.** Skiff does not convert, patch or bundle emulators or BIOS files. If a format
-  needs converting (e.g. PS1 `.bin/.cue` to `EBOOT.PBP`), that is a separate, explicit step with its
-  own design discussion.
+- **Placement only.** Skiff does not convert, patch or bundle emulators or BIOS files on the PSP.
+  RomM may convert a file as it serves it (RomM 5.4's download conversion, with rom-converto), which
+  an installer lists in `convert_extensions` and `convert_formats`. Any other conversion (e.g. PS1
+  `.bin/.cue` to `EBOOT.PBP`) is a separate, explicit step with its own design discussion.
 - **One emulator per platform by default**, chosen for compatibility on a PSP-1000; others can be
   offered as a setting.
 - **Documented.** Each platform gets a row in the user guide naming the emulator and where to get

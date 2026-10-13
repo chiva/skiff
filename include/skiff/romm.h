@@ -64,7 +64,8 @@
 #define SKIFF_ROMM_FILE_NAME_MAX 256
 /* A request URL: the server address plus a path and query Skiff builds. */
 #define SKIFF_ROMM_URL_MAX (SKIFF_CONFIG_URL_MAX + 256)
-/* A download URL: every byte of a file name may become "%XX". */
+/* A download URL: every byte of a file name may become "%XX"; the 64 hold the path around it and a
+ * "?format=" query. */
 #define SKIFF_ROMM_CONTENT_URL_MAX (SKIFF_CONFIG_URL_MAX + 64 + 3 * SKIFF_ROMM_FILE_NAME_MAX)
 /* Where RomM's web server serves the pictures it keeps (covers, screenshots), without a token. */
 #define SKIFF_ROMM_COVER_PREFIX "/assets/romm/resources/"
@@ -100,7 +101,28 @@ typedef struct skiff_romm_server {
      * (skiff/romm_installs.h). 0 for anything else, a RomM 5.3 without the key included, which
      * never fails the heartbeat. */
     int installs_enabled;
+    /* The heartbeat's CONVERTO.ENABLED is true (RomM 5.4): RomM may convert a download into another
+     * format (skiff_romm_format). Only a hint: RomM's own settings may still turn conversion of
+     * downloads off, which only a ROM's details tell (skiff_romm_rom.download_formats). 0 for
+     * anything else, a RomM 5.3 without the key included. */
+    int conversion_enabled;
 } skiff_romm_server;
+
+/* Formats a download can ask RomM to convert a file into (RomM 5.4's ?format=, made with the
+ * rom-converto it ships). A request only ever names one of these, from Skiff's own tables: never a
+ * name RomM sent. */
+typedef enum skiff_romm_format {
+    /* The file as RomM stores it: no ?format=. */
+    SKIFF_ROMM_FORMAT_STORED,
+    SKIFF_ROMM_FORMAT_ISO,
+    SKIFF_ROMM_FORMAT_CSO,
+    SKIFF_ROMM_FORMAT_ZSO,
+    SKIFF_ROMM_FORMAT_COUNT,
+} skiff_romm_format;
+
+/* The name RomM knows format by ("iso", "cso", "zso"); NULL for SKIFF_ROMM_FORMAT_STORED or a
+ * value out of range. */
+const char *skiff_romm_format_name(skiff_romm_format format);
 
 typedef struct skiff_romm_platform {
     uint64_t id;
@@ -316,7 +338,17 @@ typedef struct skiff_romm_rom {
      * too long, not a string) leaves it empty rather than refusing the ROM. */
     char cover_path[SKIFF_ROMM_COVER_PATH_MAX];
     skiff_romm_rom_metadata metadata;
+    /* The formats RomM offers the ROM's file in besides the one it is stored in (RomM 5.4's
+     * download_formats), one bit per skiff_romm_format (skiff_romm_rom_offers()). RomM lists them
+     * only for a single-file ROM, with conversion of downloads on and a token that may start one.
+     * Names Skiff never requests are left out; anything but a list of names leaves it 0: it never
+     * refuses the ROM. 0 from RomM 5.3. */
+    unsigned download_formats;
 } skiff_romm_rom;
+
+/* Whether RomM offers rom's file converted into format (skiff_romm_rom.download_formats); 0 for
+ * NULL, SKIFF_ROMM_FORMAT_STORED or a value out of range. */
+int skiff_romm_rom_offers(const skiff_romm_rom *rom, skiff_romm_format format);
 
 /*
  * Prepares client for the server at base_url (a trailing '/' is dropped), authenticating with token
@@ -392,13 +424,17 @@ skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_r
 /*
  * Writes the URL file (of the ROM rom_id) downloads from, "<base>/api/roms/<id>/content/<name>",
  * with every byte of the name other than letters, digits and "-._~" percent-encoded (a '#', '?' or
- * '/' in a file name must not end or split the path). SKIFF_ERR_INVALID_ARG for a NULL argument, an
- * empty name, or a file whose name_status is not SKIFF_ROMM_NAME_OK (its file_name is a display
- * form, not the name RomM serves it under); SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit
- * (SKIFF_ROMM_CONTENT_URL_MAX always does). out is empty on error.
+ * '/' in a file name must not end or split the path), and for any format but
+ * SKIFF_ROMM_FORMAT_STORED "?format=<name>" after it: RomM then converts the file into that format
+ * (skiff_http_download_status_error() for its answers while it does). SKIFF_ERR_INVALID_ARG for a
+ * NULL argument, an empty name, a file whose name_status is not SKIFF_ROMM_NAME_OK (its file_name
+ * is a display form, not the name RomM serves it under) or a format out of range;
+ * SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit (SKIFF_ROMM_CONTENT_URL_MAX always does). out is
+ * empty on error.
  */
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
-                                 const skiff_romm_file *file, char *out, size_t out_size);
+                                 const skiff_romm_file *file, skiff_romm_format format, char *out,
+                                 size_t out_size);
 
 /*
  * Writes the URL of a ROM's cover, the server address followed by cover_path (as

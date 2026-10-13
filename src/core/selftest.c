@@ -90,6 +90,14 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_COVER_URL                                                                   \
     SKIFF_SELFTEST_COVER_BASE                                                                      \
     "/assets/romm/resources/roms/1/7/cover/Caf%C3%A9.png?ts=2026-10-10%2004:21:31"
+/* A CHD RomM offers converted (download_formats, with a name Skiff never requests), and the URL
+ * that asks for it as a CSO: the UTF-8 name encoded byte by byte, then the format query. */
+#define SKIFF_SELFTEST_CONVERT_ROM                                                                 \
+    "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.chd\",\"fs_size_bytes\":1,\"files\":[{\"rom_"     \
+    "id\":7,\"file_name\":\"Caf\xC3\xA9.chd\",\"file_size_bytes\":1}],\"download_formats\":"       \
+    "[\"cso\",\"rvz\",\"zso\"]}"
+#define SKIFF_SELFTEST_CONVERT_URL                                                                 \
+    SKIFF_SELFTEST_COVER_BASE "/api/roms/7/content/Caf%C3%A9.chd?format=cso"
 /* A ROM's description and facts: typographic punctuation and a C1 control character (escaped, so
  * they reach the parser decoded: the PSP's char is signed), a line break kept, and a release date
  * past 32 bits of milliseconds in a century year that is not a leap year (64-bit division in
@@ -395,6 +403,27 @@ static const char *check_romm_cover(void) {
                    strcmp(url, SKIFF_SELFTEST_COVER_URL) == 0
                ? NULL
                : "a cover URL came out wrong";
+}
+
+/* A file RomM converts: the formats it offers, and the URL asking for one of them. */
+static const char *check_romm_convert(void) {
+    static const char rom_text[] = SKIFF_SELFTEST_CONVERT_ROM;
+    static skiff_romm_rom rom;
+    if (skiff_romm_parse_rom(rom_text, sizeof rom_text - 1, &rom) != SKIFF_OK ||
+        !skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_CSO) ||
+        !skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_ZSO) ||
+        skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_ISO)) {
+        return "the formats RomM offers did not parse";
+    }
+    skiff_transport unused = {NULL};
+    skiff_romm_client client;
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    return skiff_romm_client_init(&client, &unused, SKIFF_SELFTEST_COVER_BASE, NULL) == SKIFF_OK &&
+                   skiff_romm_content_url(&client, rom.summary.id, &rom.files[0],
+                                          SKIFF_ROMM_FORMAT_CSO, url, sizeof url) == SKIFF_OK &&
+                   strcmp(url, SKIFF_SELFTEST_CONVERT_URL) == 0
+               ? NULL
+               : "a URL asking RomM for a CSO came out wrong";
 }
 
 /* A ROM's description and facts are made displayable byte by byte, where the PSP's char is signed,
@@ -1152,6 +1181,7 @@ static const selftest_check CHECKS[] = {
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
     {"romm-cover", check_romm_cover},
+    {"romm-convert", check_romm_convert},
     {"romm-details", check_romm_details},
     {"romm-saves", check_romm_saves},
     {"romm-sends", check_romm_sends},

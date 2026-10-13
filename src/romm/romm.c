@@ -12,6 +12,9 @@
 #define PATH_HEARTBEAT "/api/heartbeat"
 #define HEARTBEAT_DEVICE_INSTALL "DEVICE_INSTALL"
 #define HEARTBEAT_ENABLED "ENABLED"
+#define HEARTBEAT_CONVERTO "CONVERTO"
+#define ROM_DOWNLOAD_FORMATS "download_formats"
+#define CONTENT_FORMAT_QUERY "?format="
 #define PATH_PLATFORMS "/api/platforms"
 #define PATH_ROMS "/api/roms"
 #define BEARER_PREFIX "Bearer "
@@ -543,6 +546,49 @@ skiff_err skiff_romm_parse_rom_page(const char *json, size_t length, skiff_romm_
     return SKIFF_OK;
 }
 
+/* ---- Formats RomM converts downloads into ---- */
+
+static const char *const FORMAT_NAMES[SKIFF_ROMM_FORMAT_COUNT] = {
+    [SKIFF_ROMM_FORMAT_ISO] = "iso",
+    [SKIFF_ROMM_FORMAT_CSO] = "cso",
+    [SKIFF_ROMM_FORMAT_ZSO] = "zso",
+};
+
+const char *skiff_romm_format_name(skiff_romm_format format) {
+    return format > SKIFF_ROMM_FORMAT_STORED && format < SKIFF_ROMM_FORMAT_COUNT
+               ? FORMAT_NAMES[format]
+               : NULL;
+}
+
+static unsigned format_bit(skiff_romm_format format) { return 1U << (unsigned)format; }
+
+int skiff_romm_rom_offers(const skiff_romm_rom *rom, skiff_romm_format format) {
+    return rom != NULL && skiff_romm_format_name(format) != NULL &&
+           (rom->download_formats & format_bit(format)) != 0;
+}
+
+/* RomM 5.4's download_formats as skiff_romm_rom.download_formats: the names Skiff requests, out of
+ * a list of names; anything else is 0. */
+static unsigned read_download_formats(const cJSON *root) {
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(root, ROM_DOWNLOAD_FORMATS);
+    if (!cJSON_IsArray(list)) {
+        return 0;
+    }
+    unsigned formats = 0;
+    const cJSON *item = NULL;
+    cJSON_ArrayForEach(item, list) {
+        if (!cJSON_IsString(item)) {
+            return 0;
+        }
+        for (int f = SKIFF_ROMM_FORMAT_STORED + 1; f < SKIFF_ROMM_FORMAT_COUNT; f++) {
+            if (strcmp(item->valuestring, FORMAT_NAMES[f]) == 0) {
+                formats |= format_bit((skiff_romm_format)f);
+            }
+        }
+    }
+    return formats;
+}
+
 static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
     const cJSON *files = cJSON_GetObjectItemCaseSensitive(root, "files");
     if (!parse_summary(root, &out->summary) || !cJSON_IsArray(files)) {
@@ -567,6 +613,7 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
     }
     read_cover_path(root, out->cover_path, sizeof out->cover_path);
     skiff_romm_read_metadata(root, &out->metadata);
+    out->download_formats = read_download_formats(root);
     return 1;
 }
 
@@ -929,6 +976,13 @@ static int read_installs_enabled(const cJSON *root) {
            cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(install, HEARTBEAT_ENABLED));
 }
 
+/* RomM 5.4's CONVERTO.ENABLED, read as DEVICE_INSTALL.ENABLED is: true or nothing. */
+static int read_conversion_enabled(const cJSON *root) {
+    const cJSON *converto = cJSON_GetObjectItemCaseSensitive(root, HEARTBEAT_CONVERTO);
+    return cJSON_IsObject(converto) &&
+           cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(converto, HEARTBEAT_ENABLED));
+}
+
 skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out) {
     if (out != NULL) {
         memset(out, 0, sizeof *out);
@@ -946,6 +1000,7 @@ skiff_err skiff_romm_heartbeat(skiff_romm_client *client, skiff_romm_server *out
     }
     if (err == SKIFF_OK) {
         out->installs_enabled = read_installs_enabled(root);
+        out->conversion_enabled = read_conversion_enabled(root);
     }
     cJSON_Delete(root);
     return err;
@@ -1124,20 +1179,34 @@ skiff_err skiff_romm_append_encoded(char *out, size_t out_size, const char *text
 }
 
 skiff_err skiff_romm_content_url(const skiff_romm_client *client, uint64_t rom_id,
-                                 const skiff_romm_file *file, char *out, size_t out_size) {
+                                 const skiff_romm_file *file, skiff_romm_format format, char *out,
+                                 size_t out_size) {
     if (out != NULL && out_size > 0) {
         out[0] = '\0';
     }
+    const char *format_name = skiff_romm_format_name(format);
     /* A name that is not OK is a display form: requesting it would ask RomM for another file. */
     if (!client_ready(client) || file == NULL || file->name_status != SKIFF_ROMM_NAME_OK ||
-        file->file_name[0] == '\0' || out == NULL || out_size == 0) {
+        file->file_name[0] == '\0' || out == NULL || out_size == 0 ||
+        (format != SKIFF_ROMM_FORMAT_STORED && format_name == NULL)) {
         return SKIFF_ERR_INVALID_ARG;
     }
     char prefix[SKIFF_ROMM_URL_MAX];
     snprintf(prefix, sizeof prefix, "%s" PATH_ROMS "/%llu/content/", client->base_url,
              (unsigned long long)rom_id);
     /* A '#', '?' or '/' in a file name must not end or split the path. */
-    return write_encoded(out, out_size, prefix, file->file_name, "");
+    const skiff_err err = write_encoded(out, out_size, prefix, file->file_name, "");
+    if (err != SKIFF_OK || format_name == NULL) {
+        return err;
+    }
+    const size_t used = strlen(out);
+    const size_t query = strlen(CONTENT_FORMAT_QUERY) + strlen(format_name);
+    if (query >= out_size - used) {
+        out[0] = '\0';
+        return SKIFF_ERR_BUFFER_TOO_SMALL;
+    }
+    snprintf(out + used, out_size - used, CONTENT_FORMAT_QUERY "%s", format_name);
+    return SKIFF_OK;
 }
 
 skiff_err skiff_romm_cover_url(const skiff_romm_client *client, const char *cover_path, char *out,

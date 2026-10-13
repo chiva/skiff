@@ -65,7 +65,7 @@ under **Settings → Devices**.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–219)
+## RomM errors (200–221)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -89,6 +89,8 @@ under **Settings → Devices**.
 | 217 | The save from RomM does not match its checksum | The save arrived whole, but its contents are not the ones RomM recorded for it, so Skiff did not restore it: the save on this PSP is untouched. This usually means the save file was changed on the server; sync again. If it keeps happening, upload the save again from the device that made it |
 | 218 | RomM did not let this PSP receive games | Only in `skiff.log`: RomM refused this PSP's token when Skiff told RomM it can receive games sent from RomM's web UI (**Install on device**), asked for them or reported one. The token lacks the device permissions (writing devices, reading ROMs), or it is not this PSP's own (a token pasted by hand). When RomM refuses Skiff's registration or its request for games, Skiff stops asking, and **Settings → Games from RomM** says **Pair again to allow it**: choose it and leave the device permissions ticked; your downloads and installed games stay. If it keeps happening, check that your RomM user's role may write devices ([Games sent from RomM](04-connect-to-romm.md#games-sent-from-romm)) |
 | 219 | That game is not a PSP game | Not shown on the PSP: it is the reason RomM shows ("That game is not a PSP game [219]", or "Ese juego no es de PSP [219]" on a PSP set to Spanish) for a game sent to this PSP from RomM's web UI that belongs to another platform. RomM offers **Install on device** for games of any platform but Windows ones, but Skiff only installs PSP games. Send a game from RomM's PSP platform instead |
+| 220 | RomM is still converting the game | Not an error: RomM is converting a game stored in a format the PSP cannot run (such as CHD) into one it can, and asked Skiff to come back later. Skiff waits and asks again by itself; a whole UMD takes RomM a few minutes |
+| 221 | RomM cannot convert this game for the PSP | The game is stored in a format the PSP cannot run (such as CHD), and RomM would not convert it into one it can. Download conversion is off on the server (an admin turns it on with `ROM_CONVERTO_ENABLED` and, in RomM's settings, conversion of downloads), or RomM tried and failed, or its conversion cache is full. Ask the RomM admin, or store the game as ISO or CSO |
 
 ## Memory Stick errors (300–309)
 

@@ -181,6 +181,9 @@ Docker Hub limits anonymous pulls, which GitHub's shared runners reach.
 - the slow disc's download is answered 202 with `Retry-After: 30` and no body, and the conversion
   goes on: asking again brings the CSO.
 
+`romm-check` empties RomM's conversion cache first, so the answers before a conversion hold however
+often the same server is checked.
+
 ### Integration tests
 
 `romm-test` (CI runs it after `romm-check`) builds `tests/integration/test_transport_romm.c`,

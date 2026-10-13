@@ -30,6 +30,8 @@ readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
 readonly ROMM_ADMIN_USER="skiff"
 # The PSP platform's folder in the RomM container (tests/integration/seed.py, LIBRARY_DIR).
 readonly ROMM_PLATFORM_DIR="/romm/library/roms/psp"
+# Where RomM keeps the downloads it converted (its CACHE_BASE_PATH, then converts/).
+readonly ROMM_CONVERSION_CACHE_DIR="/tmp/romm/cache/converts"
 # The fake transport's recorded RomM responses (tests/support/fake_transport.h), and the size of the
 # synthetic file seeded while recording them, kept small so the fixture stays small.
 readonly FIXTURES_DIR="tests/fixtures/romm"
@@ -304,6 +306,13 @@ seed_convert_discs() {
   )
 }
 
+# romm-check asserts what RomM answers before it has converted anything (202 while converting): it
+# starts from an empty conversion cache, so checking a server a second time gives the same answers.
+clear_conversion_cache() {
+  require_own_romm
+  compose exec -T romm rm -rf "$ROMM_CONVERSION_CACHE_DIR"
+}
+
 # By project name, so it works even when build/integration/ is gone.
 romm_down() {
   require_own_romm
@@ -404,6 +413,7 @@ run_command() {
     romm_up 0.0.0.0 "$ip"
     ;;
   romm-check)
+    clear_conversion_cache
     run_host_in_romm_network "tests/integration/check.sh $INTEGRATION_DIR"
     ;;
   romm-test)

@@ -56,6 +56,7 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_RETRY, 0, "Retry", "Reintentar")                                                  \
     X(SKIFF_TEXT_SELECT, 0, "Select", "Elegir")                                                    \
     X(SKIFF_TEXT_DOWNLOAD, 0, "Download", "Descargar")                                             \
+    X(SKIFF_TEXT_SCROLL, 0, "Scroll", "Desplazar")                                                 \
     X(SKIFF_TEXT_QUIT, 0, "Quit", "Salir")                                                         \
     X(SKIFF_TEXT_SETTINGS, 0, "Settings", "Ajustes")                                               \
     /* Settings with the saves that need the player, from the library. */                          \
@@ -152,6 +153,9 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_BATCH_LEFT_ERROR, 2, "{1} weren't added: {2}", "{1} no se han añadido: {2}")      \
     X(SKIFF_TEXT_INSTALLED, 0, "Installed", "Instalado")                                           \
     X(SKIFF_TEXT_DETAILS_SIZE, 1, "Size: {1}", "Tamaño: {1}")                                      \
+    /* A game's facts on its details screen: RomM's player count ("1-4"), its rating and scale. */ \
+    X(SKIFF_TEXT_DETAILS_PLAYERS, 1, "{1} players", "{1} jugadores")                               \
+    X(SKIFF_TEXT_DETAILS_RATING, 2, "Rating {1}/{2}", "Nota {1}/{2}")                              \
     X(SKIFF_TEXT_NAME_UNSUPPORTED, 0,                                                              \
       "Skiff can't download this file: RomM names it in a way the PSP can't use",                  \
       "Skiff no puede descargar este archivo: RomM le da un nombre que la PSP no admite")          \

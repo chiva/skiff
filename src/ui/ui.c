@@ -113,6 +113,17 @@ static const skiff_ui_symbol_row CIRCLE_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
     "#       #", " #     # ", " ##   ## ", "   ###   ",
 };
 
+/* A solid arrow, its point at the middle of the third row and its base whole: the up and down
+ * buttons share the d-pad's shape, one the other upside down. */
+static const skiff_ui_symbol_row UP_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "         ", "         ", "    #    ", "   ###   ", "  #####  ",
+    " ####### ", "#########", "         ", "         ",
+};
+static const skiff_ui_symbol_row DOWN_PIXELS[SKIFF_UI_SYMBOL_SIZE] = {
+    "         ", "         ", "#########", " ####### ", "  #####  ",
+    "   ###   ", "    #    ", "         ", "         ",
+};
+
 const skiff_ui_symbol_row *skiff_ui_symbol_pixels(unsigned button) {
     switch (button) {
     case SKIFF_UI_BUTTON_CROSS:
@@ -123,6 +134,10 @@ const skiff_ui_symbol_row *skiff_ui_symbol_pixels(unsigned button) {
         return TRIANGLE_PIXELS;
     case SKIFF_UI_BUTTON_SQUARE:
         return SQUARE_PIXELS;
+    case SKIFF_UI_BUTTON_UP:
+        return UP_PIXELS;
+    case SKIFF_UI_BUTTON_DOWN:
+        return DOWN_PIXELS;
     default:
         return NULL;
     }

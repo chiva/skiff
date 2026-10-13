@@ -6,7 +6,9 @@ The scan is started over RomM's socket, the way its web UI does, because RomM ha
 for it. Prints one JSON object on stdout for the tests; the token in it is a secret.
 
 The payload ROM gets a synthetic PNG cover, uploaded the way RomM's web UI uploads custom artwork;
-the seed has no metadata providers, so it is the only cover. RomM keeps the upload as the large
+the seed has no metadata providers, so it is the only cover. It also gets a synthetic description
+and facts (genres, developer, publisher, release date), entered as a player edits a game in the web
+UI, for the details screen. RomM keeps the upload as the large
 cover and resizes it into the small one Skiff shows. The extra ROM gets none: every ROM update in
 RomM (5.3 and 5.4) also cleans the file's name on disk, which would drop the '+' its name is there for.
 
@@ -130,6 +132,25 @@ COVER_LABEL = "SKIFF SYNTHETIC COVER"
 COVER_LABEL_BOX = (60, 60, 540, 200)
 COVER_LABEL_AT = (80, 110)
 MULTIPART_BOUNDARY = "skiff-seed-cover"
+# The payload's description and facts, set as a player edits a game in RomM's web UI (summary and
+# manual metadata; RomM 5.4 merges the manual metadata into metadatum). Synthetic text, long enough
+# to scroll on the details screen, with the typographic punctuation Skiff makes ASCII and a
+# paragraph break. RomM keeps manual dates in Unix milliseconds: 2010-01-01T00:00:00Z.
+PAYLOAD_SUMMARY = (
+    "Skiff Test Payload is not a game: the integration seed makes up its bytes, its cover and this "
+    "text, so Skiff\u2019s details screen has something to show.\n\n"
+    "This second paragraph is here to make the description scroll on a PSP \u2014 four or five "
+    "lines beside the cover are not enough for it. Its \u201cquotes\u201d, its dash and its "
+    "ellipsis\u2026 come out as plain ASCII.\n\n"
+    "A third paragraph closes it. Nothing here comes from a real game, a metadata provider or a "
+    "player."
+)
+PAYLOAD_MANUAL_METADATA = {
+    "genres": ["Puzzle", "Simulator"],
+    "developers": ["Skiff Test Studio"],
+    "publishers": ["Skiff Test Publishing"],
+    "first_release_date": 1262304000000,
+}
 # The favourites (see the module's docstring). The first collection is named as the web UI names the
 # one it creates on a player's first favourite.
 FAVOURITES_NAME = "Favorites"
@@ -353,22 +374,44 @@ def set_cover(auth, rom_id, fs_name, seed=COVER_SEED, jpeg=False):
     return path
 
 
-def post_form(auth, path, fields):
-    """A multipart form POST, the way RomM's web UI creates collections; returns the parsed answer."""
+def post_form(auth, path, fields, method="POST"):
+    """A multipart form request (a POST, the way RomM's web UI creates collections, or a PUT, the way
+    it edits a game); returns the parsed answer."""
     body = "".join(
         f"--{MULTIPART_BOUNDARY}\r\n"
         f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
         f"{value}\r\n"
         for name, value in fields.items()
     ).encode() + f"--{MULTIPART_BOUNDARY}--\r\n".encode()
-    req = urllib.request.Request(f"{API}{path}", data=body, method="POST")
+    req = urllib.request.Request(f"{API}{path}", data=body, method=method)
     req.add_header("Authorization", auth)
     req.add_header("Content-Type", f"multipart/form-data; boundary={MULTIPART_BOUNDARY}")
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise SystemExit(f"seed: POST {path} ({fields.get('name')!r}) failed with HTTP {error.code}")
+        raise SystemExit(f"seed: {method} {path} ({fields.get('name')!r}) failed with HTTP {error.code}")
+
+
+def set_details(auth, rom_id, fs_name):
+    """The payload's description and facts, as RomM's web UI edits a game (see PAYLOAD_SUMMARY). An
+    edit also cleans the file name on disk, so only a ROM whose name is already clean may get it."""
+    summary = PAYLOAD_SUMMARY
+    rom = post_form(
+        auth,
+        f"/api/roms/{rom_id}",
+        {"summary": summary, "raw_manual_metadata": json.dumps(PAYLOAD_MANUAL_METADATA)},
+        method="PUT",
+    )
+    if rom.get("fs_name") != fs_name:
+        raise SystemExit(f"seed: editing ROM {rom_id} renamed {fs_name!r} to {rom.get('fs_name')!r}")
+    if rom.get("summary") != summary:
+        raise SystemExit(f"seed: ROM {rom_id} kept no description")
+    metadatum = rom.get("metadatum") or {}
+    for key, value in PAYLOAD_MANUAL_METADATA.items():
+        if metadatum.get(key) != value:
+            raise SystemExit(f"seed: ROM {rom_id} metadatum {key} is {metadatum.get(key)!r}, not {value!r}")
+    log(f"ROM {rom_id} details: {len(summary)} characters of description, {len(metadatum)} facts")
 
 
 def create_collection(auth, name, rom_ids, public=False, favourite=False):
@@ -608,6 +651,7 @@ def main():
     if library:
         log(f"library: {len(library)} more files, and every other file in {LIBRARY_DIR}")
     payload["cover_path"] = set_cover(auth, rom_id, PAYLOAD_NAME)
+    set_details(auth, rom_id, PAYLOAD_NAME)
     if library:
         set_library_covers(auth, library_roms)
     favourite_rom_ids = set_favourites(auth, rom_id, library, library_roms)

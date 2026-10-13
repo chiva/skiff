@@ -10,8 +10,6 @@
 #define LATIN_FONT_PATH "flash0:/font/ltn0.pgf"
 /* intraFont's shadow colour; with a shadow size of 0 none is drawn. */
 #define COLOUR_SHADOW 0xFF000000U
-/* The lines under the header and over the footer. */
-#define COLOUR_RULE 0xFF604030U
 /* Button symbols in the colours PlayStation players know them by. */
 #define COLOUR_CIRCLE 0xFF5050F0U
 #define COLOUR_CROSS 0xFFFFA080U
@@ -252,8 +250,9 @@ static void draw_pixels(const skiff_ui_symbol_row *pixels, int left, int top, un
     draw_vertices(GU_SPRITES, vertices, at);
 }
 
-/* The symbol of a face button in a SYMBOL_SIZE square at (left, top), pixel by pixel
- * (skiff_ui_symbol_pixels()): every corner and end is drawn, which lines would leave out. */
+/* The symbol of a face button, in its colour, or a d-pad arrow, dim, in a SYMBOL_SIZE square at
+ * (left, top), pixel by pixel (skiff_ui_symbol_pixels()): every corner and end is drawn, which
+ * lines would leave out. */
 static void draw_symbol(unsigned button, int left, int top) {
     const skiff_ui_symbol_row *pixels = skiff_ui_symbol_pixels(button);
     if (pixels == NULL) {
@@ -262,7 +261,8 @@ static void draw_symbol(unsigned button, int left, int top) {
     const unsigned int colour = button == SKIFF_UI_BUTTON_CROSS      ? COLOUR_CROSS
                                 : button == SKIFF_UI_BUTTON_CIRCLE   ? COLOUR_CIRCLE
                                 : button == SKIFF_UI_BUTTON_TRIANGLE ? COLOUR_TRIANGLE
-                                                                     : COLOUR_SQUARE;
+                                : button == SKIFF_UI_BUTTON_SQUARE   ? COLOUR_SQUARE
+                                                                     : SKIFF_PSP_UI_COLOUR_DIM_TEXT;
     draw_pixels(pixels, left, top, colour);
 }
 
@@ -311,10 +311,10 @@ void skiff_psp_ui_header(const skiff_psp_ui *ui, const char *title, const char *
                             SKIFF_PSP_UI_HINT_SIZE, SKIFF_PSP_UI_COLOUR_DIM_TEXT,
                             INTRAFONT_ALIGN_RIGHT, status);
     }
-    skiff_psp_ui_rect(ui, 0, RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, COLOUR_RULE);
+    skiff_psp_ui_rect(ui, 0, RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, SKIFF_PSP_UI_COLOUR_RULE);
 }
 
-/* The face button an action is on, or 0 for one shown by name. */
+/* The button with a symbol an action is on, or 0 for one shown by name. */
 static unsigned symbol_button(const skiff_psp_ui *ui, unsigned action) {
     switch (action) {
     case SKIFF_UI_ACTION_CONFIRM:
@@ -325,6 +325,10 @@ static unsigned symbol_button(const skiff_psp_ui *ui, unsigned action) {
         return SKIFF_UI_BUTTON_TRIANGLE;
     case SKIFF_UI_ACTION_EXTRA:
         return SKIFF_UI_BUTTON_SQUARE;
+    case SKIFF_UI_ACTION_UP:
+        return SKIFF_UI_BUTTON_UP;
+    case SKIFF_UI_ACTION_DOWN:
+        return SKIFF_UI_BUTTON_DOWN;
     default:
         return 0;
     }
@@ -353,11 +357,19 @@ void skiff_psp_ui_symbol(const skiff_psp_ui *ui, unsigned action, int x, int y) 
     }
 }
 
+/* A hint for scrolling, led by both arrows. */
+#define SCROLL_ACTIONS (SKIFF_UI_ACTION_UP | SKIFF_UI_ACTION_DOWN)
+
 void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints, size_t count) {
-    skiff_psp_ui_rect(ui, 0, FOOTER_RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, COLOUR_RULE);
+    skiff_psp_ui_rect(ui, 0, FOOTER_RULE_Y, SKIFF_PSP_UI_SCREEN_WIDTH, 1, SKIFF_PSP_UI_COLOUR_RULE);
     float x = (float)SKIFF_PSP_UI_MARGIN;
     for (size_t i = 0; hints != NULL && i < count; i++) {
-        if (symbol_button(ui, hints[i].action) != 0) {
+        if (hints[i].action == SCROLL_ACTIONS) {
+            skiff_psp_ui_symbol(ui, SKIFF_UI_ACTION_UP, (int)x, FOOTER_BASELINE);
+            x += (float)SYMBOL_SIZE;
+            skiff_psp_ui_symbol(ui, SKIFF_UI_ACTION_DOWN, (int)x, FOOTER_BASELINE);
+            x += (float)SKIFF_PSP_UI_SYMBOL_WIDTH;
+        } else if (symbol_button(ui, hints[i].action) != 0) {
             skiff_psp_ui_symbol(ui, hints[i].action, (int)x, FOOTER_BASELINE);
             x += (float)SKIFF_PSP_UI_SYMBOL_WIDTH;
         } else {

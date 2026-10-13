@@ -771,8 +771,37 @@ static void test_button_symbols_are_whole_pixel_patterns(void) {
     check_closed(circle);
     check_closed(square);
 
+    TEST_PRINTF("up and down: solid arrows, one the other upside down, centred in the square");
+    const skiff_ui_symbol_row *up = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_UP);
+    const skiff_ui_symbol_row *down = skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_DOWN);
+    print_symbol("up", up);
+    print_symbol("down", down);
+    check_symbol_shape(up);
+    check_symbol_shape(down);
+    check_closed(up);
+    int first_row = -1;
+    int last_row = -1;
+    int width = 0;
+    for (int y = 0; y < SKIFF_UI_SYMBOL_SIZE; y++) {
+        TEST_ASSERT_EQUAL_STRING(up[y], down[SYMBOL_LAST - y]);
+        const char *first = strchr(up[y], '#');
+        if (first == NULL) {
+            continue;
+        }
+        const int row_width = (int)(strrchr(up[y], '#') - first) + 1;
+        TEST_ASSERT_EQUAL_size_t_MESSAGE((size_t)row_width, strspn(first, "#"), "a solid row");
+        TEST_ASSERT_TRUE_MESSAGE(row_width > width, "each row wider than the one above");
+        width = row_width;
+        first_row = first_row < 0 ? y : first_row;
+        last_row = y;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(set_at(up, SYMBOL_LAST / 2, first_row), "the point in the middle");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_UI_SYMBOL_SIZE, width, "the base whole");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(first_row, SYMBOL_LAST - last_row, "as far from top as bottom");
+
     TEST_PRINTF("buttons without a symbol have none");
     TEST_ASSERT_NULL(skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_START));
+    TEST_ASSERT_NULL(skiff_ui_symbol_pixels(SKIFF_UI_BUTTON_LEFT));
     TEST_ASSERT_NULL(skiff_ui_symbol_pixels(0));
 }
 

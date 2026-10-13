@@ -3585,6 +3585,30 @@ static void test_a_games_name_wraps_at_its_heading_size(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_APP_LINE_HEIGHT, skiff_app_line_height(view(), 2));
 }
 
+static void test_a_file_named_like_its_game_is_not_shown_twice(void) {
+    open_paired_library(1);
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK
+             "{\"id\":1,\"platform_id\":1,\"name\":\"Game 1.iso\",\"fs_name\":\"Game 1.iso\","
+             "\"fs_size_bytes\":%u,\"files\":[{\"rom_id\":1,\"file_name\":\"Game 1.iso\","
+             "\"file_size_bytes\":%u}]}",
+             BODY_BYTES, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_TRUE(app->has_rom);
+    assert_details_layout();
+    TEST_ASSERT_EQUAL_STRING("Game 1.iso", view()->lines[0]);
+    assert_name_heading(1);
+    for (size_t i = 1; i < view()->line_count; i++) {
+        TEST_PRINTF("line %u: '%s'", (unsigned)i, view()->lines[i]);
+        TEST_ASSERT_NOT_EQUAL_INT(0, strcmp("Game 1.iso", view()->lines[i]));
+    }
+}
+
 static void test_line_heights_follow_the_line_styles(void) {
     static skiff_app_view v;
     memset(&v, 0, sizeof v);
@@ -7516,6 +7540,7 @@ int main(void) {
     RUN_TEST(test_a_games_details_show_its_facts_and_description);
     RUN_TEST(test_a_game_without_metadata_shows_its_details_as_before);
     RUN_TEST(test_a_games_name_wraps_at_its_heading_size);
+    RUN_TEST(test_a_file_named_like_its_game_is_not_shown_twice);
     RUN_TEST(test_line_heights_follow_the_line_styles);
     RUN_TEST(test_facts_are_shown_only_when_romm_has_them);
     RUN_TEST(test_a_long_description_scrolls_under_the_facts);

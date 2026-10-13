@@ -993,7 +993,7 @@ static void details_view(skiff_app *app) {
         add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
         return;
     }
-    if (rom->name[0] != '\0') {
+    if (rom->name[0] != '\0' && strcmp(rom->name, rom->fs_name) != 0) {
         add_name_within(app, rom->fs_name, width, SKIFF_APP_LINE_TEXT);
     }
     add_facts(app, width);

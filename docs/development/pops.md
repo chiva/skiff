@@ -719,17 +719,20 @@ Sony-derived data**, and invented tables freeze, as ten of them did.
 |---|---|---|---|
 | One EBOOT, PSTITLEIMG, with the table | from the HOME menu, inside the game (M1K, GK) | yes: the 64-byte table | which folders it creates was not checked |
 | One EBOOT, PSTITLEIMG, without the table | none | none | does not boot |
-| One EBOOT per disc, disc 1's ID at PSISOIMG+0x400 and in the SFO | quit to the XMB and start the other disc's EBOOT when the game asks | none | one shared folder and memory card (S4, G5) |
+| One EBOOT per disc, disc 1's ID at PSISOIMG+0x400 and in the SFO | only through a save: save, quit to the XMB, start the other disc's EBOOT and load; games with no save point at the swap cannot continue | none | one shared folder and memory card (S4, G5) |
 
 - **Ship the table as an interoperability constant.** This is what pop-fe does: its PSTITLEIMG
   template carries the table. It keeps in-game switching. The table is small and the same for
   every game, but it is Sony-derived data, and whether a project can carry it is a legal and
   licensing judgement for that project's author; this page does not make it.
-- **One EBOOT per disc.** Entirely clean-room, measured on a real game, and the saves carry over
-  when every EBOOT uses disc 1's ID (see [What POPS writes back](#what-pops-writes-back)). The
-  cost is the swap: when the game asks for the next disc, the player quits through the HOME menu
-  and starts the next EBOOT, which then finds the save made on disc 1 (G5). The XMB shows one
-  entry per disc, so name them (for example "Disc 1", "Disc 2").
+- **One EBOOT per disc.** Entirely clean-room, measured on a real game, and the memory card is
+  shared when every EBOOT uses disc 1's ID (see [What POPS writes back](#what-pops-writes-back)).
+  It works only for games that let the player save before the swap and continue from that save
+  on the next disc: the player saves, quits through the HOME menu and starts the next EBOOT,
+  which finds the save made on disc 1 (G5). Quitting loses the running state, so a game that
+  demands a live swap with no save point in between cannot continue this way; a shared memory
+  card is not a substitute for in-game switching. The XMB shows one entry per disc, so name them
+  (for example "Disc 1", "Disc 2").
 
 Skiff's own choice belongs to its PS1 design ([roadmap, Phase 5](roadmap.md#phase-5-ps1)).
 

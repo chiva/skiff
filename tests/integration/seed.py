@@ -31,10 +31,20 @@ UMD_DATA.BIN with the made-up game ID SKIF-00002 (no game, no EBOOT): RomM 5.4 r
 it (save_target SKIF00002, layout folder-prefix), which the app's save sync and the integration tests
 use.
 
-A game of another platform: unless SKIFF_FOREIGN_ROM is 0, a last scan adds one small synthetic
-file to a second platform (gba). RomM lets a player send any platform's game to the PSP ("Install on
-device"), so the install tests send it and Skiff refuses it. Scanned last, so the PSP's ROMs keep
-their ids.
+A game of another platform: unless SKIFF_FOREIGN_ROM is 0, a scan adds one small synthetic file
+to a second platform (gba). RomM lets a player send any platform's game to the PSP ("Install on
+device"), so the install tests send it and Skiff refuses it. Scanned after the PSP's ROMs above, so
+they keep their ids.
+
+Download conversion (compose.yaml turns it on): unless SKIFF_CONVERT_DISCS is 0, a last scan adds two
+synthetic PSP discs stored as CHD, which a PSP cannot run and RomM converts on download
+(`?format=cso`): ISO 9660 images like the save disc's (made-up IDs SKIF-00003 and SKIF-00004), with
+seeded bytes and zeros after the file so a CSO holds both kinds of block, compressed to DVD-mode CHDs
+by the rom-converto RomM ships. RomM converts the first in well under a second; the second's
+conversion is held back by rom-converto-delay.sh, so a download that starts it is answered 202. The
+seed checks RomM offers both as cso, zso and iso, and read their save IDs from the CHDs (SKIF00003,
+SKIF00004, layout folder-prefix), as from the save disc. `python3 /seed.py convert-discs` adds only them,
+to a server seeded before (scripts/dev.sh romm-record, after the other fixtures are recorded).
 
 Collections, for the Collections screen: the admin keeps a regular collection holding both seeded
 ROMs (with SKIFF_LIBRARY_ROMS also the first LIBRARY_SHELF numbered ROMs and the three special
@@ -45,7 +55,7 @@ collections; the first cannot (RomM answers it 403).
 
 Environment: SKIFF_ADMIN_USER, SKIFF_ADMIN_PASSWORD, SKIFF_PAYLOAD_BYTES (optional),
 SKIFF_LIBRARY_ROMS (optional), SKIFF_SAVE_DISC (optional, 1 by default), SKIFF_FOREIGN_ROM
-(optional, 1 by default).
+(optional, 1 by default), SKIFF_CONVERT_DISCS (optional, 1 by default).
 """
 
 import asyncio
@@ -61,6 +71,10 @@ import urllib.error
 import urllib.request
 import zlib
 from pathlib import Path
+
+import shutil
+import subprocess
+import tempfile
 
 import socketio
 from PIL import Image, ImageDraw
@@ -112,6 +126,22 @@ FOREIGN_SLUG = "gba"
 FOREIGN_NAME = "Skiff Foreign Game.gba"
 FOREIGN_BYTES = 2048
 FOREIGN_SEED = b"skiff-integration-foreign"
+# The discs RomM converts on download (SKIFF_CONVERT_DISCS): file, game ID. The slow one's name is the
+# one rom-converto-delay.sh waits on.
+CONVERT_DISCS = (
+    ("Skiff Convert Disc", "SKIF-00003"),
+    ("Skiff Convert Slow", "SKIF-00004"),
+)
+# 32 sectors: the ISO 9660 structure, then seeded bytes (blocks a CSO stores as they are), then
+# zeros (blocks it deflates).
+CONVERT_DISC_SECTORS = 32
+CONVERT_NOISE_SECTORS = 4
+CONVERT_SEED = b"skiff-integration-convert"
+# The rom-converto RomM ships, by its own path: rom-converto-delay.sh stands in front of it on PATH.
+ROM_CONVERTO = "/usr/bin/rom-converto"
+# What RomM must offer a converted disc's download as (DetailedRomSchema.download_formats).
+CONVERT_FORMATS = {"cso", "zso", "iso"}
+CONVERT_TIMEOUT_SECONDS = 60
 # ROMs per listing page when the seed looks them up after the scan.
 LIST_LIMIT = 500
 # Synthetic, reproducible content: SHA-256 in counter mode over this seed. Same size, same bytes,
@@ -246,11 +276,11 @@ def iso_record(name, sector, size, flags):
     return bytes(record)
 
 
-def write_save_disc():
-    """The synthetic PSP disc: just enough ISO 9660 for a reader to find UMD_DATA.BIN in its root
-    folder, the file RomM's scan reads the game ID from ("SKIF-00002|...")."""
-    umd_data = f"{SAVE_DISC_ID}|0000000000000000|0001|G".encode("ascii")
-    sectors = ISO_FILE_SECTOR + 1
+def disc_image(disc_id, volume_name, sectors=ISO_FILE_SECTOR + 1):
+    """A synthetic PSP disc: just enough ISO 9660 for a reader to find UMD_DATA.BIN in its root
+    folder, the file RomM's scan reads the game ID from ("SKIF-00002|..."), in an image of `sectors`
+    sectors (zeros after the file)."""
+    umd_data = f"{disc_id}|0000000000000000|0001|G".encode("ascii")
     image = bytearray(sectors * ISO_SECTOR)
     root = iso_record(b"\0", ISO_ROOT_SECTOR, ISO_SECTOR, ISO_DIRECTORY_FLAG)
     folder = root + iso_record(b"\1", ISO_ROOT_SECTOR, ISO_SECTOR, ISO_DIRECTORY_FLAG)
@@ -262,7 +292,7 @@ def write_save_disc():
     pvd = bytearray(ISO_SECTOR)
     pvd[0:7] = b"\x01CD001\x01"
     pvd[8:40] = iso_text("PSP GAME", 32)
-    pvd[40:72] = iso_text("SKIFF_SAVE_DISC", 32)
+    pvd[40:72] = iso_text(volume_name, 32)
     pvd[80:88] = iso_both32(sectors)
     pvd[120:124] = iso_both16(1)
     pvd[124:128] = iso_both16(1)
@@ -289,9 +319,79 @@ def write_save_disc():
         (ISO_FILE_SECTOR, umd_data),
     ):
         image[sector * ISO_SECTOR : sector * ISO_SECTOR + len(data)] = data
+    return image
+
+
+def write_save_disc():
+    """The save disc (see the module's docstring)."""
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    (LIBRARY_DIR / SAVE_DISC_NAME).write_bytes(bytes(image))
+    (LIBRARY_DIR / SAVE_DISC_NAME).write_bytes(bytes(disc_image(SAVE_DISC_ID, "SKIFF_SAVE_DISC")))
     return SAVE_DISC_NAME
+
+
+def hashes(data):
+    return {
+        "size": len(data),
+        "sha1": hashlib.sha1(data).hexdigest(),
+        "md5": hashlib.md5(data).hexdigest(),
+        "crc32": f"{zlib.crc32(data):08x}",
+    }
+
+
+def write_convert_disc(name, disc_id):
+    """One disc RomM converts (see the module's docstring), compressed to a CHD in the platform's
+    folder; returns the CHD's name and hashes and the ISO's (what a conversion must give back)."""
+    image = disc_image(disc_id, name.upper().replace(" ", "_"), CONVERT_DISC_SECTORS)
+    noise_at = (ISO_FILE_SECTOR + 1) * ISO_SECTOR
+    noise = b"".join(
+        hashlib.sha256(CONVERT_SEED + disc_id.encode() + counter.to_bytes(8, "big")).digest()
+        for counter in range(CONVERT_NOISE_SECTORS * ISO_SECTOR // 32)
+    )
+    image[noise_at : noise_at + len(noise)] = noise
+    chd_name = f"{name}.chd"
+    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as work:
+        iso = Path(work) / f"{name}.iso"
+        chd = Path(work) / chd_name
+        iso.write_bytes(bytes(image))
+        subprocess.run(
+            [ROM_CONVERTO, "--no-update-check", "chd", "compress", "--dvd", "--quiet", str(iso),
+             str(chd)],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=sys.stderr,
+            timeout=CONVERT_TIMEOUT_SECONDS,
+        )
+        shutil.move(chd, LIBRARY_DIR / chd_name)
+    stored = hashes((LIBRARY_DIR / chd_name).read_bytes())
+    return {"file_name": chd_name, **stored, "iso": hashes(bytes(image))}
+
+
+def convert_discs(auth, cookie):
+    """The discs RomM converts, scanned, each checked offered as CONVERT_FORMATS; returns them by
+    role: "fast" and "slow"."""
+    discs = [write_convert_disc(name, disc_id) for name, disc_id in CONVERT_DISCS]
+    asyncio.run(scan(cookie))
+    _, ids = find_roms(auth, [disc["file_name"] for disc in discs])
+    for (_, disc_id), disc, rom_id in zip(CONVERT_DISCS, discs, ids):
+        status, rom = request("GET", f"/api/roms/{rom_id}", auth)
+        offered = set((rom or {}).get("download_formats") or [])
+        if status != HTTP_OK or not CONVERT_FORMATS <= offered:
+            raise SystemExit(
+                f"seed: RomM offers {disc['file_name']} as {sorted(offered)} (HTTP {status}), not "
+                f"{sorted(CONVERT_FORMATS)}: is download conversion on (compose.yaml, config.yml)?"
+            )
+        save_target = disc_id.replace("-", "")
+        if rom.get("save_target") != save_target or rom.get("save_target_layout") != SAVE_DISC_LAYOUT:
+            raise SystemExit(
+                f"seed: {disc['file_name']} scanned as save_target {rom.get('save_target')!r}, layout "
+                f"{rom.get('save_target_layout')!r}, not {save_target!r}"
+            )
+        disc["rom_id"] = rom_id
+        disc["save_target"] = save_target
+        log(f"convert disc: ROM {rom_id}, {disc['file_name']} ({disc['size']} bytes, ISO "
+            f"{disc['iso']['size']}), offered as {sorted(offered)}")
+    return dict(zip(("fast", "slow"), discs))
 
 
 def save_disc_rom(auth, platform_id):
@@ -619,6 +719,10 @@ def create_token(auth, name=TOKEN_NAME, scopes=TOKEN_SCOPES):
 def main():
     user = os.environ["SKIFF_ADMIN_USER"]
     password = os.environ["SKIFF_ADMIN_PASSWORD"]
+    if sys.argv[1:] == ["convert-discs"]:
+        auth = basic_auth(user, password)
+        print(json.dumps({"convert": convert_discs(auth, session_cookie(auth))}))
+        return
     size = int(os.environ.get("SKIFF_PAYLOAD_BYTES", DEFAULT_PAYLOAD_BYTES))
     library_roms = int(os.environ.get("SKIFF_LIBRARY_ROMS", "0"))
     auth = basic_auth(user, password)
@@ -643,6 +747,9 @@ def main():
         asyncio.run(scan(session_cookie(auth), FOREIGN_SLUG))
         foreign["platform_id"], (foreign["rom_id"],) = find_roms(auth, [FOREIGN_NAME], FOREIGN_SLUG)
         log(f"foreign ROM {foreign['rom_id']} on platform {foreign['platform_id']} ({FOREIGN_SLUG})")
+    convert = None
+    if os.environ.get("SKIFF_CONVERT_DISCS", "1") != "0":
+        convert = convert_discs(auth, session_cookie(auth))
     platform_id, (rom_id, extra_rom_id) = find_roms(auth, [PAYLOAD_NAME, EXTRA_NAME])
     if with_save_disc:
         save_disc = save_disc_rom(auth, platform_id)
@@ -670,6 +777,7 @@ def main():
                 "collections": collections,
                 "save_disc": save_disc,
                 "foreign": foreign,
+                "convert": convert,
             }
         )
     )

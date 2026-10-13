@@ -38,6 +38,13 @@ export SKIFF_IT_SAVE_DISC_ROM_ID SKIFF_IT_SAVE_DISC_TARGET
 # The game of another platform, which the install test sends to a PSP and Skiff refuses.
 SKIFF_IT_FOREIGN_ROM_ID="$(jq -er .foreign.rom_id "$SEED")"
 export SKIFF_IT_FOREIGN_ROM_ID
+# The synthetic PSP discs stored as CHD, which RomM converts on download, and their save IDs.
+SKIFF_IT_CONVERT_ROM_ID="$(jq -er .convert.fast.rom_id "$SEED")"
+SKIFF_IT_CONVERT_SLOW_ROM_ID="$(jq -er .convert.slow.rom_id "$SEED")"
+SKIFF_IT_CONVERT_SAVE_TARGET="$(jq -er .convert.fast.save_target "$SEED")"
+SKIFF_IT_CONVERT_SLOW_SAVE_TARGET="$(jq -er .convert.slow.save_target "$SEED")"
+export SKIFF_IT_CONVERT_ROM_ID SKIFF_IT_CONVERT_SLOW_ROM_ID SKIFF_IT_CONVERT_SAVE_TARGET
+export SKIFF_IT_CONVERT_SLOW_SAVE_TARGET
 # The collections: a token that may list them, and the seeded ones' ids and the shelf's size.
 SKIFF_IT_COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"
 SKIFF_IT_SHELF_ID="$(jq -r .collections.shelf "$SEED")"

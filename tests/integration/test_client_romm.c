@@ -34,8 +34,9 @@ enum {
     PATH_MAX_LENGTH = 256,
     HEX_BASE = 16,
     DECIMAL_BASE = 10,
-    /* The payload, the extra file and the save disc (tests/integration/seed.py). */
-    SEEDED_ROMS = 3,
+    /* The payload, the extra file, the save disc and the two discs RomM converts
+     * (tests/integration/seed.py). */
+    SEEDED_ROMS = 5,
     /* The payload (tests/integration/seed.py). */
     SEEDED_FAVOURITES = 1,
     HTTP_OK = 200,
@@ -93,6 +94,12 @@ static uint64_t save_disc_rom_id;
 static const char *save_disc_target;
 /* The seed's game of another platform, which RomM lets a player send to the PSP. */
 static uint64_t foreign_rom_id;
+/* The synthetic PSP discs stored as CHD, which RomM converts on download, and the save IDs RomM
+ * reads from them as from the save disc. */
+static uint64_t convert_rom_id;
+static uint64_t convert_slow_rom_id;
+static const char *convert_save_target;
+static const char *convert_slow_save_target;
 static const char *admin_authorization;
 static char ca_file[PATH_MAX_LENGTH];
 static skiff_transport *transport;
@@ -170,13 +177,26 @@ static void test_every_rom_is_listed_page_by_page(void) {
     }
     TEST_ASSERT_EQUAL_INT(1, seen_payload);
     TEST_ASSERT_EQUAL_INT(1, seen_extra);
-    TEST_PRINTF("a full page holds all three, in name order");
+    TEST_PRINTF("a full page holds all five, in name order");
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
                           skiff_romm_list_roms(&client, &all, 0, SKIFF_ROMM_PAGE_SIZE, &page));
     TEST_ASSERT_EQUAL_size_t(SEEDED_ROMS, page.count);
-    TEST_ASSERT_EQUAL_UINT64(extra.rom_id, page.items[0].id);
-    TEST_ASSERT_EQUAL_UINT64(save_disc_rom_id, page.items[1].id);
-    TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[2].id);
+    TEST_ASSERT_EQUAL_UINT64(convert_rom_id, page.items[0].id);
+    TEST_ASSERT_EQUAL_UINT64(convert_slow_rom_id, page.items[1].id);
+    TEST_ASSERT_EQUAL_UINT64(extra.rom_id, page.items[2].id);
+    TEST_ASSERT_EQUAL_UINT64(save_disc_rom_id, page.items[3].id);
+    TEST_ASSERT_EQUAL_UINT64(payload.rom_id, page.items[4].id);
+}
+
+/* The save ID the seed gave the disc id, or "" for a file that is not a disc. */
+static const char *seeded_save_target(uint64_t id) {
+    if (id == save_disc_rom_id) {
+        return save_disc_target;
+    }
+    if (id == convert_rom_id) {
+        return convert_save_target;
+    }
+    return id == convert_slow_rom_id ? convert_slow_save_target : "";
 }
 
 static void test_romm_reads_the_save_id_of_a_psp_disc(void) {
@@ -190,8 +210,10 @@ static void test_romm_reads_the_save_id_of_a_psp_disc(void) {
         const skiff_romm_rom_summary *item = &page.items[i];
         TEST_PRINTF("ROM %llu %s: save_target \"%s\", layout %d", (unsigned long long)item->id,
                     item->fs_name, item->save_target, (int)item->save_layout);
-        if (item->id == save_disc_rom_id) {
-            TEST_ASSERT_EQUAL_STRING(save_disc_target, item->save_target);
+        const char *expected = seeded_save_target(item->id);
+        if (expected[0] != '\0') {
+            TEST_PRINTF("  a disc, ISO or CHD: its save ID");
+            TEST_ASSERT_EQUAL_STRING(expected, item->save_target);
             TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_SAVE_LAYOUT_FOLDER_PREFIX, item->save_layout);
         } else {
             TEST_PRINTF("  not a disc RomM could read: no save ID");
@@ -581,6 +603,10 @@ int main(void) {
     save_disc_rom_id = env_number("SKIFF_IT_SAVE_DISC_ROM_ID");
     save_disc_target = required_env("SKIFF_IT_SAVE_DISC_TARGET");
     foreign_rom_id = env_number("SKIFF_IT_FOREIGN_ROM_ID");
+    convert_rom_id = env_number("SKIFF_IT_CONVERT_ROM_ID");
+    convert_slow_rom_id = env_number("SKIFF_IT_CONVERT_SLOW_ROM_ID");
+    convert_save_target = required_env("SKIFF_IT_CONVERT_SAVE_TARGET");
+    convert_slow_save_target = required_env("SKIFF_IT_CONVERT_SLOW_SAVE_TARGET");
     admin_authorization = required_env("SKIFF_IT_ADMIN_AUTHORIZATION");
     if (skiff_net_global_init() != SKIFF_OK) {
         printf("setup failed: TLS could not be seeded\n");

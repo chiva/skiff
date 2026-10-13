@@ -275,6 +275,7 @@ romm_up() {
       ${SKIFF_LIBRARY_ROMS:+-e SKIFF_LIBRARY_ROMS="$SKIFF_LIBRARY_ROMS"} \
       ${SKIFF_SAVE_DISC:+-e SKIFF_SAVE_DISC="$SKIFF_SAVE_DISC"} \
       ${SKIFF_FOREIGN_ROM:+-e SKIFF_FOREIGN_ROM="$SKIFF_FOREIGN_ROM"} \
+      ${SKIFF_CONVERT_DISCS:+-e SKIFF_CONVERT_DISCS="$SKIFF_CONVERT_DISCS"} \
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
@@ -289,6 +290,18 @@ Test RomM is up (web UI login: $ROMM_ADMIN_USER, password in $INTEGRATION_DIR/ro
   https://$host:8444  TLS + client certificate ($INTEGRATION_DIR/certs/client-{ecdsa,rsa}.{crt,key})
 Seeded file, its hashes and an API token: $INTEGRATION_DIR/romm.json
 EOF
+}
+
+# Adds the discs RomM converts on download to a seeded server (tests/integration/seed.py), into
+# romm-convert.json: romm-record records the other fixtures without them first.
+seed_convert_discs() {
+  local dir="$REPO_ROOT/$INTEGRATION_DIR" admin_password
+  admin_password="$(sed -n 's/^SKIFF_ADMIN_PASSWORD=//p' "$dir/romm.env")"
+  (
+    umask 077
+    compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
+      romm python3 /seed.py convert-discs >"$dir/romm-convert.json"
+  )
 }
 
 # By project name, so it works even when build/integration/ is gone.
@@ -400,10 +413,14 @@ run_command() {
     # The server exists only for the recording: stop it even when starting or recording fails.
     trap romm_down EXIT
     # Never the A1 library nor the save disc: the fixtures record the two seeded ROMs. The game of
-    # another platform is the install fixtures' refused send.
-    SKIFF_LIBRARY_ROMS="" SKIFF_SAVE_DISC=0 SKIFF_FOREIGN_ROM=1 \
+    # another platform is the install fixtures' refused send. The discs RomM converts come after
+    # those fixtures, for their own.
+    SKIFF_LIBRARY_ROMS="" SKIFF_SAVE_DISC=0 SKIFF_FOREIGN_ROM=1 SKIFF_CONVERT_DISCS=0 \
       SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
     run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
+    seed_convert_discs
+    run_host_in_romm_network \
+      "tests/integration/record-conversion-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
     trap - EXIT
     romm_down
     ;;

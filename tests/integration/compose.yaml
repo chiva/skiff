@@ -32,11 +32,17 @@ services:
       ROMM_AUTH_SECRET_KEY: ${ROMM_AUTH_SECRET_KEY:?run scripts/dev.sh romm-up}
       # No metadata providers: the tests need files and the API, not covers, and stay offline.
       UPC_LOOKUP_ENABLED: "false"
+      # Downloads may ask for another format (?format=), which RomM converts with the rom-converto
+      # it ships; config.yml allows it for downloads too.
+      ROM_CONVERTO_ENABLED: "true"
     volumes:
       - library:/romm/library
       - resources:/romm/resources
       - assets:/romm/assets
       - ./seed.py:/seed.py:ro
+      - ./config.yml:/romm/config/config.yml:ro
+      # Ahead of the real binary on PATH: holds back one synthetic disc's conversion.
+      - ./rom-converto-delay.sh:/usr/local/bin/rom-converto:ro
     depends_on:
       db:
         condition: service_healthy

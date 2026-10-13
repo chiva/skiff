@@ -1,0 +1,7 @@
+# The test RomM's config.yml (compose.yaml mounts it read-only): downloads may be converted, as an
+# admin allows in RomM's settings, with ROM_CONVERTO_ENABLED set in compose.yaml. Everything else
+# keeps RomM's defaults.
+converto:
+  download_conversion_enabled: true
+  # Scans read nothing through rom-converto, so they find what they found before conversion was on.
+  scan_metadata: false

@@ -206,13 +206,62 @@ size_t skiff_app_wrap_spans(const char *text, float width, skiff_ui_measure_fn m
     return count;
 }
 
+/* ---- Line heights ---- */
+
+int skiff_app_line_height(const skiff_app_view *view, size_t index) {
+    if (view == NULL || index >= view->line_count) {
+        return 0;
+    }
+    if (view->line_styles[index] != SKIFF_APP_LINE_HEADING) {
+        return SKIFF_APP_LINE_HEIGHT;
+    }
+    const int last =
+        index + 1 == view->line_count || view->line_styles[index + 1] != SKIFF_APP_LINE_HEADING;
+    return SKIFF_APP_HEADING_LINE_HEIGHT + (last ? SKIFF_APP_HEADING_GAP : 0);
+}
+
+int skiff_app_lines_height(const skiff_app_view *view) {
+    if (view == NULL) {
+        return 0;
+    }
+    int height = 0;
+    for (size_t i = 0; i < view->line_count; i++) {
+        height += skiff_app_line_height(view, i);
+    }
+    return height;
+}
+
+/* The pixels the body has left under the view's lines (and the gap above the first). */
+static int body_left(const skiff_app_view *view) {
+    return SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP - skiff_app_lines_height(view);
+}
+
+/* The lines of body text that still fit under the view's lines. */
+static size_t lines_room(const skiff_app_view *view) {
+    const int left = body_left(view);
+    const size_t fit = left > 0 ? (size_t)left / SKIFF_APP_LINE_HEIGHT : 0;
+    const size_t slots = SKIFF_APP_LINES_MAX - view->line_count;
+    return fit < slots ? fit : slots;
+}
+
+/* Room for one more line of style under the view's lines: a heading after a heading takes over
+ * the gap under it. */
+static int line_fits(const skiff_app_view *view, skiff_app_line_style style) {
+    if (style != SKIFF_APP_LINE_HEADING) {
+        return lines_room(view) > 0;
+    }
+    const int after_heading =
+        view->line_count > 0 && view->line_styles[view->line_count - 1] == SKIFF_APP_LINE_HEADING;
+    const int needed = SKIFF_APP_HEADING_LINE_HEIGHT + (after_heading ? 0 : SKIFF_APP_HEADING_GAP);
+    return view->line_count < SKIFF_APP_LINES_MAX && body_left(view) >= needed;
+}
+
 /* ---- Building the view ---- */
 
 static void add_wrapped_within(skiff_app *app, const char *text, float width) {
     skiff_app_view *view = &app->view;
-    view->line_count +=
-        skiff_app_wrap(text, width, app->env.measure, app->env.ctx, &view->lines[view->line_count],
-                       SKIFF_APP_LINES_MAX - view->line_count);
+    view->line_count += skiff_app_wrap(text, width, app->env.measure, app->env.ctx,
+                                       &view->lines[view->line_count], lines_room(view));
 }
 
 /* The lines text takes at width. */
@@ -278,7 +327,7 @@ static void add_url(skiff_app *app, const char *url, float width) {
 /* An empty line between blocks of text. */
 static void add_gap(skiff_app *app) {
     skiff_app_view *view = &app->view;
-    if (view->line_count > 0 && view->line_count < SKIFF_APP_LINES_MAX) {
+    if (view->line_count > 0 && lines_room(view) > 0) {
         view->lines[view->line_count++][0] = '\0';
     }
 }
@@ -695,17 +744,29 @@ static void library_view(skiff_app *app) {
     }
 }
 
-/* A game's name beside the cover: at most APP_DETAILS_NAME_LINES lines, the last cut with "..."
- * when there is more, so the facts, the download state and the free space always fit under it. */
-static void add_name_within(skiff_app *app, const char *name, float width) {
+/* The width text takes drawn as a heading (ctx is the app). */
+static float heading_measure(void *ctx, const char *text) {
+    const skiff_app *app = ctx;
+    return app->env.measure(app->env.ctx, text) * SKIFF_APP_HEADING_SCALE;
+}
+
+/* A game's name (or its file name) beside the cover, in style and wrapped as it is drawn: at most
+ * APP_DETAILS_NAME_LINES lines, the last cut with "..." when there is more, so the facts, the
+ * download state and the free space always fit under it. */
+static void add_name_within(skiff_app *app, const char *name, float width,
+                            skiff_app_line_style style) {
+    const int heading = style == SKIFF_APP_LINE_HEADING;
+    const skiff_ui_measure_fn measure = heading ? heading_measure : app->env.measure;
+    void *measure_ctx = heading ? (void *)app : app->env.ctx;
     char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
     const size_t count =
-        skiff_app_wrap(name, width, app->env.measure, app->env.ctx, lines, SKIFF_APP_LINES_MAX);
+        skiff_app_wrap(name, width, measure, measure_ctx, lines, SKIFF_APP_LINES_MAX);
     skiff_app_view *view = &app->view;
     for (size_t i = 0; i < count && i < APP_DETAILS_NAME_LINES; i++) {
-        if (view->line_count == SKIFF_APP_LINES_MAX) {
+        if (!line_fits(view, style)) {
             return;
         }
+        view->line_styles[view->line_count] = style;
         char *line = view->lines[view->line_count++];
         if (i + 1 == APP_DETAILS_NAME_LINES && count > APP_DETAILS_NAME_LINES) {
             /* Longer than the line, so the fit ends it with "...". */
@@ -716,7 +777,10 @@ static void add_name_within(skiff_app *app, const char *name, float width) {
             joined[first] = ' ';
             memcpy(joined + first + 1, lines[i + 1], next);
             joined[first + 1 + next] = '\0';
-            app_fit(app, joined, width, line, SKIFF_TEXT_MAX);
+            if (skiff_ui_fit_text(joined, width, measure, measure_ctx, line, SKIFF_TEXT_MAX) !=
+                SKIFF_OK) {
+                line[0] = '\0';
+            }
         } else {
             memcpy(line, lines[i], SKIFF_TEXT_MAX);
         }
@@ -819,7 +883,7 @@ static size_t details_facts(const skiff_app *app, char (*facts)[SKIFF_TEXT_MAX])
 /* A line of the view, text fitted to width; nothing once the view is full. */
 static void add_fitted_line(skiff_app *app, const char *text, float width) {
     skiff_app_view *view = &app->view;
-    if (view->line_count < SKIFF_APP_LINES_MAX) {
+    if (lines_room(view) > 0) {
         app_fit(app, text, width, view->lines[view->line_count++], SKIFF_TEXT_MAX);
     }
 }
@@ -875,12 +939,13 @@ static void add_description(skiff_app *app) {
                                  description->lines, APP_DESCRIPTION_LINES_MAX, &description->cut);
         description->wrapped = 1;
     }
-    /* The rule's line and at least one of text. */
-    if (description->line_count == 0 || view->line_count + 2 > SKIFF_APP_LINES_MAX) {
+    /* The rule's line and at least one of text, in what the lines above (the name a heading) left
+     * of the body. */
+    if (description->line_count == 0 || lines_room(view) < 2) {
         return;
     }
     view->lines[view->line_count++][0] = '\0';
-    const size_t room = SKIFF_APP_LINES_MAX - view->line_count;
+    const size_t room = lines_room(view);
     const size_t window = room < description->line_count ? room : description->line_count;
     const size_t last_first = description->line_count - window;
     if (description->first > last_first) {
@@ -906,6 +971,13 @@ static void add_description(skiff_app *app) {
     }
 }
 
+_Static_assert(SKIFF_APP_BLOCK_GAP + APP_DETAILS_NAME_LINES * SKIFF_APP_HEADING_LINE_HEIGHT +
+                       SKIFF_APP_HEADING_GAP +
+                       (APP_DETAILS_NAME_LINES + APP_DETAILS_FACT_LINES + 2) *
+                           SKIFF_APP_LINE_HEIGHT <=
+                   SKIFF_APP_BODY_HEIGHT,
+               "the name, the file name, the facts, the state and the free space fit the body");
+
 static void details_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_DETAILS));
@@ -914,14 +986,15 @@ static void details_view(skiff_app *app) {
     const float width = SKIFF_APP_COVER_TEXT_WIDTH;
     view->has_cover_box = 1;
     view->cover = app_cover_shown(app) ? app->cover : NULL;
-    add_name_within(app, rom->name[0] != '\0' ? rom->name : rom->fs_name, width);
+    add_name_within(app, rom->name[0] != '\0' ? rom->name : rom->fs_name, width,
+                    SKIFF_APP_LINE_HEADING);
     if (!app->has_rom) {
         add_text_within(app, SKIFF_TEXT_LIBRARY_LOADING, width);
         add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
         return;
     }
     if (rom->name[0] != '\0') {
-        add_name_within(app, rom->fs_name, width);
+        add_name_within(app, rom->fs_name, width, SKIFF_APP_LINE_TEXT);
     }
     add_facts(app, width);
     const skiff_text_id refusal = app_details_refusal(app);

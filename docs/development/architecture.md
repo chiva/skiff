@@ -173,8 +173,10 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   Settings', which keeps the address, the queue and the installs). A list that cannot load (214
   below, or a lost connection) is said on the screen with Retry, and SELECT still leaves it.
 - **A game's details** (`details_view()` in `src/app/app_view.c`) fill the body beside the
-  160×220 cover box (288 pixels of text, 17 lines of 13): the name and the file name (3 lines each
-  at most), the facts RomM has (year, genres, players, rating, developer / publisher, regions,
+  160×220 cover box (288 pixels of text, 224 pixels high under the gap above the first line): the
+  name, a heading (size 0.75 against body text's 0.6, on lines of 16 pixels with 4 more under its
+  last, so it stands out from the text under it), and the file name (3 lines each at most), the
+  facts RomM has (year, genres, players, rating, developer / publisher, regions,
   languages as RomM's two-letter codes, and the size, which every game has) joined with ` | ` and
   packed into at most 3 lines without splitting one (the last is cut with `...`), then the
   download state or the refusal, the save line and the free space, as before. Under a rule comes
@@ -186,7 +188,11 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   is wrapped once per game into spans of its text (`skiff_app_wrap_spans()`, at most 128 lines;
   past that the last one shown ends with `...`), so a rebuild of the view (a note, a download's
   progress, a scroll) measures only the fixed part; wrapping breaks at `\n`, which only the
-  description carries.
+  description carries. Body lines carry a style (`skiff_app_view.line_styles`) that the view sets
+  and the renderer draws: the name's lines are wrapped with the measure scaled to the heading's
+  size (`SKIFF_APP_HEADING_SCALE`), and the room left for the description is counted in pixels
+  (`skiff_app_lines_height()`, which the renderer also steps its lines by), so the window has one
+  line fewer than with the name as body text (9 of 13 under a one-line name and the full facts).
 - **Startup order**: heartbeat first (205 below RomM 5.3; a newer release line gets a notice once,
   remembered as `[skiff] romm_notice`), then pairing when there is no token, then the `psp`
   platform. The worker starts once RomM answered, with its own copies of the server address, token

@@ -4,7 +4,8 @@ A PSP plays PlayStation (PS1) games through POPS, the PS1 emulator built into it
 does not read disc images: it reads one file, an `EBOOT.PBP` in a special layout. This page
 explains that layout from zero, shows what we tested on a real PSP, and ends with what a tool
 needs in order to build such files from `.bin/.cue` or `.chd` images **without any Sony-made
-data**.
+data**, and the one place where that is not possible: a multi-disc file with in-game disc
+switching.
 
 It is written for developers of ROM converters and similar tools, as much as for Skiff itself.
 Nothing here needs Skiff. Skiff's own PS1 installer is still being designed
@@ -12,10 +13,13 @@ Nothing here needs Skiff. Skiff's own PS1 installer is still being designed
 results below are not in the repository yet, so this page describes what they do rather than
 linking to them.
 
-Every statement is one of three kinds, and the page says which when it matters:
+Every statement is one of four kinds, and the page says which when it matters:
 
 - **Measured**: we built the file and ran it on a PSP (2026-10-13), or measured it on the PSP;
 - **Documented**: a public source says so (linked, with its date, in [Sources](#sources));
+- **Analysed**: read from the code of the official 6.61 firmware's POPS modules (see
+  [How POPS uses it](#how-pops-uses-it)); no firmware file or data taken from it is kept or
+  published;
 - **Inferred**: it follows from the above but nobody has tested it. Treat it as a hypothesis.
 
 ## Contents
@@ -25,6 +29,7 @@ Every statement is one of three kinds, and the page says which when it matters:
 - [The EBOOT.PBP file](#the-ebootpbp-file)
 - [Boot sequence and where it fails](#boot-sequence-and-where-it-fails)
 - [What works and what does not](#what-works-and-what-does-not)
+- [The multi-disc table](#the-multi-disc-table)
 - [Testing methodology](#testing-methodology)
 - [Designing a converter](#designing-a-converter)
 - [Licensing and clean room](#licensing-and-clean-room)
@@ -34,8 +39,8 @@ Every statement is one of three kinds, and the page says which when it matters:
 
 ## The short version
 
-On a PSP-1000 running ARK custom firmware with the stock POPS (measured, 2026-10-13), a PS1
-EBOOT boots when it has:
+On a PSP-1000 running ARK custom firmware with the stock POPS (measured, 2026-10-13), a
+single-disc PS1 EBOOT boots when it has:
 
 1. a PBP container with a 944-byte `PARAM.SFO` whose `CATEGORY` is `ME`;
 2. a `DATA.PSP` that calls one firmware function, `scePopsManLoadModule`. Ours is 2,194 bytes,
@@ -49,7 +54,16 @@ EBOOT boots when it has:
 
 Not needed: Sony's encrypted `PGD` footer, Sony's boot logo, `KEYS.BIN`, the SHA-1 hashes in the
 index, a `PSTITLEIMG` wrapper for a single disc, the "magic" value other tools write at 0x1220,
-and the opaque template and configuration bytes other tools copy around.
+and the opaque template and configuration bytes other tools copy around, with one exception
+below. A real commercial disc runs from such a file (G1).
+
+Two discs in one EBOOT (measured with two) need the same per disc, inside a `PSTITLEIMG` wrapper:
+each disc's own `PSISOIMG`, one STARTDAT after the last disc, and **a 64-byte table at
+PSTITLEIMG+0x28C**. Without the table the game freezes at a black screen; with it, the HOME menu
+offers "Switch Discs" and switching works. That table is the exception: it is a key derived from
+Sony's firmware, the same for every game, and no tool can compute a working one from facts alone
+(see [The multi-disc table](#the-multi-disc-table)). The alternative is one EBOOT per disc, each
+carrying disc 1's ID: no table, a shared memory card, but no switching inside the game.
 
 One more finding matters to anyone who builds test programs: PS1 programs built with PSn00bSDK
 releases since v0.22 address hardware through `0xBF80xxxx` and go black under POPS. Rebuilt with
@@ -98,7 +112,10 @@ POPS accept it anyway. On ARK (ARK-4 and its successor ARK-5), the part that doe
 - it rewrites a read of `~ELF` into `~PSP`, so a plain, unencrypted ELF `DATA.PSP` loads;
 - it routes block decompression to the firmware's `sceKernelDeflateDecompress`, so blocks are
   deflate rather than Sony's own scheme;
-- it re-enables CD audio stored as raw tracks, which later firmware had disabled.
+- it re-enables CD audio stored as raw tracks, which later firmware had disabled;
+- for a multi-disc file, it stubs out the per-disc MAC check popsman makes on the disc map
+  (analysed). It does **not** replace the multi-disc table POPS needs (see
+  [The multi-disc table](#the-multi-disc-table)).
 
 Adrenaline, the equivalent on PS Vita, patches the same call sites, but behaves differently in
 places (see [Open questions](#open-questions)).
@@ -174,7 +191,7 @@ place later.
 |---|---|---|---|---|---|
 | BOOTABLE | u32 | 4 | 0x100 | 1 | |
 | CATEGORY | string | 4 | 0x104 | `ME` | marks a PS1 game |
-| DISC_ID | string | 16 | 0x108 | `SLUS99999` | no `_`, `-` or `.`; names the save folder |
+| DISC_ID | string | 16 | 0x108 | `SLUS99999` | no `_`, `-` or `.`; does **not** name the save folder (PSISOIMG 0x400 does, G4) |
 | DISC_VERSION | string | 8 | 0x118 | `1.00` | |
 | LICENSE | string | 512 | 0x120 | `Skiff` | other tools copy Sony's copyright line; neutral text works (measured) |
 | PARENTAL_LEVEL | u32 | 4 | 0x320 | 3 | |
@@ -241,7 +258,7 @@ flowchart TB
 |---|---|---|---|
 | 0x000 | 12 | `PSISOIMG0000` | |
 | 0x00C | 4 | offset of `STARTDAT` = end of the last stored block, rounded up to 16 | measured in the reference file; ours the same |
-| 0x400 | 32 | disc ID as `_SLUS_99999` | ARK reads it here |
+| 0x400 | 32 | disc ID as `_SLUS_99999` | ARK reads it here; POPS names the save folder after it (G4, G5) |
 | 0x420 | up to 0x3E0 | per-game POPS configuration | the reference tool writes 217 non-zero default bytes; all zero works (measured) |
 | 0x800 | up to 0x3FC | table of contents, 10 bytes per entry | see [TOC](#table-of-contents) |
 | 0xBFC | 4 | `0x00100000`, where the disc data starts | always this value |
@@ -363,31 +380,47 @@ image of 486 bytes; POPS showed it.
 A game of 2 to 5 discs puts a `PSTITLEIMG` header at the start of `DATA.PSAR`, followed by one
 complete PSISOIMG per disc, each aligned to 0x8000. Offsets below are relative to `DATA.PSAR`:
 
-| Offset | Size | Content |
-|---|---|---|
-| 0x000 | 16 | `PSTITLEIMG000000` |
-| 0x010 | 4 | offset of STARTDAT |
-| 0x200 | 5 × 4 | offsets of each disc's PSISOIMG, zero after the last |
-| 0x264 | 32 | disc ID of disc 1, `_SLUS_99999` |
-| 0x284 | 4 | STARTDAT offset + 0x2D31 (the 0x1220 rule; only this rule was tested here) |
-| 0x30C | 128 | title |
+| Offset | Size | Content | What we know |
+|---|---|---|---|
+| 0x000 | 16 | `PSTITLEIMG000000` | |
+| 0x010 | 4 | offset of STARTDAT, after the last disc | measured (M1K) |
+| 0x200 | 5 × 4 | offsets of each disc's PSISOIMG, zero after the last | POPS takes the number of discs from it (analysed) |
+| 0x214 | 0x30 | opaque bytes in the reference file | zero works (Z1, Z4, M1K) |
+| 0x264 | 32 | disc ID of disc 1, `_SLUS_99999` | |
+| 0x284 | 4 | the 0x1220 counterpart: STARTDAT offset + 0x2D31 in the reference | the end of STARTDAT works (M1K) |
+| 0x28C | 0x80 | **the multi-disc table**: bytes 0x00–0x3F are read, 0x40–0x7F never | **required** for two discs; see [The multi-disc table](#the-multi-disc-table) |
+| 0x30C | 128 | title | |
+| 0x38C | 4 | a small non-zero value in the reference file | zero works (Z3, Z4, M1K) |
 
-The reference file also carries opaque non-zero bytes at 0x214–0x243, 0x28C–0x30B and 0x38C,
-whose origin is undocumented. We zeroed them and the file booted (T3W, T4S). `PARAM.SFO`
-`DISC_ID` is disc 1's.
+Layout rules, measured with two discs (M1K, our own file, and GK, a real game):
+
+- disc 1's PSISOIMG starts at 0x8000, each later one at the next 0x8000 boundary;
+- each PSISOIMG is complete, laid out as a single disc's: its own ID at 0x400, its own TOC and
+  index, and its own 0x00C pointing at **the end of its own data** (relative to its own
+  PSISOIMG), not at a STARTDAT of its own;
+- one STARTDAT, after the last disc, at the offset in PSTITLEIMG+0x010;
+- `PARAM.SFO` `DISC_ID` and PSTITLEIMG+0x264 carry disc 1's ID;
+- only the first 64 bytes of the table are needed; the other 64 were zero in M1K.
+
+G3 tried the other placement (every disc's 0x00C pointing at the one STARTDAT), but without the
+table, so that placement is not ruled out; it is simply not needed. Every other byte the
+reference tool writes into PSTITLEIMG was zero in M1K, which also kept our own TOC details, 0x1220
+value and stored-deflate blocks; switching those to the reference's had not fixed the freeze
+(M1T, M1L, M1D, M1X).
 
 ```mermaid
 flowchart LR
-    pst["PSTITLEIMG header<br/>disc table at +0x200"] --> d1["PSISOIMG disc 1<br/>at 0x8000"]
+    pst["PSTITLEIMG header<br/>disc offsets at +0x200<br/>table at +0x28C"] --> d1["PSISOIMG disc 1<br/>at 0x8000"]
     d1 --> d2["PSISOIMG disc 2<br/>next 0x8000 boundary"]
     d2 --> dn["... up to disc 5"]
-    pst -. "+0x010" .-> sd["STARTDAT"]
+    dn --> sd["STARTDAT<br/>once, after the last disc"]
+    pst -. "+0x010" .-> sd
 ```
 
-What we tested is a **one-disc** PSTITLEIMG (the PSISOIMG at 0x8000), which boots like a bare
-PSISOIMG. Two or more discs, disc switching, where STARTDAT goes in a multi-disc file and what each
-disc's own 0x00C holds there are untested by us. pop-fe's maintainer found that old POPS versions
-(such as 3.02) do not support PSTITLEIMG at all, so a single disc should use a bare PSISOIMG.
+A one-disc PSTITLEIMG (the PSISOIMG at 0x8000) boots like a bare PSISOIMG and needs no table
+(T3W, T4S: zeroed). pop-fe's maintainer found that old POPS versions (such as 3.02) do not
+support PSTITLEIMG at all, so a single disc should use a bare PSISOIMG. Three to five discs follow
+from the same rules but were not tested.
 
 ### A worked example
 
@@ -434,17 +467,24 @@ sequenceDiagram
     DP->>POPS: scePopsManLoadModule(EBOOT path, 1)
     ARK-->>POPS: custom PBP: licence checks faked, deflate hook
     POPS->>Player: shows the STARTDAT PNG
+    POPS->>POPS: two or more discs: decodes its menu strings with the +0x28C table
+    Note over POPS: no valid table: freezes black here (M0Z, Z2, Z5, M1 to M1X, Y1, Y4, Q1 to Q8, G2, G3)
     POPS->>POPS: reads PSISOIMG header, TOC, index, first blocks
     Note over POPS: raw 0x9300 blocks: freezes here (T1B, T2A, T2B, T3R, T3N, T3L, T3B, P0R)
     POPS->>Game: emulated BIOS: PlayStation logo, SYSTEM.CNF, BOOT program
     Note over Game: I/O through 0xBF80xxxx: black or stuck after the logo (P0, T1A, F3)
-    Game->>Player: runs (F1, T3W, T3C, T4S, T4T, T4N, T4D, T4M)
+    Game->>Player: runs (F1, T3W, T3C, T4S, T4T, T4N, T4D, T4M, G1, M0, M1K, GK)
+    Player->>POPS: HOME menu, Switch Discs (two or more discs)
+    POPS->>Player: switching before the game asks: a warning
+    POPS->>Game: resets into the chosen disc (M1K, GK)
 ```
 
 The roles of the firmware loader and PopCorn are documented; the order of the reads inside POPS
-is inferred from what the screen showed. We did not find out which component refuses a file
-without STARTDAT, only that the refusal comes before any image is shown. P0R (the reference file
-with every block re-stored raw) showed a black screen without any logo.
+is inferred from what the screen showed, except the multi-disc step, which is analysed: POPS
+decodes its multi-disc menu strings while it starts, and a wrong table makes it write through a
+NULL pointer ([How POPS uses it](#how-pops-uses-it)). We did not find out which component refuses
+a file without STARTDAT, only that the refusal comes before any image is shown. P0R (the
+reference file with every block re-stored raw) showed a black screen without any logo.
 
 ## What works and what does not
 
@@ -454,11 +494,12 @@ with every block re-stored raw) showed a black screen without any logo.
 |---|---|
 | Console | PSP-1000 |
 | Firmware | official 6.61 with ARK custom firmware (ARK-5), stock POPS, no popsloader |
-| Date | 2026-10-13, four rounds of variants, each round one Memory Stick session |
-| Pass | the test program's screen appears and keeps running |
-| Reference tool | pop-fe at commit `45dff05`, run in Docker without network; its output (P0) contains GPL and Sony-made data and was used only as a control, never shipped |
+| Date | 2026-10-13, eleven rounds of variants, each round one Memory Stick session |
+| Pass | the test program's screen appears and keeps running; for two discs we also noted whether the HOME menu offered the disc switch |
+| Reference tool | pop-fe at commit `45dff05`, run in Docker without network; its output (P0, M0) contains GPL and Sony-made data and was used only as a control, never shipped |
 | Our writer | a clean-room prototype written from the documented facts on this page |
-| Disc ID | `SLUS_999.99` (synthetic) on every test disc |
+| Disc ID | synthetic: `SLUS_999.99`, and `SLUS_999.98` for the first of the two-disc set |
+| Language | English; Spanish for one run in round 10 |
 
 The test discs (see [Testing methodology](#testing-methodology)):
 
@@ -468,6 +509,10 @@ The test discs (see [Testing methodology](#testing-methodology)):
 | F1 | the same template, libpsn00b rebuilt with `IOBASE 0x1f800000` and `EXP1BASE 0x1f000000`, one frame drawn before the first `VSync()` | `0x1F80xxxx` |
 | F2 | bare-metal program filling the screen through the GPU registers at `0x1F801810` | `0x1F80xxxx` |
 | F3 | the same at `0xBF801810` | `0xBF80xxxx` |
+| F1D1, F1D2 | F1 built twice as a two-disc set: IDs `SLUS_999.98` and `SLUS_999.99`, showing "DISC 1" and "DISC 2" on screen | `0x1F80xxxx` |
+
+From round 5 on, some rows (G) use a commercial two-disc game the maintainer owns, converted
+locally and never distributed. It is named nowhere here on purpose.
 
 ### Results
 
@@ -481,8 +526,11 @@ The test discs (see [Testing methodology](#testing-methodology)):
 | T1B | 1 | Fixture | ours | raw | ours | none | zero | ours | our STARTDAT image, then frozen | STARTDAT accepted; raw blocks suspect |
 | P0R | 2 | Fixture | P0, every block re-stored raw | raw | as P0 | PSTITLEIMG | yes | reference | frozen, black, no logo | **raw blocks fail even in the reference layout** |
 | P0N | 2 | Fixture | P0 without the PGD footer | deflate L1 | tool's logo, no footer | PSTITLEIMG | yes | reference | PlayStation logo | **the Sony PGD footer is not needed** |
-| T2A | 2 | Fixture | ours | raw | ours | none | yes | ours | does not boot | raw fails |
-| T2B | 2 | Fixture | ours | raw | ours | none | yes | reference | does not boot | raw fails |
+| T2A | 2 | Fixture | ours | raw | ours | none | yes | ours | our STARTDAT image, then frozen | raw fails |
+| T2B | 2 | Fixture | ours | raw | ours | none | yes | reference | our STARTDAT image, then frozen | raw fails |
+| T2C | 2 | Fixture | ours | deflate L1 | ours | none | yes | reference | our image, PlayStation logo, then black | **our own file reaches the BIOS**; black is the program |
+| T2W | 2 | Fixture | ours | deflate L1 | ours | PSTITLEIMG, zeroed template bytes | yes | reference | same as T2C | the wrapper works without template bytes |
+| T2R | 2 | Fixture | ours | raw | ours | PSTITLEIMG | yes | reference | reported as T2C | contradicts every other raw variant; not reproduced by T3R on F1 |
 | F1 | 2 | F1 | pop-fe | deflate L1 | as P0 | PSTITLEIMG | yes | reference | **runs** | **the black screen was the program's I/O addresses** |
 | F2 | 2 | F2 | pop-fe | deflate L1 | as P0 | PSTITLEIMG | yes | reference | black | inconclusive (likely our display setup) |
 | F3 | 2 | F3 | pop-fe | deflate L1 | as P0 | PSTITLEIMG | yes | reference | stuck on the PlayStation logo | consistent with KSEG1 I/O failing |
@@ -497,17 +545,57 @@ The test discs (see [Testing methodology](#testing-methodology)):
 | T4N | 4 | F1 | ours | stored deflate | ours | none | zero | reference | **runs** | **SHA-1 not needed** |
 | T4D | 4 | F1 | ours | deflate L1 | ours | none | zero | reference | **runs** | SHA-1 not needed with deflate either |
 | T4M | 4 | F1 | ours | deflate L1 | ours | none | yes | end of STARTDAT | **runs** | **the 0x1220 value is free** |
+| G1 | 5 | the game's disc 1 | ours | stored deflate | ours | none | zero | end of STARTDAT | **the game plays** | **the minimal recipe runs a real game**, all three choices in one file |
+| G2 | 5 | the game, discs 1 and 2 | ours | stored deflate | ours | PSTITLEIMG, 2 discs, zeroed template bytes | zero | end of STARTDAT | black, frozen, no PlayStation logo | no table (found in round 7) |
+| G3 | 5 | as G2 | ours | stored deflate | ours | as G2, every disc's 0x00C pointing at the one STARTDAT | zero | as G2 | as G2 | not the 0x00C placement alone |
+| M0 | 6 | F1D1 + F1D2 | pop-fe | deflate L1 | as P0 | PSTITLEIMG, 2 discs | yes | reference | **runs**; the HOME menu offers a disc switch | two-disc control |
+| M0D | 6 | F1D1 + F1D2 | M0 with our DATA.PSP | deflate L1 | as P0 | as M0 | yes | reference | runs | our DATA.PSP works for two discs |
+| M0S | 6 | F1D1 + F1D2 | M0 without the PGD footer | deflate L1 | tool's logo, no footer | as M0 | yes | reference | runs | no footer needed for two discs either |
+| M0Z | 6 | F1D1 + F1D2 | M0 with PSTITLEIMG +0x214–0x243, +0x28C–0x30B and +0x38C zeroed | deflate L1 | as P0 | as M0, template bytes zeroed | yes | reference | boot image, then frozen, black | **two discs need some of the template bytes** (one disc does not: T3W) |
+| M1 | 6 | F1D1 + F1D2 | ours | stored deflate | ours, after disc 2 | PSTITLEIMG, 2 discs, no template bytes | zero | ours | as M0Z | |
+| M1T | 6 | F1D1 + F1D2 | M1 with the reference's TOC control bytes and track 1 A-time | stored deflate | ours | as M1 | zero | ours | as M0Z | not the TOC details |
+| M1L | 6 | F1D1 + F1D2 | M1 with the reference's 0x1220 and +0x284 | stored deflate | ours | as M1 | zero | reference | as M0Z | not 0x1220 |
+| M1D | 6 | F1D1 + F1D2 | M1 with deflate blocks and SHA-1 | deflate L1 | ours | as M1 | yes | ours | as M0Z | not the encoding or the hashes |
+| M1X | 6 | F1D1 + F1D2 | M1 with all three changes | deflate L1 | ours | as M1 | yes | reference | as M0Z | **the difference is in the template bytes** |
+| G0 | 6 | the game, discs 1 and 2 | pop-fe | deflate L1 | as P0 | PSTITLEIMG, 2 discs | yes | reference | the game boots; disc switch offered | the game itself works with two discs |
+| Z1 | 7 | F1D1 + F1D2 | M0 with +0x214–0x243 zeroed | deflate L1 | as P0 | as M0 | yes | reference | **runs**, switch offered | +0x214 not needed |
+| Z2 | 7 | F1D1 + F1D2 | M0 with +0x28C–0x30B zeroed | deflate L1 | as P0 | as M0 | yes | reference | as M0Z | **the +0x28C table is required** |
+| Z3 | 7 | F1D1 + F1D2 | M0 with +0x38C zeroed | deflate L1 | as P0 | as M0 | yes | reference | **runs**, switch offered | +0x38C not needed |
+| Z4 | 7 | F1D1 + F1D2 | M0 with +0x214–0x243 and +0x38C zeroed | deflate L1 | as P0 | as M0 | yes | reference | **runs**, switch offered | neither, together |
+| Z5 | 7 | F1D1 + F1D2 | M0 with +0x28C–0x30B and +0x38C zeroed | deflate L1 | as P0 | as M0 | yes | reference | as M0Z | confirms Z2 |
+| S1 | 7 | F1D1 alone | ours | stored deflate | ours | none | zero | ours | **runs** | one EBOOT per disc works |
+| S2 | 7 | F1D2 alone, SFO `DISC_ID` of disc 1 | ours | stored deflate | ours | none | zero | ours | **runs** | |
+| S3 | 7 | F1D2 alone | ours | stored deflate | ours | none | zero | ours | **runs** | |
+| G4 | 7 | the game's disc 2 alone, SFO `DISC_ID` of disc 1 | ours | stored deflate | ours | none | zero | ours | the game plays; POPS created disc 2's save folder; the game reported disc 1's data missing | **the save folder follows PSISOIMG 0x400, not the SFO** |
+| Y1 | 8 | F1D1 + F1D2 | M0 with the table replaced by our own pseudo-random bytes | deflate L1 | as P0 | as M0 | yes | reference | as M0Z | a table cannot be invented |
+| Y4 | 8 | F1D1 + F1D2 | M0 with the table all `0xFF` | deflate L1 | as P0 | as M0 | yes | reference | as M0Z | |
+| Y2 | 8 | F1D1 + F1D2 | M0 with one bit flipped in table byte 0 | deflate L1 | as P0 | as M0 | yes | reference | runs; the switch works but its label is empty | the table feeds the menu text |
+| Y5 | 8 | F1D1 + F1D2 | M0 with table bytes 16–127 zeroed | deflate L1 | as P0 | as M0 | yes | reference | as Y2 | |
+| Y3 | 8 | F1D1 + F1D2 | M0 with one bit flipped in table byte 127 | deflate L1 | as P0 | as M0 | yes | reference | **runs**, label normal | the end of the table is not read |
+| Q1–Q8 | 9 | F1D1 + F1D2 | M0 with eight different pseudo-random tables | deflate L1 | as P0 | as M0 | yes | reference | all as M0Z | no random table works |
+| B0, R0 | 9 | F1D1 + F1D2 | M0 with table block 0 (bytes 0–15) zeroed (B) or randomised (R) | deflate L1 | as P0 | as M0 | yes | reference | as M0Z | block 0 is critical |
+| B2, R2 | 9 | F1D1 + F1D2 | the same for block 2 (bytes 32–47) | deflate L1 | as P0 | as M0 | yes | reference | runs; label `Swit____`: first four characters right, the rest wrong | |
+| B3, R3 | 9 | F1D1 + F1D2 | the same for block 3 (bytes 48–63) | deflate L1 | as P0 | as M0 | yes | reference | runs; label `____ch Discs`: first four characters wrong | |
+| B1, R1, B4–B7, R4–R7 | 9 | F1D1 + F1D2 | the same for blocks 1 and 4–7 | deflate L1 | as P0 | as M0 | yes | reference | runs; no visible effect | block 1: see [Open questions](#open-questions) |
+| S4 | 9 | F1D2 alone, disc 1's ID in PSISOIMG and SFO | ours | stored deflate | ours | none | zero | ours | **runs**; no new save folder | shares disc 1's folder |
+| G5 | 9 | the game's disc 2 alone, disc 1's ID in PSISOIMG and SFO | ours | stored deflate | ours | none | zero | ours | **the game plays and finds disc 1's save data** | **per-disc EBOOTs can share one memory card** |
+| M0 (es) | 10 | F1D1 + F1D2 | M0, PSP system language Spanish | deflate L1 | as P0 | as M0 | yes | reference | the HOME menu reads "Cambiar el Disco" | the label is POPS's own text, in the system language |
+| M1K | 11 | F1D1 + F1D2 | M1 plus the 64-byte table at +0x28C, the rest of the 0x80 bytes zero | stored deflate | ours, after disc 2 | PSTITLEIMG, 2 discs, table only | zero | ours | **runs**; "Switch Discs" works | **the table is the only missing piece** |
+| GK | 11 | the game, discs 1 and 2 | as M1K | stored deflate | ours, after disc 2 | as M1K | zero | ours | **the game plays; switching works** | the same on a real game |
 
 "Reference" in the 0x1220 column means `[0x00C] + 0x2D31` (and the same at PSTITLEIMG+0x284);
 "ours" means the end of STARTDAT (the end of the data when there is none). All variants from round 2 on use the
-reference's TOC lead-out (sectors + 1); round 1's own variants used sectors + 150. Round 2 also
-carried T2C, T2W and T2R (deflate and wrapped variants on the KSEG1 fixture); their results were
-not recorded, and round 3 repeats them on F1. Stored deflate, zero SHA-1 and our own 0x1220 were
-each tested, but not yet all three in one file.
+reference's TOC lead-out (sectors + 1); round 1's own variants used sectors + 150. On the KSEG1
+fixture "reaches the PlayStation logo" was the best possible result, so round 3 repeats the round 2
+variants on F1, where a pass means the program runs. "The table" is the 128 bytes at
+PSTITLEIMG+0x28C; its blocks are 16 bytes each, numbered from 0. "Switch offered" means the
+HOME menu showed the disc-switch entry. In M1K and GK, switching from the
+HOME menu before the program or game asked for a disc showed POPS's warning, then reset the
+emulated console into the chosen disc.
 
 ### The smallest EBOOT known to boot
 
-Combining the passing variants (T4N for stored blocks, T4D for deflate):
+This is G1, which ran a real game; T4D shows the same with deflate blocks:
 
 1. PBP header and a 944-byte PARAM.SFO with the nine keys above, `CATEGORY = ME`, neutral
    `LICENSE` text;
@@ -522,18 +610,34 @@ Combining the passing variants (T4N for stored blocks, T4D for deflate):
 Fields we always wrote and never tried without: the `0x07FF` constant, `0xBFC`, the title slots,
 the TOC, and each SFO key.
 
+For two discs in one file, M1K (F1D1 + F1D2) and GK (a real game) show the minimum:
+
+1. the PBP header, PARAM.SFO (disc 1's ID) and `DATA.PSP` as above;
+2. `DATA.PSAR` at 0x10000: a PSTITLEIMG with the magic, +0x010, the disc offsets at +0x200,
+   disc 1's ID at +0x264, +0x284, **the 64-byte table at +0x28C** and the title at +0x30C;
+   everything else zero, including the table's last 64 bytes;
+3. one PSISOIMG per disc from 0x8000, each at a 0x8000 boundary and built like the single-disc
+   file above, with its own ID and its 0x00C at the end of its own data;
+4. one STARTDAT with our own PNG after the last disc.
+
+Without the table, the same file freezes (M1). Without in-game switching, one single-disc EBOOT
+per disc needs no table (S1 to S4, G4, G5).
+
 ### Not required
 
 | Item | Evidence |
 |---|---|
-| Sony's encrypted `PGD` footer after the STARTDAT PNG | P0N; all our variants |
-| Sony's or the reference tool's boot logo | T3W, T3C, T4* use our generated PNG |
+| Sony's encrypted `PGD` footer after the STARTDAT PNG | P0N, M0S; all our variants |
+| Sony's or the reference tool's boot logo | T3W, T3C, T4*, M1K use our generated PNG |
 | `KEYS.BIN`, RIF, `act.dat` | none present in any test; ARK fakes them for custom PBPs |
-| Sony's `DATA.PSP` or the GPL "complex" one | T1A and all our variants use ours |
-| Index SHA-1 hashes | T4N, T4D |
+| Sony's `DATA.PSP` or the GPL "complex" one | T1A, M0D and all our variants use ours |
+| Index SHA-1 hashes | T4N, T4D, M1K |
 | A PSTITLEIMG for one disc | T3C, T4T, T4N, T4D, T4M |
-| The 0x1220 value `[0x00C] + 0x2D31` | T4M |
-| The reference tool's PSTITLEIMG template bytes | T3W, T4S (zeroed) |
+| The 0x1220 value `[0x00C] + 0x2D31`, and the same at PSTITLEIMG+0x284 | T4M; M1K |
+| The reference tool's PSTITLEIMG template bytes, one disc | T3W, T4S (zeroed) |
+| The same for two discs, **except the first 64 bytes at +0x28C** | Z1, Z3, Z4, M1K (zeroed) |
+| The last 64 bytes of the +0x28C table | M1K (zeroed), Y3; never read (analysed) |
+| A STARTDAT per disc | M1K, GK: one after the last disc |
 | The reference tool's configuration bytes at 0x420 | all our variants (zero) |
 | ICON0, ICON1, PIC0, PIC1, SND0 | all our variants (absent) |
 | Sony's copyright line in `LICENSE` | all our variants (`Skiff`) |
@@ -541,15 +645,98 @@ the TOC, and each SFO key.
 
 ### What POPS writes back
 
-The first launch of a disc ID creates `PSP/SAVEDATA/<DISC_ID>/` (here `SLUS99999`) with
+The first launch of a disc ID creates `PSP/SAVEDATA/<ID>/` (here `SLUS99999`) with
 `CONFIG.BIN`, `ICON0.PNG`, `PARAM.SFO`, `SCEVMC0.VMP` and `SCEVMC1.VMP` (measured). The two VMP
 files are the PS1 memory cards in slots 1 and 2: a 0x80-byte header (`\0PMV`, a salt seed at 0x0C
-and a SHA-1 HMAC at 0x20) followed by the 128 KiB card (documented). The disc ID chosen at
-conversion time therefore fixes where the game's saves live.
+and a SHA-1 HMAC at 0x20) followed by the 128 KiB card (documented).
+
+**The folder is named after the ID at PSISOIMG+0x400, not the SFO's `DISC_ID`** (measured). G4,
+disc 2 of a real game with disc 1's ID in the SFO only, still created disc 2's folder, and the
+game then reported that disc 1's save data was missing. The disc ID written at conversion time
+therefore fixes where the game's saves live.
+
+This is what makes one EBOOT per disc usable: write disc 1's ID at PSISOIMG+0x400 **and** in the
+SFO of every disc's EBOOT, and all of them share one folder, so one memory card. S4 created no new
+folder, and G5, the real game's disc 2 built this way, found the save data written on disc 1. The
+disc itself is unchanged: its `SYSTEM.CNF` still names disc 2. Which folders a two-disc file
+creates, before and after a switch, was not checked.
+
+## The multi-disc table
+
+A file with two discs needs the 128 bytes at PSTITLEIMG+0x28C, or more exactly their first 64.
+Every two-disc file we built without them froze at a black screen after the boot image; adding
+only those 64 bytes to our otherwise clean-room file made it run, with working disc switching
+(M1K, and GK on a real game). This section explains what the bytes are, why no tool can generate
+them, and what a converter can do instead. It does not reproduce them.
+
+### What the hardware showed
+
+- **Without the table, nothing else helps**: the reference file with the table zeroed froze (Z2,
+  Z5, M0Z), and so did our own file whatever else we copied from the reference (M1, M1T, M1L,
+  M1D, M1X).
+- **The bytes matter, not just their presence**: ten invented tables froze (Y1, our own
+  pseudo-random bytes; Y4, all `0xFF`; Q1–Q8, eight more random tables).
+- **Damage shows up in the menu text**: one bit flipped in byte 0 (Y2), or bytes 16–127 zeroed
+  (Y5), left the game running with an empty label on the switch entry. Block 0 (bytes 0–15)
+  zeroed or randomised froze (B0, R0); block 2 garbled the end of the label and block 3 its
+  start (B2, R2, B3, R3); blocks 1 and 4–7 showed nothing (B1, R1, B4–B7, R4–R7); a bit flip in
+  byte 127 changed nothing (Y3).
+- **The text is POPS's own**: with the PSP set to Spanish, the reference file's entry reads
+  "Cambiar el Disco" instead of "Switch Discs" (round 10). The table holds no text; it unlocks
+  text that POPS already has, in every system language.
+
+### How POPS uses it
+
+We analysed the official 6.61 firmware update, downloaded from Sony's update server, decrypted
+locally with pspdecrypt and read in Ghidra. The findings below are facts about the code's
+behaviour; no firmware file, decrypted module or data taken from it was kept.
+
+- `popsman`, the firmware module behind `scePopsManLoadModule`, reads the disc map at
+  `DATA.PSAR`+0x200: the disc offsets and per-disc MACs. ARK stubs out the MAC check for custom
+  PBPs, which is why zero works there.
+- The POPS module itself (`pops_0Xg.prx`, one per model family) copies the 0x80 bytes at map
+  +0x8C, that is PSTITLEIMG+0x28C.
+- When the map lists more than one disc, POPS uses the table's bytes 0x00–0x3F as a key to
+  unscramble its own multi-disc menu strings: 14 strings in each of 12 system languages, stored
+  scrambled inside `pops_0Xg.prx` and decoded for the current language at start-up.
+- Each string's length is unmasked with a table byte. Wrong lengths send POPS through a NULL
+  pointer, and it freezes at boot: the black screen of every variant without a valid table.
+- The characters are XORed with a stream of the table's 32 16-bit words, starting at a word
+  computed for each string, and the strings are stored reversed. This fits B2 and B3: damage to
+  one 16-byte block garbled one part of the label and left the rest readable.
+- Bytes 0x40–0x7F are never read.
+- The key is identical in every 6.61 POPS module, so it is one constant, the same for every game
+  and model, not a per-game value. For reference, the SHA-256 of the 128 bytes pop-fe wrote at
+  +0x28C in M0 is `70c0b99a16396068390533fa061a52493396596dca414a89a45cef8f63fb56b7`.
+
+The consequence: a working key is the XOR of Sony's scrambled strings with Sony's text. Neither
+is a fact about a file format; both are Sony's data. **No tool can produce a working table without
+Sony-derived data**, and invented tables freeze, as ten of them did.
+
+### Options for a converter
+
+| Option | Disc switching | Sony-derived data in the converter | Saves |
+|---|---|---|---|
+| One EBOOT, PSTITLEIMG, with the table | from the HOME menu, inside the game (M1K, GK) | yes: the 64-byte table | which folders it creates was not checked |
+| One EBOOT, PSTITLEIMG, without the table | none | none | does not boot |
+| One EBOOT per disc, disc 1's ID at PSISOIMG+0x400 and in the SFO | quit to the XMB and start the other disc's EBOOT when the game asks | none | one shared folder and memory card (S4, G5) |
+
+- **Ship the table as an interoperability constant.** This is what pop-fe does: its PSTITLEIMG
+  template carries the table. It keeps in-game switching. The table is small and the same for
+  every game, but it is Sony-derived data, and whether a project can carry it is a legal and
+  licensing judgement for that project's author; this page does not make it.
+- **One EBOOT per disc.** Entirely clean-room, measured on a real game, and the saves carry over
+  when every EBOOT uses disc 1's ID (see [What POPS writes back](#what-pops-writes-back)). The
+  cost is the swap: when the game asks for the next disc, the player quits through the HOME menu
+  and starts the next EBOOT, which then finds the save made on disc 1 (G5). The XMB shows one
+  entry per disc, so name them (for example "Disc 1", "Disc 2").
+
+Skiff's own choice belongs to its PS1 design ([roadmap, Phase 5](roadmap.md#phase-5-ps1)).
 
 ## Testing methodology
 
-Everything here can be repeated without a commercial game, a BIOS file or a Sony tool.
+Everything here except the G rows and the firmware analysis can be repeated without a commercial
+game, a BIOS file or a Sony tool.
 
 ### A legal test disc
 
@@ -574,6 +761,8 @@ Everything here can be repeated without a commercial game, a BIOS file or a Sony
   `0xbf000000` → `0x1f000000` in `include/hwregs_c.h`, and `0xbf80` → `0x1f80`, `0xbf00` →
   `0x1f00` in `include/hwregs_a.inc`. Check the result: no `lui` of `0xbf80` should remain in the
   program's disassembly.
+- **Two discs**: build the same program twice with different disc IDs and a different line on
+  screen ("DISC 1", "DISC 2"), so the screen shows which disc POPS is running after a switch.
 - **Draw before the first `VSync()`.** PSn00bSDK's `VSync()` waits for a VBlank interrupt; if
   none ever arrives it loops forever and the screen stays black. Drawing and displaying one frame
   before the first call turns "black" into "a still image", which tells a hung interrupt apart
@@ -616,10 +805,10 @@ Two checks on the host catch most writer bugs before a Memory Stick session:
    `PS1 TEST <ID>` as the XMB title, so the screen tells you what you launched.
 4. **Record what the screen shows at each stage**: an XMB error, the STARTDAT image, the
    PlayStation logo, the program. "Does not boot" alone loses the stage.
-5. **Save state between variants.** Every variant with the same disc ID shares one
-   `PSP/SAVEDATA/<DISC_ID>/` folder, including POPS's `CONFIG.BIN`. Delete it between runs, or
-   give each variant its own disc ID, so one variant cannot affect the next. We kept a copy of it
-   after each round.
+5. **Save state between variants.** Every variant with the same disc ID (the one at
+   PSISOIMG+0x400) shares one `PSP/SAVEDATA/<ID>/` folder, including POPS's `CONFIG.BIN`. Delete
+   it between runs, or give each variant its own disc ID, so one variant cannot affect the next.
+   We kept a copy of it after each round.
 
 ```mermaid
 flowchart TD
@@ -653,7 +842,7 @@ flowchart TD
 | `.cue` + one `.bin` per track | the same, files concatenated in cue order | the usual layout for discs with audio tracks; each `INDEX 01` is relative to its own file |
 | `.cue` with `PREGAP`/`POSTGAP` | silence not stored in any file | generate the zero sectors or refuse; our prototype refuses |
 | `.chd` | CHD v5 header, `CHT2` track metadata, hunks | needs a CHD decoder ([libchdr](https://github.com/rtissera/libchdr), BSD-3-Clause); see below |
-| `.m3u` | one disc per line, in order | 2 to 5 discs go into one PSTITLEIMG |
+| `.m3u` | one disc per line, in order | 2 to 5 discs: one PSTITLEIMG (needs the table) or one EBOOT per disc; see [Options for a converter](#options-for-a-converter) |
 | Single `.bin`, no cue | one `MODE2/2352` data track | only safe for single-track discs |
 
 About CHD:
@@ -760,8 +949,9 @@ deflate is the obvious choice for time and simplicity.
 - Write it as `SLUS99999` in `PARAM.SFO` and as `_SLUS_99999` in PSISOIMG and PSTITLEIMG.
 - A disc without `SYSTEM.CNF` boots `PSX.EXE` and has no ID; what fallback ID POPS accepts is an
   [open question](#open-questions).
-- For multi-disc games each PSISOIMG carries its own disc's ID; the SFO and PSTITLEIMG carry disc
-  1's.
+- For a multi-disc file each PSISOIMG carries its own disc's ID; the SFO and PSTITLEIMG carry disc
+  1's (M1K, GK). For one EBOOT per disc, write disc 1's ID in every EBOOT, at PSISOIMG+0x400 and
+  in the SFO, so they share one save folder (S4, G5).
 - [rom-converto](https://github.com/DevYukine/rom-converto) (MIT) already turns `SYSTEM.CNF` into
   a title ID (`SLUS_203.12` → `SLUS-20312`), with an ISO 9660 reader; RomM 5.4 reports the same
   dashed form as `title_id` for disc 1. Remove the dash for the SFO.
@@ -812,6 +1002,12 @@ A PSP-1000 has 32 MB of RAM, of which about 24 MB is available to an application
 - [ ] Write index markers as 0.
 - [ ] Use your own DATA.PSP (two NIDs); never ship Sony's or the GPL one.
 - [ ] Bare PSISOIMG for one disc; PSTITLEIMG only for 2 to 5.
+- [ ] Decide on multi-disc before writing code: PSTITLEIMG with the +0x28C table (Sony-derived),
+      or one EBOOT per disc. A PSTITLEIMG with two or more discs and no valid table never boots.
+- [ ] In a PSTITLEIMG, give each disc's 0x00C the end of its own data and write one STARTDAT,
+      after the last disc.
+- [ ] Remember that PSISOIMG+0x400 names the save folder; for one EBOOT per disc, write disc 1's
+      ID there and in the SFO of every disc's EBOOT.
 - [ ] Use the reference tool's lead-out convention (sectors + 1) until the open question is
       settled.
 - [ ] Read the result back with an independent reader and compare it with the source.
@@ -842,16 +1038,28 @@ Skiff therefore worked in three steps:
 3. **Measurement.** Unknowns were settled by measuring bytes of output files and by running
    variants on hardware, not by reading more code.
 
+One question measurement could not settle, what the multi-disc table is, was answered by
+analysing the official firmware's code (see [How POPS uses it](#how-pops-uses-it)). That analysis
+recorded behaviour only: no firmware file, decrypted module, key or decoded string was kept, and
+none is on this page.
+
 Sony-made data to keep out of a converter, and out of its repository:
 
 - `BASE.PBP` and any part of a Sony EBOOT (popstation's header blobs come from one);
 - the 4,976-byte `\0PGD` STARTDAT footer;
 - Sony's boot logo image;
-- the PSTITLEIMG template bytes and the 0x420 configuration bytes other tools copy (origin
-  undocumented: treat them as Sony's);
+- the other PSTITLEIMG template bytes (+0x214, +0x38C) and the 0x420 configuration bytes other
+  tools copy (origin undocumented: treat them as Sony's; none is needed);
 - Sony's `DATA.PSP`, `KEYS.BIN` files, Sony's `at3tool` for ATRAC3, any PS1 or PSP BIOS or
   firmware file;
 - Sony's copyright line in the SFO `LICENSE` field.
+
+**The multi-disc table at PSTITLEIMG+0x28C is the one exception that is needed**, and it is
+different in kind. It is not text and not code, and it is not a fact about a format: it is a key
+derived from Sony's firmware data (Sony's scrambled strings combined with Sony's text), and no
+working table can be made without that data. Copying it is a decision each project must make for
+itself, with its own licence and its own reading of the law; the alternative that needs no Sony
+data is one EBOOT per disc ([Options for a converter](#options-for-a-converter)).
 
 And keep GPL code out of a permissively licensed converter: the "complex" DATA.PSP, popstation's
 writer and its ports. Using GPL tools as separate test tools, as we did with pop-fe, DuckStation's
@@ -861,16 +1069,18 @@ reader and pcsx_rearmed, is a different matter: nothing of them ships.
 
 | Question | Why it matters | How to test it |
 |---|---|---|
-| Multi-disc: does a PSTITLEIMG with 2–5 discs and zeroed template bytes boot, and does POPS's disc change reach disc 2? Where do STARTDAT and each disc's 0x00C go? | multi-disc games | two copies of the test disc with different IDs in one PSTITLEIMG; a test program that asks for the disc change |
 | Raw CD audio in a stored-deflate image | music in many games | a test disc with a data track and two audio tracks (generated tones), a program that plays track 2; pass: tone without buzz, continuing into track 3 |
 | TOC lead-out: sectors + 1 (reference) or sectors + 150 (ECMA-130)? | if POPS bounds reads by it, the wrong one cuts off or extends the disc | a test program that reads the last sector of its disc, built twice with each convention |
 | A disc with no `SYSTEM.CNF`, or a non-Sony-shaped ID | homebrew discs and fallbacks | variants with `SKIF00001` and similar IDs; check the boot and the SAVEDATA folder name |
 | Deflate and stored-deflate blocks mixed in one file | a deflate writer's fallback for incompressible blocks | a variant that stores alternate blocks each way |
 | PS1 saves: can a tool write `SCEVMC0.VMP` from a raw memory card, and does POPS accept its HMAC? | save sync, importing saves | write a card image with a known save, sign it, check the game sees it |
 | In-game load speed of stored deflate against deflate | stored files are larger, but need no inflating | time a long read in a test program, both encodings |
-| Other POPS versions, other models (2000, 3000, Go, Street), ARK-4 against ARK-5, popsloader | everything above is one PSP-1000 | rerun the passing variants elsewhere |
+| Other POPS versions, other models (2000, 3000, Go, Street), ARK-4 against ARK-5, popsloader | everything above is one PSP-1000; analysis says the table's key is the same in every 6.61 POPS module, but other firmware versions were not analysed | rerun the passing variants, M1K included, elsewhere |
 | Adrenaline on PS Vita | 2017 forum reports say uncompressed EBOOTs fail there; stored deflate is not uncompressed to a deflate reader | run T4T and T4D under Adrenaline |
 | The meaning of `0x07FF` at 0x1228 and of the configuration block at 0x420 | fields written blind | variants with them zeroed |
+| Table block 1 (bytes 16–31) | analysis predicts it decodes the disc-switch dialog strings; B1 and R1 showed nothing, but no dialog was opened in that run | B1 or R1 again, opening the switch dialog from the HOME menu |
+| What official titles hold in table bytes 0x40–0x7F | POPS never reads them, yet tools copy all 128 bytes; if official titles differ there, the copied bytes come from one title | compare the field across several official multi-disc titles |
+| Which save folders a two-disc file creates, before and after a switch | where a multi-disc game's saves live | check `PSP/SAVEDATA` after M1K, before and after switching |
 
 ## Glossary
 
@@ -889,14 +1099,17 @@ reader and pcsx_rearmed, is a different matter: nothing of them ships.
 | KSEG1, KUSEG | MIPS address ranges: `0xA0000000`–`0xBFFFFFFF`, an uncached view of physical memory, and `0x00000000`–`0x7FFFFFFF` |
 | LBA | Logical block address: a sector's number from the start of the image |
 | MSF | Minutes, seconds, frames: a CD position; 75 frames per second |
+| Multi-disc table | The 128 bytes at PSTITLEIMG+0x28C; the first 64 are the key POPS needs to decode its multi-disc menu text |
 | NID | A 32-bit identifier for a PSP library function |
 | PBP | The PSP's executable container (`EBOOT.PBP`) |
 | PGD | Sony's encrypted data container (`\0PGD`) |
 | PopCorn | ARK's module that adapts POPS to unsigned EBOOTs |
-| POPS | The PS1 emulator in the PSP firmware |
+| POPS | The PS1 emulator in the PSP firmware (`pops_0Xg.prx`) |
+| popsman | The firmware module behind `scePopsManLoadModule`, which loads POPS |
 | PRX | A PSP relocatable module |
 | PSISOIMG | The header and data of one disc inside `DATA.PSAR` |
 | PSTITLEIMG | The header that groups 2–5 PSISOIMG for multi-disc games |
+| Switch Discs | POPS's HOME menu entry for changing discs; its text is decoded with the multi-disc table |
 | STARTDAT | The section after the disc data holding the boot image |
 | TOC | Table of contents: where each track starts and where the disc ends |
 | VMP | POPS's memory card file: a signed header and a 128 KiB PS1 card |
@@ -914,6 +1127,7 @@ numbers come from the same console; the general ones are in
 | PSISOIMG layout, index | psdevwiki, [PSISOIMG0000](https://web.archive.org/web/20251223202031/https://www.psdevwiki.com/ps3/PSISOIMG0000) | edited 2025-09-06 |
 | PS1 saves, VMP header | psdevwiki, [PS1 Savedata](https://web.archive.org/web/20260222020627/https://www.psdevwiki.com/ps3/PS1_Savedata) | 2026 |
 | Field-by-field writer (0x0C, 0x420, 0x800, 0xBFC, 0x1220, 0x1228, 0x122C, 0x4000) | pop-fe, [`popstation.py` L2783–L2956](https://github.com/sahlberg/pop-fe/blob/45dff05b803ab5ea0fd32a96bc8c4ca885069691/popstation.py#L2783-L2956) | 2021–2024 |
+| Multi-disc table use, popsman's disc map (analysed) | the official PSP firmware 6.61 update from Sony's update server, decrypted locally with [pspdecrypt](https://github.com/John-K/pspdecrypt) and read in [Ghidra](https://github.com/NationalSecurityAgency/ghidra); nothing kept | 2026-10-13 |
 | PSTITLEIMG fields | pop-fe, [`create_pbp`](https://github.com/sahlberg/pop-fe/blob/45dff05b803ab5ea0fd32a96bc8c4ca885069691/popstation.py#L3208-L3330); ARK-4 [`readCustomConfig`](https://github.com/PSP-Archive/ARK-4/blob/7c03c3735503dc3fad999f4687b890fefef6467d/core/popcorn/main.c#L145) | 2021–2025 |
 | Single disc without PSTITLEIMG (POPS 3.02) | pop-fe commit `3477db0` | 2024-08-07 |
 | Uncompressed level 0 in the original writer | popstation, [`main.c` L1350–L1530](https://github.com/moparisthebest/popstation/blob/5136c0e73042b114f2c73439647be288b49fbc0d/popstation/main.c#L1350-L1530) | 2007 |

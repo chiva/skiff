@@ -296,7 +296,7 @@ The entries, in this order:
 | `A0` | first track number, disc type (`0x20` = CD-ROM XA, as PS1 discs are), 0 | `41 00 A0 00 00 00 00 01 20 00` |
 | `A1` | last track number, 0, 0 | `41 00 A1 00 00 00 00 01 00 00` |
 | `A2` | lead-out position (see below) | `41 00 A2 00 00 00 00 00 14 05` |
-| `01`… | each track's start: its `INDEX 01` LBA + 150 frames | `41 00 01 00 00 00 00 00 02 00` |
+| `01`… | each track's start: its `INDEX 01` as an LBA in the whole image (add earlier files' sectors when each track is its own `.bin`) + 150 frames | `41 00 01 00 00 00 00 00 02 00` |
 
 Two details differ between the reference file and ours, and both boot:
 
@@ -966,7 +966,9 @@ table at PSISOIMG+0xC00; a converter cannot produce that without Sony's encoder.
 is to keep the audio tracks as raw sectors in the image:
 
 - concatenate every track's sectors into the image in cue order, and give each track its own TOC
-  entry (control 0 for audio) at its `INDEX 01` + 150 frames;
+  entry (control 0 for audio) at its image-relative start + 150 frames. With one `.bin` per
+  track, `INDEX 01` is relative to its own file: first add the sector counts of every earlier
+  file to get the track's LBA in the concatenated image, then add the 150 frames;
 - set every index marker to 0: with 1, audio buzzes (documented on PSP, compressed images);
 - ARK's PopCorn re-enables raw CD audio, which later firmware had turned off; with raw audio,
   playback continues into the next track, which ATRAC3 does not do (documented).

@@ -1,0 +1,8 @@
+HTTP/1.1 406 Not Acceptable
+Content-Length: 58
+Content-Type: application/json
+Server: nginx/1.30.5
+Vary: Origin
+Via: 1.1 Caddy
+
+{"detail":"Skiff Convert Disc.chd can't be served as rvz"}

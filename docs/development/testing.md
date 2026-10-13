@@ -127,9 +127,21 @@ the PSP's network checks:
   (`SKIFF_SAVE_DISC=0`), so the recorded lists keep their two ROMs. A last scan adds a game of
   another platform, `Skiff Foreign Game.gba` (2 KiB of synthetic bytes in a `gba` platform), unless
   `SKIFF_FOREIGN_ROM=0`: RomM lets a player send any platform's game to the PSP (Install on
-  device), so the install tests send it and Skiff refuses it (219). Scanned last, it leaves the PSP
-  ROMs' ids as they were; `romm-record` keeps it (`SKIFF_FOREIGN_ROM=1`), and `romm-test` finds its
-  id in `romm.json` (`foreign.rom_id`).
+  device), so the install tests send it and Skiff refuses it (219). Scanned after the PSP ROMs
+  above, it leaves their ids as they were; `romm-record` keeps it (`SKIFF_FOREIGN_ROM=1`), and
+  `romm-test` finds its id in `romm.json` (`foreign.rom_id`).
+- Download conversion is on, as an admin turns it on: `ROM_CONVERTO_ENABLED` in `compose.yaml`, and
+  `converto.download_conversion_enabled` in a read-only `config.yml` (scans stay as they were:
+  `scan_metadata` off). A download may then ask for another format (`?format=cso`), which RomM
+  makes with the rom-converto it ships. A last scan adds two synthetic PSP discs stored as CHD,
+  which a PSP cannot run: `Skiff Convert Disc.chd` and `Skiff Convert Slow.chd` (64 KiB ISO 9660
+  images like the save disc's, game IDs `SKIF-00003` and `SKIF-00004`, seeded bytes then zeros,
+  compressed by that rom-converto), unless `SKIFF_CONVERT_DISCS=0`. RomM converts the first at once.
+  `rom-converto-delay.sh`, mounted ahead of the real binary on RomM's `PATH`, holds the second's
+  conversion back 20 s, past the 15 s RomM holds a download that started one, so that download is
+  answered 202 every time. RomM reads their save IDs from the CHDs (`SKIF00003`, `SKIF00004`), as
+  from the save disc. `romm-record` records the other fixtures without them, then adds them
+  (`seed.py convert-discs`) and records the conversion fixtures (`record-conversion-fixtures.sh`).
 
 | Command | What it does |
 |---|---|
@@ -158,7 +170,19 @@ Docker Hub limits anonymous pulls, which GitHub's shared runners reach.
 - the API refuses requests without the token and accepts it;
 - RomM reports the seeded file's size, CRC32, MD5 and SHA-1, and the download matches;
 - `Range` with the current ETag in `If-Range` resumes (206), and a stale ETag restarts with the
-  whole file (200).
+  whole file (200);
+- the heartbeat reports download conversion; `?format=` listing the stored format serves the stored
+  file as it is (`iso,cso` on the payload, `chd` on a convert disc); both convert discs are offered
+  as `cso`, `zso` and `iso` (`download_formats`); a format RomM cannot make is refused (406);
+- `HEAD ?format=cso` before converting answers 202 with `Retry-After: 30` and starts nothing;
+  `GET ?format=cso` brings a CSO of the seeded ISO named `.cso`, with an ETag and its length; a
+  resume of it either continues (206) or restarts with the same CSO (200), and the check prints
+  which: RomM refreshes a served copy's modification time, which nginx's ETag is made of;
+- the slow disc's download is answered 202 with `Retry-After: 30` and no body, and the conversion
+  goes on: asking again brings the CSO.
+
+`romm-check` empties RomM's conversion cache first, so the answers before a conversion hold however
+often the same server is checked.
 
 ### Integration tests
 
@@ -182,9 +206,9 @@ offset, a `.resume` file with an ETag the server no longer has restarts with 200
 the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind.
 
 The third drives the RomM client (`include/skiff/romm.h`): the version check passes, the `psp`
-platform holds the three seeded ROMs, pages of one ROM return each once and then an empty page, a
+platform holds the five seeded ROMs, pages of one ROM return each once and then an empty page, a
 full page lists them in name order, the save disc's list item and details carry the save ID RomM
-read from it (the other two none), RomM 5.4 syncs saves, the second file's details match the seed, and its download URL,
+read from it, as from the two CHD discs (the others none), RomM 5.4 syncs saves, the second file's details match the seed, and its download URL,
 built from the name with reserved characters, brings back exactly its bytes; the seeded cover comes
 back without the token from the URL its ROM's details give, the other ROM has none, and a cover
 RomM lacks is a 404; the payload's details carry the description and facts the seed entered as the
@@ -230,11 +254,19 @@ device) and a token that only browses refused negotiate (403), with synthetic sa
 made-up `SKIF00001…` folders, kept as `tests/fixtures/romm/save-unit-*.zip`) and synthetic device
 ids.
 
+`romm-record` also records downloads RomM converts, for the fake transport
+(`tests/integration/record-conversion-fixtures.sh`), once the other fixtures are recorded and
+`seed.py convert-discs` has added the two CHD discs: the heartbeat with conversion on, a disc's
+details (`download_formats`), `?format=rvz` refused (406), `?format=cso` bringing the CSO, a resume of
+it a second later that RomM answers with the whole file (200, the ETag changed), and the slow disc's
+202 with `Retry-After`. The files before them stay recordings of a server without the convert discs.
+
 Everything generated lives in `build/integration/` (git-ignored):
 
 - `certs/`: copy `ca.crt` and a client certificate and key to the PSP;
 - `romm.env`: the secrets, including the web UI password for the user `skiff`;
-- `romm.json`: the seeded files' IDs, sizes, hashes and cover paths, and the API token.
+- `romm.json`: the seeded files' IDs, sizes, hashes and cover paths, and the API token;
+- `romm-convert.json`: with `romm-record`, the convert discs it added after the other fixtures.
 
 The keys and the token are test material for a server that only lives on your machine: never
 commit them, and do not reuse them anywhere else. The proxy container only gets the server's key

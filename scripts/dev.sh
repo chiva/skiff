@@ -30,6 +30,8 @@ readonly COMPOSE_NETWORK="${COMPOSE_PROJECT}_default"
 readonly ROMM_ADMIN_USER="skiff"
 # The PSP platform's folder in the RomM container (tests/integration/seed.py, LIBRARY_DIR).
 readonly ROMM_PLATFORM_DIR="/romm/library/roms/psp"
+# Where RomM keeps the downloads it converted (its CACHE_BASE_PATH, then converts/).
+readonly ROMM_CONVERSION_CACHE_DIR="/tmp/romm/cache/converts"
 # The fake transport's recorded RomM responses (tests/support/fake_transport.h), and the size of the
 # synthetic file seeded while recording them, kept small so the fixture stays small.
 readonly FIXTURES_DIR="tests/fixtures/romm"
@@ -275,6 +277,7 @@ romm_up() {
       ${SKIFF_LIBRARY_ROMS:+-e SKIFF_LIBRARY_ROMS="$SKIFF_LIBRARY_ROMS"} \
       ${SKIFF_SAVE_DISC:+-e SKIFF_SAVE_DISC="$SKIFF_SAVE_DISC"} \
       ${SKIFF_FOREIGN_ROM:+-e SKIFF_FOREIGN_ROM="$SKIFF_FOREIGN_ROM"} \
+      ${SKIFF_CONVERT_DISCS:+-e SKIFF_CONVERT_DISCS="$SKIFF_CONVERT_DISCS"} \
       romm python3 /seed.py >"$dir/romm.json"
   )
   host="${lan_ip:-localhost}"
@@ -289,6 +292,25 @@ Test RomM is up (web UI login: $ROMM_ADMIN_USER, password in $INTEGRATION_DIR/ro
   https://$host:8444  TLS + client certificate ($INTEGRATION_DIR/certs/client-{ecdsa,rsa}.{crt,key})
 Seeded file, its hashes and an API token: $INTEGRATION_DIR/romm.json
 EOF
+}
+
+# Adds the discs RomM converts on download to a seeded server (tests/integration/seed.py), into
+# romm-convert.json: romm-record records the other fixtures without them first.
+seed_convert_discs() {
+  local dir="$REPO_ROOT/$INTEGRATION_DIR" admin_password
+  admin_password="$(sed -n 's/^SKIFF_ADMIN_PASSWORD=//p' "$dir/romm.env")"
+  (
+    umask 077
+    compose exec -T -e SKIFF_ADMIN_USER="$ROMM_ADMIN_USER" -e SKIFF_ADMIN_PASSWORD="$admin_password" \
+      romm python3 /seed.py convert-discs >"$dir/romm-convert.json"
+  )
+}
+
+# romm-check asserts what RomM answers before it has converted anything (202 while converting): it
+# starts from an empty conversion cache, so checking a server a second time gives the same answers.
+clear_conversion_cache() {
+  require_own_romm
+  compose exec -T romm rm -rf "$ROMM_CONVERSION_CACHE_DIR"
 }
 
 # By project name, so it works even when build/integration/ is gone.
@@ -391,6 +413,7 @@ run_command() {
     romm_up 0.0.0.0 "$ip"
     ;;
   romm-check)
+    clear_conversion_cache
     run_host_in_romm_network "tests/integration/check.sh $INTEGRATION_DIR"
     ;;
   romm-test)
@@ -400,10 +423,14 @@ run_command() {
     # The server exists only for the recording: stop it even when starting or recording fails.
     trap romm_down EXIT
     # Never the A1 library nor the save disc: the fixtures record the two seeded ROMs. The game of
-    # another platform is the install fixtures' refused send.
-    SKIFF_LIBRARY_ROMS="" SKIFF_SAVE_DISC=0 SKIFF_FOREIGN_ROM=1 \
+    # another platform is the install fixtures' refused send. The discs RomM converts come after
+    # those fixtures, for their own.
+    SKIFF_LIBRARY_ROMS="" SKIFF_SAVE_DISC=0 SKIFF_FOREIGN_ROM=1 SKIFF_CONVERT_DISCS=0 \
       SKIFF_PAYLOAD_BYTES="$FIXTURE_PAYLOAD_BYTES" romm_up 127.0.0.1
     run_host_in_romm_network "tests/integration/record-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
+    seed_convert_discs
+    run_host_in_romm_network \
+      "tests/integration/record-conversion-fixtures.sh $INTEGRATION_DIR $FIXTURES_DIR"
     trap - EXIT
     romm_down
     ;;

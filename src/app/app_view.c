@@ -138,8 +138,10 @@ static void fit_rest(const char *rest, float width, skiff_ui_measure_fn measure,
     size_t used = 0;
     for (const char *c = rest; *c != '\0' && used + 1 < sizeof joined; c++) {
         const int blank = *c == ' ' || *c == '\n';
-        if (!blank || (used > 0 && joined[used - 1] != ' ')) {
-            joined[used++] = blank ? ' ' : *c;
+        if (blank && used > 0 && joined[used - 1] != ' ') {
+            joined[used++] = ' ';
+        } else if (!blank) {
+            joined[used++] = *c;
         }
     }
     while (used > 0 && joined[used - 1] == ' ') {

@@ -221,6 +221,8 @@ typedef struct app_batch {
     int free_known;
     app_batch_step step;
     skiff_romm_rom_summary games[APP_BATCH_MAX];
+    /* What each game will take of the free space (skiff_install_expected_bytes()). */
+    uint64_t game_bytes[APP_BATCH_MAX];
     /* Out of the queue call: each game's plan (planned[i] when it has one, else why not in
      * plan_errors[i]), the requests made of them, the queue as it was, and what was queued. */
     int planned[APP_BATCH_MAX];
@@ -614,6 +616,9 @@ void app_cover_done(skiff_app *app);
 int app_cover_shown(const skiff_app *app);
 /* Why the ROM on the details screen cannot be downloaded, or SKIFF_TEXT_COUNT when it can. */
 skiff_text_id app_details_refusal(const skiff_app *app);
+/* The format the details' game downloads in (SKIFF_ROMM_FORMAT_STORED for the file as stored). */
+skiff_romm_format app_details_format(const skiff_app *app);
+
 /* Why Skiff cannot install a file skiff_install_check() refused, as the details screen says it. */
 skiff_text_id app_install_support_text(skiff_install_support support);
 /* Whether a list item is one Skiff can download (dimmed otherwise). */
@@ -696,8 +701,9 @@ void app_cancel_confirmed(skiff_app *app, uint32_t id);
 size_t app_queue_unfinished(const skiff_app *app);
 /* The unfinished job for rom_id, or NULL. */
 const skiff_job *app_queue_job_for(const skiff_app *app, uint64_t rom_id);
-/* The bytes unfinished jobs will write: their whole sizes (a partial file's progress is not known
- * here, so this errs on the side of room). */
+/* The bytes unfinished jobs will write: their whole sizes, a converted file's as reckoned
+ * (skiff_install_expected_bytes()); a partial file's progress is not known here, so this errs on
+ * the side of room. */
 uint64_t app_queue_unfinished_bytes(const skiff_app *app);
 /* Whether two real paths name the same file on FAT (ASCII letters ignoring case). */
 int app_same_path(const char *a, const char *b);

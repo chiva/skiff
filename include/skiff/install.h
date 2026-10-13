@@ -4,9 +4,11 @@
 /*
  * Where a game from RomM goes, and what Skiff installed. An installer maps a RomM platform to the
  * extensions it accepts and the folder they go to (one entry for now: PSP games to games:, which
- * is <device>/ISO). Planning a download turns a RomM file into a target path that never replaces a
- * file Skiff did not install, and the manifest (app:/installed.json) records every file Skiff
- * installed, so the library can show what is on the Memory Stick.
+ * is <device>/ISO), and to the files it cannot run as stored but RomM can convert into one it can
+ * (a PSP game stored as CHD, downloaded as CSO: RomM 5.4's ?format=, skiff/romm.h). Planning a
+ * download turns a RomM file into a target path that never replaces a file Skiff did not install,
+ * and the manifest (app:/installed.json) records every file Skiff installed, so the library can
+ * show what is on the Memory Stick.
  *
  * Overwrite policy: a download may replace only Skiff's own earlier copy of the same ROM file. When
  * the target's name is taken by anything else (a game copied by hand, or another ROM whose name
@@ -30,6 +32,11 @@ typedef struct skiff_installer {
     const char *romm_platform_slug;
     /* Accepted extensions, dot included, NULL-terminated; compared ignoring case. */
     const char *const *extensions;
+    /* Extensions of files RomM can convert into an accepted one, NULL-terminated (NULL for none),
+     * and the formats to ask for, by preference, ended by SKIFF_ROMM_FORMAT_STORED: the first one
+     * RomM offers is asked for (skiff_install_format_for()). */
+    const char *const *convert_extensions;
+    const skiff_romm_format *convert_formats;
     /* A logical root path (skiff/storage_paths.h), e.g. "games:" (<device>/ISO). */
     const char *target_dir;
     /* Run after a file is in place; NULL for none. */
@@ -48,6 +55,10 @@ typedef enum skiff_install_support {
     SKIFF_INSTALL_UNUSABLE_NAME,
     /* Not one of the installer's extensions (e.g. a .zip or a .pbp for PSP). */
     SKIFF_INSTALL_UNKNOWN_EXTENSION,
+    /* Installable only as RomM converts it (a PSP game stored as CHD): one of the installer's
+     * convert_extensions. Whether RomM converts it is the caller's to find out
+     * (skiff_install_format_for()). */
+    SKIFF_INSTALL_NEEDS_CONVERSION,
 } skiff_install_support;
 
 /* Checks rom's file against installer. A NULL argument counts as unsupported (unknown
@@ -55,6 +66,30 @@ typedef enum skiff_install_support {
 skiff_install_support skiff_install_check(const skiff_installer *installer,
                                           const skiff_romm_rom_summary *rom,
                                           const skiff_romm_file *file);
+
+/* Every format, for skiff_install_format_for() when only the heartbeat says RomM converts
+ * (skiff_romm_server.conversion_enabled): a list has no download_formats. */
+#define SKIFF_INSTALL_ANY_FORMAT (~0U)
+
+/*
+ * The format to ask RomM for file_name in: for one of installer's convert_extensions, the first of
+ * its convert_formats offered (offered: skiff_romm_rom.download_formats, or
+ * SKIFF_INSTALL_ANY_FORMAT); SKIFF_ROMM_FORMAT_STORED for anything else (a file the installer runs
+ * as stored or cannot use, or none of its formats offered), and for a NULL argument.
+ */
+skiff_romm_format skiff_install_format_for(const skiff_installer *installer, const char *file_name,
+                                           unsigned offered);
+
+/* How much a file RomM converts is reckoned to take, as a share of RomM's file: a CSO or ZSO
+ * compresses less than the CHD it is made from. Only the download's response gives the real size,
+ * which the download engine checks against the free space then (skiff/download.h); this is for
+ * fitting a batch of downloads to the free space before they start. */
+#define SKIFF_INSTALL_CONVERTED_PERCENT 125U
+
+/* The bytes a download of a stored_size file in format will take: stored_size for
+ * SKIFF_ROMM_FORMAT_STORED, else SKIFF_INSTALL_CONVERTED_PERCENT of it, at most
+ * SKIFF_STORAGE_MAX_FILE_BYTES (a file FAT32 can hold). */
+uint64_t skiff_install_expected_bytes(uint64_t stored_size, skiff_romm_format format);
 
 /* ---- The manifest: what Skiff installed ---- */
 
@@ -253,21 +288,27 @@ typedef struct skiff_install_plan {
 } skiff_install_plan;
 
 /*
- * Picks where rom's file is downloaded to under installer, applying the overwrite policy above:
+ * Picks where rom's file is downloaded to under installer, as format (SKIFF_ROMM_FORMAT_STORED for
+ * the file as RomM stores it; for a file RomM converts, the format's extension replaces the file's:
+ * "Game.chd" goes to "games:/Game.cso"), applying the overwrite policy above:
  * Skiff's own recorded copy keeps its path (replaces_own; a file there of another size than
  * recorded was replaced outside Skiff and counts as taken); otherwise the safe name
  * (skiff_storage_safe_name()) in installer's folder, unless a file is there that Skiff did not
  * install for this ROM file, another record holds that path (ignoring case), or taken (may be
  * NULL) says it is promised; then the name with " [<rom id>]" before its extension, under the same
- * checks. Errors: SKIFF_ERR_STORAGE_NAME_TAKEN when both names are taken;
- * SKIFF_ERR_BUFFER_TOO_SMALL when the download would need a new record and the manifest is full;
- * SKIFF_ERR_INVALID_ARG for a NULL argument, a file skiff_install_check() does not support, a rom
- * id over SKIFF_INSTALL_ROM_ID_MAX, or a name that cleans to nothing; the storage's error when it
- * cannot tell whether a name is free; skiff_storage_resolve()'s error. out is zeroed on any error.
+ * checks. Skiff's own copy keeps its path only while its extension is the format's. Errors:
+ * SKIFF_ERR_STORAGE_NAME_TAKEN when both names are taken; SKIFF_ERR_BUFFER_TOO_SMALL when the
+ * download would need a new record and the manifest is full; SKIFF_ERR_INVALID_ARG for a NULL
+ * argument, a file skiff_install_check() does not support (SKIFF_INSTALL_SUPPORTED with
+ * SKIFF_ROMM_FORMAT_STORED, SKIFF_INSTALL_NEEDS_CONVERSION with one of the installer's
+ * convert_formats), a rom id over SKIFF_INSTALL_ROM_ID_MAX, or a name that cleans to nothing; the
+ * storage's error when it cannot tell whether a name is free; skiff_storage_resolve()'s error. out
+ * is zeroed on any error.
  */
 skiff_err skiff_install_plan_download(const skiff_installer *installer,
                                       const skiff_romm_rom_summary *rom,
-                                      const skiff_romm_file *file, const skiff_storage_roots *roots,
+                                      const skiff_romm_file *file, skiff_romm_format format,
+                                      const skiff_storage_roots *roots,
                                       const skiff_install_manifest *manifest,
                                       skiff_storage *storage, skiff_install_taken_fn taken,
                                       void *taken_ctx, skiff_install_plan *out);

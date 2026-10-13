@@ -55,9 +55,18 @@
       ((progress) ? SKIFF_APP_BLOCK_GAP + SKIFF_APP_PROGRESS_HEIGHT : 0)) /                        \
      SKIFF_APP_LINE_HEIGHT)
 
+/* A heading line (the game's name on the details screen) is drawn SKIFF_APP_HEADING_SCALE times
+ * the size of body text (the measure's), on a line SKIFF_APP_HEADING_LINE_HEIGHT pixels high, and
+ * the last of a run of them has SKIFF_APP_HEADING_GAP pixels under it. The scale is the PSP's
+ * heading size over its text size (0.75 / 0.6, src/platform/psp/app_psp.c). */
+#define SKIFF_APP_HEADING_SCALE (5.0f / 4.0f)
+#define SKIFF_APP_HEADING_LINE_HEIGHT 16
+#define SKIFF_APP_HEADING_GAP SKIFF_APP_BLOCK_GAP
+
 /* What the view holds: as many lines as fill the body (17 of SKIFF_APP_LINE_HEIGHT under the gap
  * above the first block), which the details screen uses beside the cover for the game's facts and
- * description. A list alone fills the body too. */
+ * description; with heading lines, fewer fit (skiff_app_lines_height()). A list alone fills the
+ * body too. */
 #define SKIFF_APP_LINES_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_ROWS_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_HINTS_MAX 5
@@ -171,6 +180,12 @@ typedef enum skiff_app_dialog_result {
     SKIFF_APP_DIALOG_FAILED,
 } skiff_app_dialog_result;
 
+/* How a body line is drawn: as body text, or as a heading (SKIFF_APP_HEADING_SCALE). */
+typedef enum skiff_app_line_style {
+    SKIFF_APP_LINE_TEXT,
+    SKIFF_APP_LINE_HEADING,
+} skiff_app_line_style;
+
 typedef struct skiff_app_row {
     /* Fitted to SKIFF_APP_LABEL_WIDTH and SKIFF_APP_DETAIL_WIDTH. */
     char label[SKIFF_APP_LABEL_MAX];
@@ -212,10 +227,12 @@ typedef struct skiff_app_view {
     char title[SKIFF_APP_TITLE_MAX];
     /* Right of the title: a count, or a short message. */
     char status[SKIFF_APP_STATUS_MAX];
-    /* Body text, each line within SKIFF_APP_TEXT_WIDTH (SKIFF_APP_QR_TEXT_WIDTH beside a QR code);
-     * an empty one separates blocks. */
+    /* Body text, each line within SKIFF_APP_TEXT_WIDTH (SKIFF_APP_QR_TEXT_WIDTH beside a QR code)
+     * as measured at its style's size; an empty one separates blocks. Each line is as high as
+     * skiff_app_line_height() says. */
     size_t line_count;
     char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
+    skiff_app_line_style line_styles[SKIFF_APP_LINES_MAX];
     /* A QR code to draw in the body's top right corner, within SKIFF_APP_QR_WIDTH (the pairing
      * address); NULL for none. Points into the app, valid until its next update. */
     const skiff_ui_qr *qr;
@@ -396,6 +413,16 @@ skiff_log *skiff_app_log(const skiff_app *app);
 int skiff_app_downloading(const skiff_app *app);
 
 /* ---- Exposed for the tests and the platform ---- */
+
+/*
+ * The pixels line index of view takes on the PSP, from its top to the next line's:
+ * SKIFF_APP_LINE_HEIGHT for body text; SKIFF_APP_HEADING_LINE_HEIGHT for a heading, plus
+ * SKIFF_APP_HEADING_GAP for the last of a run of them. 0 for NULL or an index past the lines.
+ */
+int skiff_app_line_height(const skiff_app_view *view, size_t index);
+
+/* The pixels all of view's lines take (the sum of skiff_app_line_height()); 0 for NULL. */
+int skiff_app_lines_height(const skiff_app_view *view);
 
 /* Opens the Saves screen (Settings → Saves), as the platform's smoke test does to draw it.
  * SKIFF_ERR_INVALID_ARG for NULL, before startup, or under a system dialog. */

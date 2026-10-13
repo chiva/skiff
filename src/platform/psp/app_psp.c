@@ -34,9 +34,14 @@
 enum {
     LINE_HEIGHT = SKIFF_APP_LINE_HEIGHT,
     LINE_BASELINE = 10,
+    /* A heading's glyphs, 1.25 times body text's, keep its proportions on the taller line. */
+    HEADING_BASELINE = 12,
     BLOCK_GAP = SKIFF_APP_BLOCK_GAP,
     PROGRESS_HEIGHT = SKIFF_APP_PROGRESS_HEIGHT,
 };
+
+/* A heading line's text size (skiff/app.h sizes its wrapping by the scale). */
+#define HEADING_SIZE (SKIFF_PSP_UI_TEXT_SIZE * SKIFF_APP_HEADING_SCALE)
 
 /* The app sizes its lists by its body geometry: it must be the body this renderer draws. */
 _Static_assert(SKIFF_APP_BODY_HEIGHT == SKIFF_PSP_UI_CONTENT_BOTTOM - SKIFF_PSP_UI_CONTENT_TOP,
@@ -49,6 +54,8 @@ _Static_assert(SKIFF_APP_SYMBOL_WIDTH == SKIFF_PSP_UI_SYMBOL_WIDTH,
                "skiff/app.h's tables leave a button symbol the room the renderer draws it in");
 _Static_assert(SKIFF_UI_SYMBOL_SIZE <= SKIFF_APP_SYMBOL_WIDTH,
                "a scrolling text leaves its arrows the room they are drawn in");
+_Static_assert(SKIFF_APP_HEADING_LINE_HEIGHT - HEADING_BASELINE >= LINE_HEIGHT - LINE_BASELINE,
+               "a heading line leaves its descenders at least body text's room");
 
 /* ---- Measurements (hardware row A1, debug level) ---- */
 
@@ -619,15 +626,18 @@ static void draw_scroll_marks(const skiff_psp_ui *ui, const skiff_app_view *view
     }
 }
 
-/* The view's lines from y down, then its progress bar: where they end. */
+/* The view's lines from y down, each in its style and as high as the app laid it out, then its
+ * progress bar: where they end. */
 static int draw_details(const skiff_psp_ui *ui, const skiff_app_view *view, int y) {
     for (size_t i = 0; i < view->line_count; i++) {
-        skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, y + LINE_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
-                          SKIFF_PSP_UI_COLOUR_TEXT, view->lines[i]);
+        const int heading = view->line_styles[i] == SKIFF_APP_LINE_HEADING;
+        skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, y + (heading ? HEADING_BASELINE : LINE_BASELINE),
+                          heading ? HEADING_SIZE : SKIFF_PSP_UI_TEXT_SIZE, SKIFF_PSP_UI_COLOUR_TEXT,
+                          view->lines[i]);
         if (view->has_scroll) {
             draw_scroll_marks(ui, view, i, y);
         }
-        y += LINE_HEIGHT;
+        y += skiff_app_line_height(view, i);
     }
     if (view->has_progress) {
         y += BLOCK_GAP;
@@ -682,8 +692,8 @@ static void draw_view(const skiff_psp_app *platform, const skiff_app_view *view)
         if (view->has_list) {
             skiff_psp_ui_rows(ui, &view->list, top, view_row, (void *)view);
         }
-        const int height = (int)view->line_count * LINE_HEIGHT +
-                           (view->has_progress ? BLOCK_GAP + PROGRESS_HEIGHT : 0);
+        const int height =
+            skiff_app_lines_height(view) + (view->has_progress ? BLOCK_GAP + PROGRESS_HEIGHT : 0);
         (void)draw_details(ui, view, SKIFF_PSP_UI_CONTENT_BOTTOM - height);
     } else {
         int y = draw_tables(ui, view, draw_details(ui, view, top));

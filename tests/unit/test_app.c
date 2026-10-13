@@ -2567,6 +2567,37 @@ static int cover_slot_exists(unsigned id) {
     return file != NULL;
 }
 
+/* The width a body line of view takes as drawn: a heading's at its larger size. */
+static float drawn_width(const skiff_app_view *v, size_t index) {
+    const float width = env_measure(NULL, v->lines[index]);
+    return v->line_styles[index] == SKIFF_APP_LINE_HEADING ? width * SKIFF_APP_HEADING_SCALE
+                                                           : width;
+}
+
+/* The pixels the first count lines of view take. */
+static int lines_height_before(const skiff_app_view *v, size_t count) {
+    int height = 0;
+    for (size_t i = 0; i < count; i++) {
+        height += skiff_app_line_height(v, i);
+    }
+    return height;
+}
+
+/* The details screen's lines: its first name_lines lines are the name, as headings, and every
+ * other line is body text. */
+static void assert_name_heading(size_t name_lines) {
+    const skiff_app_view *v = view();
+    for (size_t i = 0; i < v->line_count; i++) {
+        const skiff_app_line_style expected =
+            i < name_lines ? SKIFF_APP_LINE_HEADING : SKIFF_APP_LINE_TEXT;
+        if (v->line_styles[i] != expected) {
+            TEST_PRINTF("line %zu ('%s') is style %d, not %d", i, v->lines[i],
+                        (int)v->line_styles[i], (int)expected);
+            TEST_FAIL();
+        }
+    }
+}
+
 /* Every body line fits beside the cover box. */
 static void assert_lines_beside_the_cover(void) {
     for (size_t i = 0; i < view()->line_count; i++) {
@@ -2698,6 +2729,13 @@ static void test_long_names_beside_the_cover_leave_room_for_the_details(void) {
     TEST_ASSERT_EQUAL_STRING("Size: 2 KB", view()->lines[(size_t)2 * APP_DETAILS_NAME_LINES]);
     TEST_ASSERT_TRUE(shows("Skiff can't install this file"));
     TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->line_count - 1]);
+    TEST_PRINTF("the title's lines are headings, measured at their size; the file name's are not");
+    assert_name_heading(APP_DETAILS_NAME_LINES);
+    for (size_t i = 0; i < APP_DETAILS_NAME_LINES; i++) {
+        TEST_ASSERT_TRUE(env_measure(NULL, view()->lines[i]) * SKIFF_APP_HEADING_SCALE <=
+                         SKIFF_APP_COVER_TEXT_WIDTH);
+    }
+    TEST_ASSERT_TRUE(skiff_app_lines_height(view()) <= SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP);
     assert_lines_beside_the_cover();
 }
 
@@ -3383,17 +3421,22 @@ static void description_member(unsigned count, unsigned words, char *out, size_t
     snprintf(out + used, size - used, "\"");
 }
 
-/* Every line within its width: the description's leaves its arrows room, the rest the cover. */
+/* Every line within its width as drawn (the description's leaves its arrows room, the rest the
+ * cover), and all of them within the body under the gap above the first. */
 static void assert_details_layout(void) {
     const skiff_app_view *v = view();
     TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_LINES_MAX, v->line_count);
     TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_HINTS_MAX, v->hint_count);
+    const int height = skiff_app_lines_height(v);
+    TEST_PRINTF("%zu lines, %d pixels of the body's %d", v->line_count, height,
+                SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP);
+    TEST_ASSERT_LESS_OR_EQUAL_INT(SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP, height);
     for (size_t i = 0; i < v->line_count; i++) {
         const int description = v->has_scroll && i >= v->scroll_line;
         const float width = description ? APP_DESCRIPTION_WIDTH : SKIFF_APP_COVER_TEXT_WIDTH;
-        if (env_measure(NULL, v->lines[i]) > width) {
-            TEST_PRINTF("line %zu is %.0f wide, over %.0f: '%s'", i, env_measure(NULL, v->lines[i]),
-                        width, v->lines[i]);
+        if (drawn_width(v, i) > width) {
+            TEST_PRINTF("line %zu is %.0f wide, over %.0f: '%s'", i, drawn_width(v, i), width,
+                        v->lines[i]);
             TEST_FAIL();
         }
     }
@@ -3402,7 +3445,9 @@ static void assert_details_layout(void) {
         TEST_ASSERT_LESS_THAN_size_t(v->line_count, v->scroll_line);
         TEST_ASSERT_EQUAL_STRING_MESSAGE("", v->lines[v->scroll_line - 1], "the rule's line");
         TEST_ASSERT_EQUAL_FLOAT(SKIFF_APP_COVER_TEXT_WIDTH, v->scroll_width);
-        const size_t room = SKIFF_APP_LINES_MAX - v->scroll_line;
+        const int left =
+            SKIFF_APP_BODY_HEIGHT - SKIFF_APP_BLOCK_GAP - lines_height_before(v, v->scroll_line);
+        const size_t room = (size_t)left / SKIFF_APP_LINE_HEIGHT;
         const size_t lines = app->description.line_count;
         TEST_ASSERT_EQUAL_size_t(room < lines ? room : lines, app->description.window);
         TEST_ASSERT_EQUAL_size_t(v->scroll_line + app->description.window, v->line_count);
@@ -3436,6 +3481,10 @@ static void test_a_games_details_show_its_facts_and_description(void) {
     for (size_t i = 0; i < view()->line_count; i++) {
         TEST_ASSERT_EQUAL_STRING(EXPECTED[i], view()->lines[i]);
     }
+    TEST_PRINTF("the name is a heading, the rest body text");
+    assert_name_heading(1);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP,
+                          skiff_app_line_height(view(), 0));
     TEST_PRINTF("a short description shows whole under its rule, with nothing to scroll");
     TEST_ASSERT_TRUE(view()->has_scroll);
     TEST_ASSERT_EQUAL_size_t(7, view()->scroll_line);
@@ -3466,6 +3515,11 @@ static void test_a_game_without_metadata_shows_its_details_as_before(void) {
     TEST_ASSERT_FALSE(view()->has_scroll);
     TEST_ASSERT_FALSE(view()->more_above || view()->more_below);
     TEST_ASSERT_EQUAL_size_t(2, view()->hint_count);
+    TEST_PRINTF("the name a heading with its gap under it, three lines of body text after it");
+    assert_name_heading(1);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP +
+                              3 * SKIFF_APP_LINE_HEIGHT,
+                          skiff_app_lines_height(view()));
     TEST_PRINTF(
         "RomM's empty metadata (null summary, player_count \"1\", empty lists) is the same");
     frame(SKIFF_UI_ACTION_BACK);
@@ -3493,6 +3547,97 @@ static void test_a_game_without_metadata_shows_its_details_as_before(void) {
     run_until(SKIFF_APP_SCREEN_DETAILS);
     TEST_ASSERT_EQUAL_size_t(sizeof EXPECTED / sizeof EXPECTED[0], view()->line_count);
     TEST_ASSERT_FALSE(view()->has_scroll);
+}
+
+static void test_a_games_name_wraps_at_its_heading_size(void) {
+    open_paired_library(1);
+    /* 40 bytes: 240 units as body text, one line beside the cover (288); 300 as a heading, two. */
+    static const char NAME[] = "Name Of A Game That Wraps As A Heading 1";
+    TEST_ASSERT_EQUAL_size_t(40, strlen(NAME));
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"id\":1,\"platform_id\":1,\"name\":\"%s\",\"fs_name\":\"Game 1.iso\","
+                     "\"fs_size_bytes\":%u,\"files\":[{\"rom_id\":1,\"file_name\":\"Game 1.iso\","
+                     "\"file_size_bytes\":%u}]}",
+             NAME, BODY_BYTES, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_FALSE(app->has_rom);
+    TEST_PRINTF("while the details load: the list's name '%s' a heading, then the loading line",
+                view()->lines[0]);
+    assert_name_heading(1);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_LIBRARY_LOADING), view()->lines[1]);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_TRUE(app->has_rom);
+    assert_details_layout();
+    TEST_PRINTF("'%s' | '%s'", view()->lines[0], view()->lines[1]);
+    TEST_ASSERT_EQUAL_STRING("Name Of A Game That Wraps As A Heading", view()->lines[0]);
+    TEST_ASSERT_EQUAL_STRING("1", view()->lines[1]);
+    TEST_ASSERT_EQUAL_STRING("Game 1.iso", view()->lines[2]);
+    assert_name_heading(2);
+    TEST_PRINTF("the gap goes under the last heading line only");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT, skiff_app_line_height(view(), 0));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP,
+                          skiff_app_line_height(view(), 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_LINE_HEIGHT, skiff_app_line_height(view(), 2));
+}
+
+static void test_a_file_named_like_its_game_is_not_shown_twice(void) {
+    open_paired_library(1);
+    static char raw[RAW_MAX];
+    snprintf(raw, sizeof raw,
+             JSON_OK
+             "{\"id\":1,\"platform_id\":1,\"name\":\"Game 1.iso\",\"fs_name\":\"Game 1.iso\","
+             "\"fs_size_bytes\":%u,\"files\":[{\"rom_id\":1,\"file_name\":\"Game 1.iso\","
+             "\"file_size_bytes\":%u}]}",
+             BODY_BYTES, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    for (int i = 0; i < FRAMES_MAX && !app->has_rom; i++) {
+        frame(0);
+    }
+    TEST_ASSERT_TRUE(app->has_rom);
+    assert_details_layout();
+    TEST_ASSERT_EQUAL_STRING("Game 1.iso", view()->lines[0]);
+    assert_name_heading(1);
+    for (size_t i = 1; i < view()->line_count; i++) {
+        TEST_PRINTF("line %u: '%s'", (unsigned)i, view()->lines[i]);
+        TEST_ASSERT_NOT_EQUAL_INT(0, strcmp("Game 1.iso", view()->lines[i]));
+    }
+}
+
+static void test_line_heights_follow_the_line_styles(void) {
+    static skiff_app_view v;
+    memset(&v, 0, sizeof v);
+    TEST_PRINTF("nothing for NULL, an empty view, or a line past the view's");
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_line_height(NULL, 0));
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_lines_height(NULL));
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_lines_height(&v));
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_line_height(&v, 0));
+    TEST_PRINTF("body text alone: SKIFF_APP_LINE_HEIGHT a line, as every screen but details");
+    v.line_count = SKIFF_APP_LINES_MAX;
+    TEST_ASSERT_EQUAL_INT((int)SKIFF_APP_LINES_MAX * SKIFF_APP_LINE_HEIGHT,
+                          skiff_app_lines_height(&v));
+    TEST_ASSERT_TRUE(SKIFF_APP_BLOCK_GAP + skiff_app_lines_height(&v) <= SKIFF_APP_BODY_HEIGHT);
+    TEST_PRINTF("two headings then text: the gap under the second heading only");
+    v.line_count = 4;
+    v.line_styles[0] = SKIFF_APP_LINE_HEADING;
+    v.line_styles[1] = SKIFF_APP_LINE_HEADING;
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT, skiff_app_line_height(&v, 0));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP,
+                          skiff_app_line_height(&v, 1));
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_LINE_HEIGHT, skiff_app_line_height(&v, 2));
+    TEST_ASSERT_EQUAL_INT(2 * SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP +
+                              2 * SKIFF_APP_LINE_HEIGHT,
+                          skiff_app_lines_height(&v));
+    TEST_PRINTF("a heading as the last line keeps its gap");
+    v.line_count = 2;
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_HEADING_LINE_HEIGHT + SKIFF_APP_HEADING_GAP,
+                          skiff_app_line_height(&v, 1));
+    TEST_ASSERT_EQUAL_INT(0, skiff_app_line_height(&v, 2));
 }
 
 typedef struct facts_case {
@@ -3589,7 +3734,12 @@ static void test_a_long_description_scrolls_under_the_facts(void) {
     TEST_PRINTF("%zu lines of description, %zu shown from line %zu of the view",
                 description->line_count, window, view()->scroll_line);
     TEST_ASSERT_EQUAL_size_t(59, description->line_count);
-    TEST_ASSERT_EQUAL_size_t(SKIFF_APP_LINES_MAX - view()->scroll_line, window);
+    /* Above the window: the name (a heading of 16 pixels and the gap of 4 under it), then the file
+     * name, 3 lines of facts, the free space and the rule (6 lines of 13): 98 of the body's 224
+     * pixels, which leaves 9 lines of 13 (one fewer than the name as body text left). */
+    TEST_ASSERT_EQUAL_size_t(7, view()->scroll_line);
+    TEST_ASSERT_EQUAL_size_t(9, window);
+    TEST_ASSERT_EQUAL_size_t(16, view()->line_count);
     TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->scroll_line - 2]);
     TEST_ASSERT_FALSE(view()->more_above);
     TEST_ASSERT_TRUE(view()->more_below);
@@ -7389,6 +7539,9 @@ int main(void) {
     RUN_TEST(test_wrapping_ends_lines_at_line_breaks);
     RUN_TEST(test_a_games_details_show_its_facts_and_description);
     RUN_TEST(test_a_game_without_metadata_shows_its_details_as_before);
+    RUN_TEST(test_a_games_name_wraps_at_its_heading_size);
+    RUN_TEST(test_a_file_named_like_its_game_is_not_shown_twice);
+    RUN_TEST(test_line_heights_follow_the_line_styles);
     RUN_TEST(test_facts_are_shown_only_when_romm_has_them);
     RUN_TEST(test_a_long_description_scrolls_under_the_facts);
     RUN_TEST(test_a_description_with_too_many_lines_ends_cut);

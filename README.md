@@ -36,6 +36,7 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | Favourites and collections from RomM, and "download all" for either (0.4.0) | ✅ | |
 | Sync PSP saves with RomM: one-sided changes sync on their own, and Skiff asks only when it cannot safely choose (0.4.0) | ✅ | |
 | Get games sent from RomM's web UI (Install on device, RomM 5.4) (0.5.0) | ✅ | |
+| PSP games stored as CHD, converted to CSO by RomM 5.4 as they download (0.7.0) | ✅ | |
 | PS1 games | | ✅ |
 | Retro systems through PSP emulators (NES, SNES, GBA…) | | ✅ |
 

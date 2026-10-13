@@ -127,7 +127,9 @@ the screen; claims every 20 s were too slow to wait for, so #108 made it 10 s. S
 ## Phase 5: PS1
 
 Next. Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device
-packaging), then add the PS1 installer. The format, the hardware tests behind it and the options
+packaging), then add the PS1 installer. Server-side conversion now exists for PSP games (RomM 5.4
+converts a CHD to CSO as Skiff downloads it, through rom-converto): a PS1 EBOOT would need
+rom-converto to build one, which it does not yet. The format, the hardware tests behind it and the options
 for converting are in [PS1 games on PSP](pops.md).
 
 ## Phase 6: More systems

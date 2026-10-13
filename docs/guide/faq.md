@@ -57,6 +57,13 @@ it synced. A save made on one is downloaded by the other the next time it starts
 other's has not changed since it last synced; if both changed, the second asks which to keep. RomM
 refuses to let a PSP replace a save it has not seen (error 212), so nothing is overwritten.
 
+## My PSP games are CHD files. Can Skiff install them?
+
+Yes, from Skiff 0.7.0, when your RomM (5.4 or newer) converts downloads: RomM turns each CHD into a
+CSO as Skiff downloads it. The server's admin turns that on; see
+[Games stored as CHD](04-connect-to-romm.md#games-stored-as-chd). Without it, keep your PSP games
+as `.iso` or `.cso` files.
+
 ## Why can't I install a PS1 game?
 
 PS1 support is planned after the first release. The PSP plays PS1 games packaged as `EBOOT.PBP`,

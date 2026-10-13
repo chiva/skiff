@@ -94,6 +94,7 @@ add_library(
   src/net/transport.c
   src/romm/collections.c
   src/romm/installs.c
+  src/romm/metadata.c
   src/romm/pairing.c
   src/romm/romm.c
   src/romm/saves.c

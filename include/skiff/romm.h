@@ -4,10 +4,11 @@
 /*
  * A typed client for the RomM REST API over a skiff_transport: the server's version and whether
  * Skiff supports it, the PSP platform, its ROMs (or the player's favourites, or a collection's) one
- * page at a time, the player's collections, a ROM's files, and the URL a file downloads from
- * (skiff/download.h does the download). Responses are JSON, parsed with cJSON
- * one response at a time from a buffer of at most SKIFF_ROMM_BODY_MAX bytes: a larger response is
- * refused, never cut, so a PSP cannot run out of memory on a large library.
+ * page at a time, the player's collections, a ROM's files and what its details screen shows about
+ * the game, and the URL a file downloads from (skiff/download.h does the download). Responses are
+ * JSON, parsed with cJSON one response at a time from a buffer of at most SKIFF_ROMM_BODY_MAX
+ * bytes: a larger response is refused, never cut, so a PSP cannot run out of memory on a large
+ * library.
  *
  * Covers are not API responses: RomM's web server serves them as files under
  * SKIFF_ROMM_COVER_PREFIX, without a token, and a ROM's details name its cover there
@@ -244,6 +245,64 @@ typedef struct skiff_romm_collection_list {
     skiff_romm_collection items[SKIFF_ROMM_COLLECTIONS_MAX];
 } skiff_romm_collection_list;
 
+/*
+ * A ROM's description and facts, as RomM's details give them (summary, metadatum, regions,
+ * languages), for the details screen only: never in a path, a request or the log.
+ *
+ * All of it is optional, and none of it ever refuses the ROM: a field that is absent, null, of
+ * another type, out of range, too long for its buffer or holding a control character is left out
+ * (empty, 0), and so is a list entry of that kind, the rest of the list still read. Only the
+ * description is kept in part, since it is prose shown as it is: control characters dropped, a
+ * long one cut at a UTF-8 character boundary and ended with SKIFF_ROMM_DESCRIPTION_CUT_MARKER.
+ *
+ * Text is made drawable by the PSP's Latin firmware font: typographic quotes, dashes, the ellipsis
+ * and similar punctuation become their ASCII forms, a no-break space a space, a soft hyphen
+ * nothing.
+ */
+
+/* The description, terminator included: about 45 lines beside the cover, four screens. The
+ * structure is held twice (the details shown and the request's result), so the cap stays small on
+ * a 32 MB PSP-1000. */
+#define SKIFF_ROMM_DESCRIPTION_MAX 2048
+#define SKIFF_ROMM_DESCRIPTION_CUT_MARKER "..."
+/* A genre, a company, a region or a language, terminator included. */
+#define SKIFF_ROMM_FACT_MAX 64
+/* RomM's player count ("1-4"), terminator included. */
+#define SKIFF_ROMM_PLAYERS_MAX 16
+/* The entries kept of each list: what one line beside the cover holds. */
+#define SKIFF_ROMM_GENRES_MAX 2
+#define SKIFF_ROMM_REGIONS_MAX 4
+#define SKIFF_ROMM_LANGUAGES_MAX 6
+/* RomM's average_rating is the mean of its providers' scores, each scaled to 0-100
+ * (backend/utils/roms_columns.py, 5.4.0). */
+#define SKIFF_ROMM_RATING_SCALE 100
+
+typedef struct skiff_romm_rom_metadata {
+    /* RomM's summary, with its line breaks kept ('\n', at most one empty line between
+     * paragraphs, none around it), tabs and carriage returns as spaces, other control characters
+     * dropped; empty without one. */
+    char description[SKIFF_ROMM_DESCRIPTION_MAX];
+    /* metadatum.first_release_date's year (RomM sends Unix milliseconds), in UTC; 0 when unknown.
+     */
+    int release_year;
+    /* metadatum.average_rating rounded, 1 to SKIFF_ROMM_RATING_SCALE; 0 when unknown. */
+    unsigned rating;
+    /* metadatum.player_count ("1-2", "4"); empty when unknown and for "1", which RomM also gives
+     * every game it knows nothing about. */
+    char players[SKIFF_ROMM_PLAYERS_MAX];
+    /* The first genres in RomM's order (alphabetical). */
+    size_t genre_count;
+    char genres[SKIFF_ROMM_GENRES_MAX][SKIFF_ROMM_FACT_MAX];
+    /* The first developer and publisher; without either, the first company as the developer. */
+    char developer[SKIFF_ROMM_FACT_MAX];
+    char publisher[SKIFF_ROMM_FACT_MAX];
+    /* RomM's names, from the file name's tags or a provider, e.g. "USA" and "English". */
+    size_t region_count;
+    char regions[SKIFF_ROMM_REGIONS_MAX][SKIFF_ROMM_FACT_MAX];
+    size_t language_count;
+    char languages[SKIFF_ROMM_LANGUAGES_MAX][SKIFF_ROMM_FACT_MAX];
+} skiff_romm_rom_metadata;
+
 typedef struct skiff_romm_rom {
     skiff_romm_rom_summary summary;
     /* Files RomM lists for the ROM, all of them checked; the first stored_count of them (at most
@@ -256,6 +315,7 @@ typedef struct skiff_romm_rom {
      * would not request (another prefix, a "." or ".." segment, a backslash, a control character,
      * too long, not a string) leaves it empty rather than refusing the ROM. */
     char cover_path[SKIFF_ROMM_COVER_PATH_MAX];
+    skiff_romm_rom_metadata metadata;
 } skiff_romm_rom;
 
 /*
@@ -325,8 +385,8 @@ skiff_err skiff_romm_list_roms(skiff_romm_client *client, const skiff_romm_list_
  */
 skiff_err skiff_romm_list_collections(skiff_romm_client *client, skiff_romm_collection_list *out);
 
-/* GET /api/roms/{rom_id}: the ROM with its files. A response for another ROM, or listing a file of
- * another ROM, is SKIFF_ERR_ROMM_BAD_RESPONSE. */
+/* GET /api/roms/{rom_id}: the ROM with its files, cover and metadata. A response for another ROM,
+ * or listing a file of another ROM, is SKIFF_ERR_ROMM_BAD_RESPONSE. */
 skiff_err skiff_romm_get_rom(skiff_romm_client *client, uint64_t rom_id, skiff_romm_rom *out);
 
 /*

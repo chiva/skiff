@@ -437,7 +437,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Version check | `GET /api/heartbeat` |
 | Pairing | Device-code flow: `POST /api/auth/device/init` (`client_device_identifier`, `name`, `client`, `platform`, `client_version`, `requested_scopes`) gives a `device_code` and a `user_code`; the user approves in the web UI while the PSP polls `POST /api/auth/device/token` for an `access_token` and its `device_id` |
 | Fallback auth | Client API token (`rmm_…`) as `Authorization: Bearer` |
-| Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files from `GET /api/roms/{id}` |
+| Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files, cover, description and facts from `GET /api/roms/{id}` |
 | Favourites | The same list with `favorite=true` (and `with_files=true` when each ROM's file is needed) |
 | Collections | `GET /api/collections` and `GET /api/collections/smart` (`collections.read`); a collection's games are the same list with `collection_id=` or `smart_collection_id=` |
 | Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
@@ -526,6 +526,32 @@ refuses its ROM. RomM makes the small cover by resizing the stored one to 40% (2
 tall) and saving it under the stored file's extension: a PNG for every metadata provider, the
 upload's format for artwork uploaded in the web UI. Its WebP option writes a copy beside each cover
 without changing these paths.
+
+A ROM's details also carry what the details screen shows about the game
+(`skiff_romm_rom.metadata`, `src/romm/metadata.c`): its description (`summary`), the year, genres,
+player count, developer, publisher and rating of `metadatum` (the merge RomM makes of its metadata
+providers), and the `regions` and `languages` it read from the file name's tags or a provider. All
+of it is decoration, so the rule is the opposite of the rest of the response: nothing refuses the
+ROM. A field that is absent, null, of another type, out of range, too long for its buffer or holding
+a control character is left out, and so is such an entry of a list (the rest is still read). Only
+the description is kept in part: it is prose, shown and never used in a path, a request or the log,
+so its control characters are dropped (line breaks kept as paragraphs, at most one empty line in a
+row; tabs and carriage returns become spaces) and a long one is cut at a UTF-8 character boundary
+at 2 KiB with `...` (about 45 lines beside the cover; the ROM structure is held twice, as the
+details shown and as the request's result, on a 32 MB PSP-1000). Names are cut differently (with
+`~`, and made undownloadable) because a name is also a file's identity; a description is not.
+Typographic quotes, dashes, the ellipsis, primes, the bullet and the special spaces become their
+ASCII forms, and soft hyphens and zero-width characters are dropped, since they are past the
+Latin-1 that the PSP's Latin firmware font holds. The units are RomM 5.4.0's
+(`backend/utils/roms_columns.py`, `backend/endpoints/responses/rom.py`): `first_release_date` is
+Unix milliseconds (every provider's date is scaled to them; `0` means none), shown as its UTC year;
+`average_rating` is the mean of the providers' scores each scaled to 0-100, shown rounded out of
+100; `player_count` is a string RomM sets to `"1"` both for single-player games and for every game
+it knows nothing about, so `"1"` is not shown. Genres keep RomM's order (it sorts them, so the first
+two are alphabetical); without developers or publishers (scans before RomM split them), the first
+company is taken as the developer. The self-test parses a description with typographic punctuation
+and a C1 control character on the PSP's signed `char`, and a release date past 32 bits of
+milliseconds in 2100 (not a leap year).
 
 The save sync calls (`include/skiff/romm_saves.h`, RomM 5.4 or newer, a token with the
 `assets.*` and `devices.*` scopes) carry this PSP's `device_id` on every call, since RomM does not

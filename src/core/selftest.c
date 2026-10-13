@@ -90,6 +90,19 @@ typedef struct selftest_check {
 #define SKIFF_SELFTEST_COVER_URL                                                                   \
     SKIFF_SELFTEST_COVER_BASE                                                                      \
     "/assets/romm/resources/roms/1/7/cover/Caf%C3%A9.png?ts=2026-10-10%2004:21:31"
+/* A ROM's description and facts: typographic punctuation and a C1 control character (escaped, so
+ * they reach the parser decoded: the PSP's char is signed), a line break kept, and a release date
+ * past 32 bits of milliseconds in a century year that is not a leap year (64-bit division in
+ * software on the PSP). */
+#define SKIFF_SELFTEST_DETAILS_ROM                                                                 \
+    "{\"id\":7,\"platform_id\":1,\"fs_name\":\"a.iso\",\"fs_size_bytes\":1,\"files\":[{\"rom_"     \
+    "id\":7,\"file_name\":\"a.iso\",\"file_size_bytes\":1}],\"summary\":\"Caf\\u00e9 "             \
+    "\\u2018x\\u2019 "                                                                             \
+    "\\u2014 y\\u2026\\nNext\\u0085\",\"languages\":[\"Espa\\u00f1ol\"],\"metadatum\":{"           \
+    "\"first_release_date\":4102444800000,\"average_rating\":82.5,\"player_count\":\"1-4\"}}"
+#define SKIFF_SELFTEST_DETAILS_DESCRIPTION "Caf\xC3\xA9 'x' - y...\nNext"
+#define SKIFF_SELFTEST_DETAILS_YEAR 2100
+#define SKIFF_SELFTEST_DETAILS_RATING 83U
 /* A 2x2 RGBA PNG: red, green / blue, transparent white. Every byte escaped, 76 in all. */
 #define SKIFF_SELFTEST_COVER_PNG                                                                   \
     "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00\x00\x02\x00\x00"     \
@@ -382,6 +395,23 @@ static const char *check_romm_cover(void) {
                    strcmp(url, SKIFF_SELFTEST_COVER_URL) == 0
                ? NULL
                : "a cover URL came out wrong";
+}
+
+/* A ROM's description and facts are made displayable byte by byte, where the PSP's char is signed,
+ * and its release year comes from 64-bit milliseconds. */
+static const char *check_romm_details(void) {
+    static const char rom_text[] = SKIFF_SELFTEST_DETAILS_ROM;
+    static skiff_romm_rom rom;
+    if (skiff_romm_parse_rom(rom_text, sizeof rom_text - 1, &rom) != SKIFF_OK) {
+        return "a ROM with metadata did not parse";
+    }
+    const skiff_romm_rom_metadata *m = &rom.metadata;
+    return strcmp(m->description, SKIFF_SELFTEST_DETAILS_DESCRIPTION) == 0 &&
+                   m->release_year == SKIFF_SELFTEST_DETAILS_YEAR &&
+                   m->rating == SKIFF_SELFTEST_DETAILS_RATING && strcmp(m->players, "1-4") == 0 &&
+                   m->language_count == 1 && strcmp(m->languages[0], "Espa\xC3\xB1ol") == 0
+               ? NULL
+               : "a ROM's description or facts came out wrong";
 }
 
 /* Save sync's answers are parsed as ROM pages are, on newlib with 64-bit integers in software and
@@ -1111,6 +1141,7 @@ static const selftest_check CHECKS[] = {
     {"log-timestamp", check_log_timestamp},
     {"romm-json", check_romm_json},
     {"romm-cover", check_romm_cover},
+    {"romm-details", check_romm_details},
     {"romm-saves", check_romm_saves},
     {"romm-sends", check_romm_sends},
     {"cover-decode", check_cover_decode},

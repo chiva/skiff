@@ -1,11 +1,12 @@
 /*
  * The RomM client (skiff/romm.h) against the fake transport replaying responses recorded from RomM
  * 5.4.0 (tests/fixtures/romm/): the version policy, the PSP platform, two pages of one ROM and the
- * empty page after them, the player's collections and a collection's games, a ROM's files and
- * cover, download URLs that survive any file name, and cover URLs that only ever lead to RomM's own
- * pictures. Every way a response can be wrong (a proxy's login page, a cut or oversized body, a
- * field that does not fit) is SKIFF_ERR_ROMM_BAD_RESPONSE, never a half-filled result; collections
- * too large for the caps have their own error.
+ * empty page after them, the player's collections and a collection's games, a ROM's files, cover,
+ * description and facts (which never refuse it), download URLs that survive any file name, and
+ * cover URLs that only ever lead to RomM's own pictures. Every way a response can be wrong (a
+ * proxy's login page, a cut or oversized body, a field that does not fit) is
+ * SKIFF_ERR_ROMM_BAD_RESPONSE, never a half-filled result; collections too large for the caps have
+ * their own error.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1850,6 +1851,362 @@ static void test_requests_refuse_bad_arguments(void) {
     TEST_ASSERT_EQUAL_size_t(0, fake.request_count);
 }
 
+/* ---- A ROM's description and facts ---- */
+
+#define METADATA_ROM_HEAD                                                                          \
+    "{\"id\":7,\"platform_id\":1,\"name\":\"Example Quest\",\"fs_name\":\"Example Quest.iso\","    \
+    "\"fs_size_bytes\":4,\"files\":[{\"rom_id\":7,\"file_name\":\"Example Quest.iso\","            \
+    "\"file_size_bytes\":4}]"
+#define METADATA_JSON_MAX (16 * SKIFF_ROMM_DESCRIPTION_MAX)
+
+/* A ROM's details with fields (JSON members, "" for none) after its names and files: it must
+ * parse whatever its metadata holds, with its files and names as they were. */
+static void parse_with_metadata(const char *fields, skiff_romm_rom *rom) {
+    static char json[METADATA_JSON_MAX];
+    const int written = snprintf(json, sizeof json, METADATA_ROM_HEAD "%s%s}",
+                                 fields[0] != '\0' ? "," : "", fields);
+    TEST_ASSERT_TRUE_MESSAGE(written > 0 && (size_t)written < sizeof json, "test JSON too long");
+    const skiff_err err = skiff_romm_parse_rom(json, (size_t)written, rom);
+    if (err != SKIFF_OK) {
+        TEST_PRINTF("refused (%d): %s", (int)err, json);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_OK, err, "metadata must never refuse a ROM");
+    TEST_ASSERT_EQUAL_UINT64(7, rom->summary.id);
+    TEST_ASSERT_EQUAL_STRING("Example Quest", rom->summary.name);
+    TEST_ASSERT_EQUAL_size_t(1, rom->stored_count);
+    TEST_ASSERT_EQUAL_STRING("Example Quest.iso", rom->files[0].file_name);
+}
+
+/* The description a summary (a JSON value) becomes. */
+static const char *description_of(const char *summary_json) {
+    static skiff_romm_rom rom;
+    static char fields[METADATA_JSON_MAX];
+    snprintf(fields, sizeof fields, "\"summary\":%s", summary_json);
+    parse_with_metadata(fields, &rom);
+    return rom.metadata.description;
+}
+
+static void print_metadata(const skiff_romm_rom_metadata *m) {
+    TEST_PRINTF("year %d, rating %u, players '%s', %zu genre(s) '%s' '%s'", m->release_year,
+                m->rating, m->players, m->genre_count, m->genre_count > 0 ? m->genres[0] : "",
+                m->genre_count > 1 ? m->genres[1] : "");
+    TEST_PRINTF("developer '%s', publisher '%s', %zu region(s), %zu language(s)", m->developer,
+                m->publisher, m->region_count, m->language_count);
+    TEST_PRINTF("description (%zu bytes): '%s'", strlen(m->description), m->description);
+}
+
+static void test_a_rom_reads_its_description_and_facts(void) {
+    skiff_romm_rom rom;
+    parse_with_metadata(
+        "\"summary\":\"A young pilot must defend the colony.\\n\\nWaves of ships \\u2014 and a "
+        "\\u201ctruth\\u201d \\u2026\",\"regions\":[\"USA\",\"Europe\"],\"languages\":["
+        "\"English\",\"Spanish\"],\"metadatum\":{\"rom_id\":7,\"genres\":[\"Action\","
+        "\"Role-playing (RPG)\",\"Shooter\"],\"franchises\":[],\"collections\":[],\"companies\":["
+        "\"Pub Co.\",\"Studio X\"],\"publishers\":[\"Pub Co.\"],\"developers\":[\"Studio X\"],"
+        "\"game_modes\":[],\"age_ratings\":[],\"player_count\":\"1-2\",\"first_release_date\":"
+        "852076800000,\"average_rating\":82.4}",
+        &rom);
+    const skiff_romm_rom_metadata *m = &rom.metadata;
+    print_metadata(m);
+    TEST_ASSERT_EQUAL_STRING("A young pilot must defend the colony.\n\n"
+                             "Waves of ships - and a \"truth\" ...",
+                             m->description);
+    TEST_ASSERT_EQUAL_INT(1997, m->release_year);
+    TEST_ASSERT_EQUAL_UINT(82, m->rating);
+    TEST_ASSERT_EQUAL_STRING("1-2", m->players);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_GENRES_MAX, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING("Action", m->genres[0]);
+    TEST_ASSERT_EQUAL_STRING("Role-playing (RPG)", m->genres[1]);
+    TEST_ASSERT_EQUAL_STRING("Studio X", m->developer);
+    TEST_ASSERT_EQUAL_STRING("Pub Co.", m->publisher);
+    TEST_ASSERT_EQUAL_size_t(2, m->region_count);
+    TEST_ASSERT_EQUAL_STRING("USA", m->regions[0]);
+    TEST_ASSERT_EQUAL_STRING("Europe", m->regions[1]);
+    TEST_ASSERT_EQUAL_size_t(2, m->language_count);
+    TEST_ASSERT_EQUAL_STRING("English", m->languages[0]);
+    TEST_ASSERT_EQUAL_STRING("Spanish", m->languages[1]);
+}
+
+static void test_the_recorded_unidentified_rom_has_no_metadata(void) {
+    serve_fixture("/api/roms/1", "romm/rom.http");
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
+    const skiff_romm_rom_metadata *m = &rom.metadata;
+    print_metadata(m);
+    TEST_PRINTF("summary null, metadatum empty but for RomM's default player_count \"1\"");
+    TEST_ASSERT_EQUAL_STRING("", m->description);
+    TEST_ASSERT_EQUAL_INT(0, m->release_year);
+    TEST_ASSERT_EQUAL_UINT(0, m->rating);
+    TEST_ASSERT_EQUAL_STRING("", m->players);
+    TEST_ASSERT_EQUAL_size_t(0, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING("", m->developer);
+    TEST_ASSERT_EQUAL_STRING("", m->publisher);
+    TEST_ASSERT_EQUAL_size_t(0, m->region_count);
+    TEST_ASSERT_EQUAL_size_t(0, m->language_count);
+}
+
+typedef struct description_case {
+    const char *what;
+    const char *summary_json;
+    const char *expected;
+} description_case;
+
+static void test_a_description_keeps_its_paragraphs_and_drops_control_characters(void) {
+    static const description_case CASES[] = {
+        {"absent", "null", ""},
+        {"not a string", "42", ""},
+        {"an array", "[\"text\"]", ""},
+        {"blank", "\" \\n\\t \\r\\n \"", ""},
+        {"plain", "\"One line.\"", "One line."},
+        {"paragraphs kept", "\"First.\\nSecond.\\n\\nThird.\"", "First.\nSecond.\n\nThird."},
+        {"empty lines collapsed to one", "\"a\\n\\n\\n\\n\\nb\"", "a\n\nb"},
+        {"blank lines between paragraphs", "\"a\\n \\n\\t\\n b\"", "a\n\nb"},
+        {"blanks around the text trimmed", "\"\\n\\n  Lead.  \\n\\n\"", "Lead."},
+        {"CRLF is one break", "\"a\\r\\nb\"", "a\nb"},
+        {"tabs and carriage returns are spaces", "\"tab\\there\\rand\"", "tab here and"},
+        {"spaces collapsed", "\"a  \\t  b\"", "a b"},
+        {"C0 controls dropped", "\"a\\u0007b\\u001b[31mred\"", "ab[31mred"},
+        {"DEL and C1 controls dropped", "\"a\\u007fb\\u0085c\\u009bd\"", "abcd"},
+        {"typographic quotes",
+         "\"\\u201cQuoted\\u201d \\u2018it\\u2019s\\u2019 \\u201eLow\\u201f\"",
+         "\"Quoted\" 'it's' \"Low\""},
+        {"dashes and minus", "\"a\\u2013b\\u2014c\\u2010d\\u2011e\\u2212f\\u2015g\\u2012h\"",
+         "a-b-c-d-e-f-g-h"},
+        {"ellipsis and bullet", "\"Wait\\u2026 \\u2022 item\"", "Wait... - item"},
+        {"primes", "\"5\\u2032 9\\u2033\"", "5' 9\""},
+        {"spaces", "\"a\\u00a0b\\u2009c\\u202fd\\u2003e\"", "a b c d e"},
+        {"invisible characters dropped", "\"soft\\u00adhy\\u200bphen\\ufeff\\u200c\\u200d\"",
+         "softhyphen"},
+        {"line and paragraph separators", "\"a\\u2028b\\u2029c\"", "a\nb\nc"},
+        {"Latin-1 kept", "\"Caf\\u00e9 \\u00abna\\u00efve\\u00bb \\u00bfS\\u00ed?\"",
+         "Caf\xC3\xA9 \xC2\xABna\xC3\xAFve\xC2\xBB \xC2\xBFS\xC3\xAD?"},
+        {"other scripts kept for the font to try", "\"\\u30b2\\u30fc\\u30e0\"",
+         "\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0"},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        const char *got = description_of(CASES[i].summary_json);
+        TEST_PRINTF("%s: %s -> '%s'", CASES[i].what, CASES[i].summary_json, got);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(CASES[i].expected, got, CASES[i].what);
+    }
+}
+
+/* Every one of the first count bytes of text is byte. */
+static void assert_all_bytes(char byte, const char *text, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (text[i] != byte) {
+            TEST_PRINTF("byte %zu is 0x%02X, not 0x%02X", i, (unsigned char)text[i],
+                        (unsigned char)byte);
+            TEST_FAIL();
+        }
+    }
+}
+
+/* summary_json for text, as a JSON string. */
+static void json_string(const char *text, char *out, size_t size) {
+    const int written = snprintf(out, size, "\"%s\"", text);
+    TEST_ASSERT_TRUE(written > 0 && (size_t)written < size);
+}
+
+static void test_a_long_description_is_cut_at_a_character_with_a_marker(void) {
+    enum {
+        ROOM = SKIFF_ROMM_DESCRIPTION_MAX - 1,
+        MARKER = sizeof SKIFF_ROMM_DESCRIPTION_CUT_MARKER - 1
+    };
+    static char text[2 * SKIFF_ROMM_DESCRIPTION_MAX];
+    static char json[2 * SKIFF_ROMM_DESCRIPTION_MAX + 8];
+
+    TEST_PRINTF("exactly the room: kept whole, no marker");
+    memset(text, 'a', ROOM);
+    text[ROOM] = '\0';
+    json_string(text, json, sizeof json);
+    const char *got = description_of(json);
+    TEST_ASSERT_EQUAL_size_t(ROOM, strlen(got));
+    TEST_ASSERT_EQUAL_STRING(text, got);
+
+    TEST_PRINTF("the room and trailing blanks: still whole");
+    memcpy(text + ROOM, "  \\n ", 6);
+    json_string(text, json, sizeof json);
+    TEST_ASSERT_EQUAL_size_t(ROOM, strlen(description_of(json)));
+
+    TEST_PRINTF("one byte more: cut with the marker, filling the room");
+    memset(text, 'a', ROOM + 1);
+    text[ROOM + 1] = '\0';
+    json_string(text, json, sizeof json);
+    got = description_of(json);
+    TEST_PRINTF("%zu bytes, ending '%s'", strlen(got), got + strlen(got) - 8);
+    TEST_ASSERT_EQUAL_size_t(ROOM, strlen(got));
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_DESCRIPTION_CUT_MARKER, got + ROOM - MARKER);
+    assert_all_bytes('a', got, ROOM - MARKER);
+
+    TEST_PRINTF("two-byte characters across the cut: never half of one");
+    for (size_t offset = 0; offset < 2; offset++) {
+        size_t used = offset;
+        memset(text, 'b', offset);
+        while (used + 2 < sizeof text - 1) {
+            memcpy(text + used, "\xC3\xA9", 2);
+            used += 2;
+        }
+        text[used] = '\0';
+        json_string(text, json, sizeof json);
+        got = description_of(json);
+        const size_t length = strlen(got);
+        const size_t kept = length - MARKER;
+        TEST_PRINTF("offset %zu: %zu bytes, %zu kept before the marker", offset, length, kept);
+        TEST_ASSERT_LESS_OR_EQUAL_size_t(ROOM, length);
+        TEST_ASSERT_GREATER_OR_EQUAL_size_t(ROOM - MARKER - 1, length - MARKER);
+        TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_DESCRIPTION_CUT_MARKER, got + kept);
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE(0xA9, (unsigned char)got[kept - 1],
+                                       "the cut must end after a whole character");
+        TEST_ASSERT_EQUAL_INT(0, (kept - offset) % 2);
+    }
+
+    TEST_PRINTF("a cut never leaves blanks before the marker");
+    memset(text, 'a', ROOM - MARKER - 1);
+    memcpy(text + ROOM - MARKER - 1, "     tail tail tail", 20);
+    json_string(text, json, sizeof json);
+    got = description_of(json);
+    TEST_ASSERT_EQUAL_size_t(ROOM - MARKER - 1 + MARKER, strlen(got));
+    TEST_ASSERT_EQUAL_STRING(SKIFF_ROMM_DESCRIPTION_CUT_MARKER, got + ROOM - MARKER - 1);
+
+    TEST_PRINTF("replacements shrink the text: 3-byte quotes that become 1 byte all fit");
+    static char quotes[8 * SKIFF_ROMM_DESCRIPTION_MAX];
+    size_t used = 0;
+    quotes[used++] = '"';
+    for (size_t i = 0; i < ROOM; i++) {
+        used += (size_t)snprintf(quotes + used, sizeof quotes - used, "\\u2019");
+    }
+    memcpy(quotes + used, "\"", 2);
+    got = description_of(quotes);
+    TEST_ASSERT_EQUAL_size_t(ROOM, strlen(got));
+    assert_all_bytes('\'', got, ROOM);
+}
+
+static void test_facts_that_do_not_read_are_left_out_not_refused(void) {
+    skiff_romm_rom rom;
+    const skiff_romm_rom_metadata *m = &rom.metadata;
+    static const char *const NOTHING[] = {
+        "",
+        "\"metadatum\":null",
+        "\"metadatum\":[]",
+        "\"metadatum\":\"x\"",
+        "\"metadatum\":{}",
+        "\"metadatum\":{\"genres\":\"Action\",\"developers\":{},\"publishers\":null,"
+        "\"companies\":7,\"player_count\":2,\"first_release_date\":\"1997\","
+        "\"average_rating\":\"82\"},\"regions\":\"USA\",\"languages\":{\"en\":1}",
+        "\"metadatum\":{\"genres\":[1,null,[],\"\",\"  \",\"\\u0007bad\"],\"player_count\":\"1\","
+        "\"first_release_date\":0,\"average_rating\":0}",
+        "\"metadatum\":{\"player_count\":\"\\u0085\",\"first_release_date\":1.5,"
+        "\"average_rating\":100.5}",
+        "\"metadatum\":{\"first_release_date\":253402300800000,\"average_rating\":-3}",
+        "\"metadatum\":{\"first_release_date\":9007199254740992,\"average_rating\":0.4}",
+        "\"metadatum\":{\"first_release_date\":-62135596800001,\"average_rating\":true}",
+    };
+    for (size_t i = 0; i < sizeof NOTHING / sizeof NOTHING[0]; i++) {
+        TEST_PRINTF("left out: {%s}", NOTHING[i]);
+        parse_with_metadata(NOTHING[i], &rom);
+        TEST_ASSERT_EQUAL_INT(0, m->release_year);
+        TEST_ASSERT_EQUAL_UINT(0, m->rating);
+        TEST_ASSERT_EQUAL_STRING("", m->players);
+        TEST_ASSERT_EQUAL_size_t(0, m->genre_count);
+        TEST_ASSERT_EQUAL_STRING("", m->developer);
+        TEST_ASSERT_EQUAL_STRING("", m->publisher);
+        TEST_ASSERT_EQUAL_size_t(0, m->region_count);
+        TEST_ASSERT_EQUAL_size_t(0, m->language_count);
+    }
+
+    TEST_PRINTF("a list keeps the entries that read, skipping the others");
+    char too_long[SKIFF_ROMM_FACT_MAX + 1];
+    memset(too_long, 'x', SKIFF_ROMM_FACT_MAX);
+    too_long[SKIFF_ROMM_FACT_MAX] = '\0';
+    char fields[METADATA_JSON_MAX];
+    snprintf(fields, sizeof fields,
+             "\"metadatum\":{\"genres\":[7,\"%s\",\"Bad\\u0007\",\"\\u2014Puzzle\\u2014\","
+             "\"Sports\",\"Racing\"],\"developers\":[\"\",\"Dev \\u201cOne\\u201d\"],"
+             "\"publishers\":[null,\"Pub\"]},\"regions\":[\"%s\",\"USA\",\"Europe\",\"Japan\","
+             "\"World\",\"Asia\"],\"languages\":[\"English\",3,\"French\",\"German\","
+             "\"Italian\",\"Spanish\",\"Dutch\",\"Swedish\"]",
+             too_long, too_long);
+    parse_with_metadata(fields, &rom);
+    print_metadata(m);
+    TEST_ASSERT_EQUAL_size_t(2, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING("-Puzzle-", m->genres[0]);
+    TEST_ASSERT_EQUAL_STRING("Sports", m->genres[1]);
+    TEST_ASSERT_EQUAL_STRING("Dev \"One\"", m->developer);
+    TEST_ASSERT_EQUAL_STRING("Pub", m->publisher);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_REGIONS_MAX, m->region_count);
+    TEST_ASSERT_EQUAL_STRING("USA", m->regions[0]);
+    TEST_ASSERT_EQUAL_STRING("World", m->regions[3]);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_ROMM_LANGUAGES_MAX, m->language_count);
+    TEST_ASSERT_EQUAL_STRING("English", m->languages[0]);
+    TEST_ASSERT_EQUAL_STRING("French", m->languages[1]);
+    TEST_ASSERT_EQUAL_STRING("Dutch", m->languages[5]);
+
+    TEST_PRINTF("the longest fact that fits is kept whole");
+    too_long[SKIFF_ROMM_FACT_MAX - 1] = '\0';
+    snprintf(fields, sizeof fields, "\"metadatum\":{\"genres\":[\"%s\"]}", too_long);
+    parse_with_metadata(fields, &rom);
+    TEST_ASSERT_EQUAL_size_t(1, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING(too_long, m->genres[0]);
+
+    TEST_PRINTF("without developers or publishers, the first company is the developer");
+    parse_with_metadata("\"metadatum\":{\"developers\":[],\"publishers\":[],"
+                        "\"companies\":[\"\\u0007\",\"Comp A\",\"Comp B\"]}",
+                        &rom);
+    TEST_ASSERT_EQUAL_STRING("Comp A", m->developer);
+    TEST_ASSERT_EQUAL_STRING("", m->publisher);
+    TEST_PRINTF("with either, companies are not read");
+    parse_with_metadata("\"metadatum\":{\"publishers\":[\"Pub\"],\"companies\":[\"Comp A\"]}",
+                        &rom);
+    TEST_ASSERT_EQUAL_STRING("", m->developer);
+    TEST_ASSERT_EQUAL_STRING("Pub", m->publisher);
+
+    TEST_PRINTF("players: anything but RomM's \"1\" that fits");
+    parse_with_metadata("\"metadatum\":{\"player_count\":\"1-4\"}", &rom);
+    TEST_ASSERT_EQUAL_STRING("1-4", m->players);
+    parse_with_metadata("\"metadatum\":{\"player_count\":\"123456789012345\"}", &rom);
+    TEST_ASSERT_EQUAL_STRING("123456789012345", m->players);
+    parse_with_metadata("\"metadatum\":{\"player_count\":\"1234567890123456\"}", &rom);
+    TEST_ASSERT_EQUAL_STRING("", m->players);
+
+    TEST_PRINTF("ratings round to a whole score out of %d", SKIFF_ROMM_RATING_SCALE);
+    static const struct {
+        const char *json;
+        unsigned expected;
+    } RATINGS[] = {{"0.5", 1}, {"82.49", 82}, {"82.5", 83}, {"99.5", 100}, {"100", 100}};
+    for (size_t i = 0; i < sizeof RATINGS / sizeof RATINGS[0]; i++) {
+        snprintf(fields, sizeof fields, "\"metadatum\":{\"average_rating\":%s}", RATINGS[i].json);
+        parse_with_metadata(fields, &rom);
+        TEST_PRINTF("average_rating %s -> %u", RATINGS[i].json, m->rating);
+        TEST_ASSERT_EQUAL_UINT(RATINGS[i].expected, m->rating);
+    }
+}
+
+static void test_release_years_are_the_utc_years_of_romms_milliseconds(void) {
+    static const struct {
+        const char *ms;
+        int year;
+    } CASES[] = {
+        {"852076800000", 1997},    /* 1997-01-01 00:00:00 UTC */
+        {"852076799999", 1996},    /* a millisecond before */
+        {"951782400000", 2000},    /* 2000-02-29, a leap day */
+        {"978307199999", 2000},    /* 2000-12-31 23:59:59.999 */
+        {"978307200000", 2001},    /* 2001-01-01 */
+        {"-1", 1969},              /* before the epoch rounds down, not toward it */
+        {"-86400000", 1969},       /* 1969-12-31 */
+        {"-62135596800000", 1},    /* 0001-01-01, the first year shown */
+        {"253402214400000", 9999}, /* 9999-12-31, the last */
+        {"1.0e12", 2001},          /* a whole number written as a double */
+    };
+    skiff_romm_rom rom;
+    char fields[128];
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        snprintf(fields, sizeof fields, "\"metadatum\":{\"first_release_date\":%s}", CASES[i].ms);
+        parse_with_metadata(fields, &rom);
+        TEST_PRINTF("first_release_date %s -> %d", CASES[i].ms, rom.metadata.release_year);
+        TEST_ASSERT_EQUAL_INT(CASES[i].year, rom.metadata.release_year);
+    }
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_the_version_policy);
@@ -1915,6 +2272,12 @@ int main(void) {
     RUN_TEST(test_another_rom_under_the_id_is_refused);
     RUN_TEST(test_a_rom_with_many_files_counts_them_all);
     RUN_TEST(test_a_rom_without_files_or_with_a_broken_file_is_refused);
+    RUN_TEST(test_a_rom_reads_its_description_and_facts);
+    RUN_TEST(test_the_recorded_unidentified_rom_has_no_metadata);
+    RUN_TEST(test_a_description_keeps_its_paragraphs_and_drops_control_characters);
+    RUN_TEST(test_a_long_description_is_cut_at_a_character_with_a_marker);
+    RUN_TEST(test_facts_that_do_not_read_are_left_out_not_refused);
+    RUN_TEST(test_release_years_are_the_utc_years_of_romms_milliseconds);
     RUN_TEST(test_download_urls_encode_every_reserved_byte);
     RUN_TEST(test_a_download_url_that_does_not_fit_is_refused);
     RUN_TEST(test_a_file_that_is_not_downloadable_gets_no_url);

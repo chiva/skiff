@@ -79,6 +79,13 @@ int skiff_romm_read_display_name(const cJSON *object, const char *name, char *ou
 
 /* 1 if text holds no control character (C0, DEL or C1). */
 int skiff_romm_is_printable_text(const char *text);
+/* The bytes of the control character text (NUL-terminated) starts with: 1 for C0 and DEL, 2 for a
+ * C1 control (U+0080 to U+009F), 0 for anything else. */
+size_t skiff_romm_control_length(const char *text);
+
+/* A ROM's description and facts (skiff_romm_rom_metadata) from the root of its details, under the
+ * rules skiff/romm.h gives them: never fails, what does not read is left out. */
+void skiff_romm_read_metadata(const cJSON *root, skiff_romm_rom_metadata *out);
 
 /* 1 if device_id can be RomM's id for this PSP as config.ini keeps it ([auth] device_id):
  * non-empty printable ASCII without blanks, shorter than SKIFF_CONFIG_DEVICE_ID_MAX. A request

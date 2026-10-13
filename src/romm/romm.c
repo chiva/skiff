@@ -493,6 +493,8 @@ int skiff_romm_read_display_name(const cJSON *object, const char *name, char *ou
 
 int skiff_romm_is_printable_text(const char *text) { return is_printable_text(text); }
 
+size_t skiff_romm_control_length(const char *text) { return control_length(text); }
+
 static int fill_rom_page(const cJSON *root, skiff_romm_rom_page *out) {
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "items");
     if (!cJSON_IsObject(root) || !cJSON_IsArray(items) || !read_count(root, "total", &out->total) ||
@@ -564,6 +566,7 @@ static int fill_rom(const cJSON *root, skiff_romm_rom *out) {
         }
     }
     read_cover_path(root, out->cover_path, sizeof out->cover_path);
+    skiff_romm_read_metadata(root, &out->metadata);
     return 1;
 }
 

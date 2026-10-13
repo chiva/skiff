@@ -192,7 +192,8 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
     memcpy(file.file_name, job->file_name, strlen(job->file_name) + 1);
     file.name_status = SKIFF_ROMM_NAME_OK;
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
-    err = skiff_romm_content_url(r->env->romm, job->rom_id, &file, url, sizeof url);
+    err = skiff_romm_content_url(r->env->romm, job->rom_id, &file, SKIFF_ROMM_FORMAT_STORED, url,
+                                 sizeof url);
     if (err != SKIFF_OK) {
         return err;
     }

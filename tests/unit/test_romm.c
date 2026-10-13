@@ -147,8 +147,49 @@ static void test_heartbeat_reads_the_recorded_version_without_the_token(void) {
     TEST_ASSERT_EQUAL_STRING("5.4.0", server.version);
     TEST_ASSERT_EQUAL_INT(0, server.newer_than_tested);
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, server.installs_enabled, "DEVICE_INSTALL.ENABLED is true");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, server.conversion_enabled, "CONVERTO.ENABLED is false");
     TEST_PRINTF("request headers: '%s'", fake.log[0].headers);
     TEST_ASSERT_NULL(strstr(fake.log[0].headers, TOKEN));
+}
+
+static void test_a_recorded_heartbeat_with_conversion_on(void) {
+    serve_fixture("/api/heartbeat", "romm/heartbeat-conversion.http");
+    skiff_romm_server server;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_heartbeat(&client, &server));
+    TEST_PRINTF("RomM %s, conversion enabled %d", server.version, server.conversion_enabled);
+    TEST_ASSERT_EQUAL_STRING("5.4.0", server.version);
+    TEST_ASSERT_EQUAL_INT(1, server.conversion_enabled);
+}
+
+/* RomM 5.3 has no CONVERTO; only a true says RomM may convert, and nothing there ever refuses the
+ * heartbeat. */
+static void test_a_heartbeat_says_whether_romm_converts(void) {
+    static const struct {
+        const char *extra;
+        int enabled;
+    } CASES[] = {
+        {"", 0},
+        {",\"CONVERTO\":{\"ENABLED\":true}", 1},
+        {",\"CONVERTO\":{\"ENABLED\":false}", 0},
+        {",\"CONVERTO\":{\"ENABLED\":\"true\"}", 0},
+        {",\"CONVERTO\":{}", 0},
+        {",\"CONVERTO\":null", 0},
+        {",\"CONVERTO\":true", 0},
+        {",\"DEVICE_INSTALL\":{\"ENABLED\":true}", 0},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char raw[RAW_MAX];
+        snprintf(raw, sizeof raw, JSON_OK "{\"SYSTEM\":{\"VERSION\":\"5.4.0\"}%s}", CASES[i].extra);
+        skiff_transport_destroy(&fake.base);
+        fake_transport_init(&fake);
+        serve_raw("/api/heartbeat", raw);
+        skiff_romm_server server;
+        const skiff_err err = skiff_romm_heartbeat(&client, &server);
+        TEST_PRINTF("heartbeat '%s' -> %s, conversion enabled %d", CASES[i].extra,
+                    skiff_err_name(err), server.conversion_enabled);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+        TEST_ASSERT_EQUAL_INT(CASES[i].enabled, server.conversion_enabled);
+    }
 }
 
 /* RomM 5.3 has no DEVICE_INSTALL; 5.4 can turn it off. Only a true turns sends on, and nothing
@@ -652,9 +693,11 @@ static void test_a_file_with_a_control_character_is_listed_but_not_downloadable(
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_OK, rom.summary.name_status);
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 3, &rom.files[1], url, sizeof url));
+                          skiff_romm_content_url(&client, 3, &rom.files[1],
+                                                 SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_romm_content_url(&client, 3, &rom.files[2], url, sizeof url));
+                          skiff_romm_content_url(&client, 3, &rom.files[2],
+                                                 SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
 }
 
 /* A ROM page of one item whose fs_name is `name`. */
@@ -678,7 +721,8 @@ static void test_a_clean_file_of_a_rom_with_an_unusable_name_gets_no_url(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.files[0].name_status);
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+                          skiff_romm_content_url(&client, 3, &rom.files[0],
+                                                 SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
 }
 
 static void test_c1_control_characters_count_as_one_control_each(void) {
@@ -704,7 +748,8 @@ static void test_c1_control_characters_count_as_one_control_each(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_CONTROL_CHAR, rom.files[0].name_status);
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+                          skiff_romm_content_url(&client, 3, &rom.files[0],
+                                                 SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
 
     TEST_PRINTF("U+00A0 and U+00E9 share the C2/C3 lead bytes but are text");
     static const char text_json[] =
@@ -783,7 +828,8 @@ static void test_an_overlong_file_name_is_listed_but_not_downloadable(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_NAME_TOO_LONG, rom.files[0].name_status);
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 3, &rom.files[0], url, sizeof url));
+                          skiff_romm_content_url(&client, 3, &rom.files[0],
+                                                 SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
 }
 
 static void test_structural_problems_still_refuse_the_page(void) {
@@ -1518,7 +1564,9 @@ static void test_download_urls_encode_every_reserved_byte(void) {
         snprintf(expected, sizeof expected, BASE_URL "/api/roms/7/content/%s",
                  CASES[i].expected_tail);
         const skiff_romm_file file = file_named(CASES[i].file_name);
-        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_content_url(&client, 7, &file, url, sizeof url));
+        TEST_ASSERT_EQUAL_INT(
+            SKIFF_OK,
+            skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
         TEST_PRINTF("'%s' -> %s", CASES[i].file_name, url);
         TEST_ASSERT_EQUAL_STRING(expected, url);
     }
@@ -1528,21 +1576,27 @@ static void test_a_download_url_that_does_not_fit_is_refused(void) {
     const char *expected = BASE_URL "/api/roms/7/content/a%20b";
     const skiff_romm_file file = file_named("a b");
     char url[64];
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_romm_content_url(&client, 7, &file, url, strlen(expected)));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_BUFFER_TOO_SMALL,
+        skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_STORED, url, strlen(expected)));
     TEST_ASSERT_EQUAL_STRING("", url);
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_BUFFER_TOO_SMALL,
-                          skiff_romm_content_url(&client, 7, &file, url, 8));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_BUFFER_TOO_SMALL,
+        skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_STORED, url, 8));
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_romm_content_url(&client, 7, &file, url, strlen(expected) + 1));
+                          skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_STORED, url,
+                                                 strlen(expected) + 1));
     TEST_ASSERT_EQUAL_STRING(expected, url);
     const skiff_romm_file unnamed = file_named("");
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 7, &unnamed, url, sizeof url));
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(NULL, 7, &file, url, sizeof url));
-    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                          skiff_romm_content_url(&client, 7, NULL, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_romm_content_url(&client, 7, &unnamed, SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_romm_content_url(NULL, 7, &file, SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_romm_content_url(&client, 7, NULL, SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
 }
 
 static void test_a_file_that_is_not_downloadable_gets_no_url(void) {
@@ -1552,8 +1606,9 @@ static void test_a_file_that_is_not_downloadable_gets_no_url(void) {
         skiff_romm_file file = file_named("a?.iso");
         file.name_status = UNUSABLE[i];
         char url[SKIFF_ROMM_CONTENT_URL_MAX] = "untouched";
-        TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
-                              skiff_romm_content_url(&client, 7, &file, url, sizeof url));
+        TEST_ASSERT_EQUAL_INT(
+            SKIFF_ERR_INVALID_ARG,
+            skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_STORED, url, sizeof url));
         TEST_ASSERT_EQUAL_STRING("", url);
     }
 }
@@ -1570,7 +1625,8 @@ static void test_the_longest_file_name_fits_the_content_url_buffer(void) {
     file.file_name[sizeof file.file_name - 1] = '\0';
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
-                          skiff_romm_content_url(&wide, UINT64_MAX, &file, url, sizeof url));
+                          skiff_romm_content_url(&wide, UINT64_MAX, &file, SKIFF_ROMM_FORMAT_STORED,
+                                                 url, sizeof url));
 }
 
 /* ---- Covers ---- */
@@ -1927,6 +1983,95 @@ static void test_a_rom_reads_its_description_and_facts(void) {
     TEST_ASSERT_EQUAL_STRING("Spanish", m->languages[1]);
 }
 
+/* ---- Formats RomM converts downloads into ---- */
+
+static void test_format_names_are_the_ones_romm_knows(void) {
+    TEST_ASSERT_NULL(skiff_romm_format_name(SKIFF_ROMM_FORMAT_STORED));
+    TEST_ASSERT_EQUAL_STRING("iso", skiff_romm_format_name(SKIFF_ROMM_FORMAT_ISO));
+    TEST_ASSERT_EQUAL_STRING("cso", skiff_romm_format_name(SKIFF_ROMM_FORMAT_CSO));
+    TEST_ASSERT_EQUAL_STRING("zso", skiff_romm_format_name(SKIFF_ROMM_FORMAT_ZSO));
+    TEST_ASSERT_NULL(skiff_romm_format_name(SKIFF_ROMM_FORMAT_COUNT));
+}
+
+static void test_a_recorded_chd_is_offered_as_iso_cso_and_zso(void) {
+    serve_fixture("/api/roms/5", "romm/rom-convert.http");
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, 5, &rom));
+    TEST_PRINTF("%s: download formats 0x%x", rom.files[0].file_name, rom.download_formats);
+    TEST_ASSERT_EQUAL_STRING("Skiff Convert Disc.chd", rom.files[0].file_name);
+    TEST_ASSERT_TRUE(skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_ISO));
+    TEST_ASSERT_TRUE(skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_CSO));
+    TEST_ASSERT_TRUE(skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_ZSO));
+    TEST_ASSERT_FALSE(skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_STORED));
+    TEST_ASSERT_FALSE(skiff_romm_rom_offers(&rom, SKIFF_ROMM_FORMAT_COUNT));
+    TEST_ASSERT_FALSE(skiff_romm_rom_offers(NULL, SKIFF_ROMM_FORMAT_CSO));
+    TEST_PRINTF("RomM without conversion offers nothing");
+    serve_fixture("/api/roms/1", "romm/rom.http");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
+    TEST_ASSERT_EQUAL_UINT(0, rom.download_formats);
+}
+
+/* download_formats is a hint for the details screen: anything odd in it leaves it empty or keeps
+ * only the names Skiff requests, and never refuses the ROM. */
+static void test_download_formats_never_refuse_a_rom(void) {
+    static const struct {
+        const char *field;
+        unsigned expected;
+    } CASES[] = {
+        {"", 0},
+        {",\"download_formats\":[]", 0},
+        {",\"download_formats\":[\"cso\",\"rvz\",\"chd\"]", 1U << SKIFF_ROMM_FORMAT_CSO},
+        {",\"download_formats\":[\"zso\",\"zso\"]", 1U << SKIFF_ROMM_FORMAT_ZSO},
+        {",\"download_formats\":[\"CSO\"]", 0},
+        {",\"download_formats\":[\"cso\",1]", 0},
+        {",\"download_formats\":\"cso\"", 0},
+        {",\"download_formats\":{\"cso\":\"cso\"}", 0},
+        {",\"download_formats\":null", 0},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        char rom_json[RAW_MAX];
+        snprintf(rom_json, sizeof rom_json,
+                 "{\"id\":3,\"platform_id\":1,\"fs_name\":\"Game.chd\",\"fs_size_bytes\":1,"
+                 "\"files\":[{\"rom_id\":3,\"file_name\":\"Game.chd\",\"file_size_bytes\":1}]%s}",
+                 CASES[i].field);
+        skiff_romm_rom rom;
+        const skiff_err err = skiff_romm_parse_rom(rom_json, strlen(rom_json), &rom);
+        TEST_PRINTF("'%s' -> %s, formats 0x%x", CASES[i].field, skiff_err_name(err),
+                    rom.download_formats);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+        TEST_ASSERT_EQUAL_UINT(CASES[i].expected, rom.download_formats);
+    }
+}
+
+static void test_a_download_url_asks_for_a_format(void) {
+    const skiff_romm_file file = file_named("Game (EU).chd");
+    char url[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_CSO,
+                                                           url, sizeof url));
+    TEST_PRINTF("%s", url);
+    TEST_ASSERT_EQUAL_STRING(BASE_URL "/api/roms/7/content/Game%20%28EU%29.chd?format=cso", url);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_ISO,
+                                                           url, sizeof url));
+    TEST_ASSERT_EQUAL_STRING(BASE_URL "/api/roms/7/content/Game%20%28EU%29.chd?format=iso", url);
+
+    TEST_PRINTF("the query must fit too, or there is no URL");
+    const char *expected = BASE_URL "/api/roms/7/content/Game%20%28EU%29.chd?format=zso";
+    char small[SKIFF_ROMM_CONTENT_URL_MAX];
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_BUFFER_TOO_SMALL,
+        skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_ZSO, small, strlen(expected)));
+    TEST_ASSERT_EQUAL_STRING("", small);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_ZSO,
+                                                           small, strlen(expected) + 1));
+    TEST_ASSERT_EQUAL_STRING(expected, small);
+
+    TEST_PRINTF("a format Skiff does not know is refused");
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_ERR_INVALID_ARG,
+        skiff_romm_content_url(&client, 7, &file, SKIFF_ROMM_FORMAT_COUNT, url, sizeof url));
+    TEST_ASSERT_EQUAL_STRING("", url);
+}
+
 static void test_the_recorded_roms_carry_the_seeds_metadata_or_none(void) {
     serve_fixture("/api/roms/1", "romm/rom.http");
     serve_fixture("/api/roms/2", "romm/rom-extra.http");
@@ -2232,6 +2377,8 @@ int main(void) {
     RUN_TEST(test_save_sync_needs_romm_5_4);
     RUN_TEST(test_heartbeat_reads_the_recorded_version_without_the_token);
     RUN_TEST(test_a_heartbeat_says_whether_romm_takes_sends);
+    RUN_TEST(test_a_recorded_heartbeat_with_conversion_on);
+    RUN_TEST(test_a_heartbeat_says_whether_romm_converts);
     RUN_TEST(test_an_old_server_is_refused_and_still_named);
     RUN_TEST(test_a_heartbeat_with_an_escaped_control_is_a_bad_response);
     RUN_TEST(test_a_heartbeat_without_a_version_is_a_bad_response);
@@ -2299,6 +2446,10 @@ int main(void) {
     RUN_TEST(test_release_years_are_the_utc_years_of_romms_milliseconds);
     RUN_TEST(test_download_urls_encode_every_reserved_byte);
     RUN_TEST(test_a_download_url_that_does_not_fit_is_refused);
+    RUN_TEST(test_format_names_are_the_ones_romm_knows);
+    RUN_TEST(test_a_recorded_chd_is_offered_as_iso_cso_and_zso);
+    RUN_TEST(test_download_formats_never_refuse_a_rom);
+    RUN_TEST(test_a_download_url_asks_for_a_format);
     RUN_TEST(test_a_file_that_is_not_downloadable_gets_no_url);
     RUN_TEST(test_the_longest_file_name_fits_the_content_url_buffer);
     RUN_TEST(test_a_rom_names_its_small_cover);

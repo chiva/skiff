@@ -116,16 +116,45 @@ static void test_content_range(void) {
     }
 }
 
+typedef struct retry_after_row {
+    const char *line;
+    int valid;
+    uint32_t seconds;
+} retry_after_row;
+
+static void test_retry_after_in_seconds(void) {
+    static const retry_after_row ROWS[] = {
+        {"Retry-After: 30\r\n", 1, 30U},
+        {"retry-after: 0", 1, 0U},
+        {"Retry-After: 86400", 1, SKIFF_HTTP_RETRY_AFTER_MAX_S},
+        {"Retry-After: 86401", 0, 0U},
+        {"Retry-After: 18446744073709551616", 0, 0U},
+        {"Retry-After: Wed, 21 Oct 2026 07:28:00 GMT", 0, 0U},
+        {"Retry-After: 30s", 0, 0U},
+        {"Retry-After: -1", 0, 0U},
+        {"Retry-After:", 0, 0U},
+    };
+    for (size_t i = 0; i < sizeof ROWS / sizeof ROWS[0]; i++) {
+        skiff_http_response_reset(&response);
+        parse(ROWS[i].line);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(ROWS[i].valid, response.has_retry_after, ROWS[i].line);
+        TEST_ASSERT_EQUAL_UINT32(ROWS[i].seconds, response.retry_after_s);
+    }
+}
+
 static void test_status_line_clears_earlier_headers(void) {
     parse("HTTP/1.1 100 Continue");
     parse("ETag: \"interim\"");
     parse("Content-Length: 5");
     parse("Content-Range: bytes 0-4/5");
+    parse("Retry-After: 30");
     parse("HTTP/1.1 200 OK");
     TEST_ASSERT_EQUAL_INT64(200, response.status);
     TEST_ASSERT_EQUAL_STRING("", response.etag);
     TEST_ASSERT_FALSE(response.has_content_length);
     TEST_ASSERT_FALSE(response.has_content_range);
+    TEST_ASSERT_FALSE(response.has_retry_after);
+    TEST_ASSERT_EQUAL_UINT32(0U, response.retry_after_s);
 }
 
 static void test_other_lines_are_ignored(void) {
@@ -186,6 +215,28 @@ static void test_status_errors(void) {
     }
 }
 
+static void test_download_status_errors(void) {
+    static const status_error_row ROWS[] = {
+        {200, SKIFF_OK},
+        {206, SKIFF_OK},
+        {202, SKIFF_ERR_ROMM_CONVERTING},
+        {406, SKIFF_ERR_ROMM_CONVERSION_UNAVAILABLE},
+        {401, SKIFF_ERR_ROMM_UNAUTHORIZED},
+        {404, SKIFF_ERR_ROMM_NOT_FOUND},
+        {416, SKIFF_ERR_ROMM_BAD_RESPONSE},
+        {504, SKIFF_ERR_NET_TIMEOUT},
+        {503, SKIFF_ERR_ROMM_SERVER},
+    };
+    for (size_t i = 0; i < sizeof ROWS / sizeof ROWS[0]; i++) {
+        const skiff_err actual = skiff_http_download_status_error(ROWS[i].status);
+        TEST_PRINTF("download HTTP %ld -> %s", ROWS[i].status, skiff_err_name(actual));
+        TEST_ASSERT_EQUAL_INT(ROWS[i].expected, actual);
+    }
+    TEST_PRINTF("other requests are not told about conversions");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_http_status_error(202));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, skiff_http_status_error(406));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_status_lines);
@@ -194,10 +245,12 @@ int main(void) {
     RUN_TEST(test_longest_etag_that_fits_is_kept);
     RUN_TEST(test_content_length);
     RUN_TEST(test_content_range);
+    RUN_TEST(test_retry_after_in_seconds);
     RUN_TEST(test_status_line_clears_earlier_headers);
     RUN_TEST(test_other_lines_are_ignored);
     RUN_TEST(test_line_is_not_read_past_its_length);
     RUN_TEST(test_null_arguments);
     RUN_TEST(test_status_errors);
+    RUN_TEST(test_download_status_errors);
     return UNITY_END();
 }

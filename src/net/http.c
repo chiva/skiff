@@ -5,6 +5,8 @@
 enum {
     HTTP_STATUS_OK_FIRST = 200,
     HTTP_STATUS_OK_LAST = 299,
+    HTTP_STATUS_ACCEPTED = 202,
+    HTTP_STATUS_NOT_ACCEPTABLE = 406,
     HTTP_STATUS_UNAUTHORIZED = 401,
     HTTP_STATUS_FORBIDDEN = 403,
     HTTP_STATUS_NOT_FOUND = 404,
@@ -104,6 +106,8 @@ static void clear_header_fields(skiff_http_response *response) {
     response->range_start = 0;
     response->range_end = 0;
     response->range_total = 0;
+    response->has_retry_after = 0;
+    response->retry_after_s = 0;
 }
 
 /* "HTTP/1.1 206 Partial Content" or "HTTP/2 200": exactly three digits after the first space. */
@@ -161,6 +165,14 @@ static void parse_content_range(skiff_http_response *response, span value) {
     response->range_total = total;
 }
 
+/* Delay seconds ("30"); an HTTP date is not read. */
+static void parse_retry_after(skiff_http_response *response, span value) {
+    uint64_t seconds = 0;
+    response->has_retry_after = take_uint64(&value, &seconds) && value.length == 0 &&
+                                seconds <= SKIFF_HTTP_RETRY_AFTER_MAX_S;
+    response->retry_after_s = response->has_retry_after ? (uint32_t)seconds : 0;
+}
+
 void skiff_http_response_reset(skiff_http_response *response) {
     if (response != NULL) {
         memset(response, 0, sizeof *response);
@@ -189,6 +201,8 @@ skiff_err skiff_http_response_parse_header(skiff_http_response *response, const 
         parse_content_length(response, value);
     } else if (equals_ignoring_case(name, "content-range")) {
         parse_content_range(response, value);
+    } else if (equals_ignoring_case(name, "retry-after")) {
+        parse_retry_after(response, value);
     }
     return SKIFF_OK;
 }
@@ -216,4 +230,15 @@ skiff_err skiff_http_status_error(long status) {
         return SKIFF_ERR_ROMM_SERVER;
     }
     return SKIFF_ERR_ROMM_BAD_RESPONSE;
+}
+
+skiff_err skiff_http_download_status_error(long status) {
+    switch (status) {
+    case HTTP_STATUS_ACCEPTED:
+        return SKIFF_ERR_ROMM_CONVERTING;
+    case HTTP_STATUS_NOT_ACCEPTABLE:
+        return SKIFF_ERR_ROMM_CONVERSION_UNAVAILABLE;
+    default:
+        return skiff_http_status_error(status);
+    }
 }

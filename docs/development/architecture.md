@@ -466,7 +466,7 @@ warn, info and debug, and errors appear by stable name and number, never transla
 | Browse | `GET /api/platforms`, then `GET /api/roms?platform_ids=…&limit=…&offset=…`, **paginated** so one JSON page stays small; a ROM's files, cover, description and facts from `GET /api/roms/{id}` |
 | Favourites | The same list with `favorite=true` (and `with_files=true` when each ROM's file is needed) |
 | Collections | `GET /api/collections` and `GET /api/collections/smart` (`collections.read`); a collection's games are the same list with `collection_id=` or `smart_collection_id=` |
-| Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range` |
+| Download | `GET /api/roms/{id}/content/{file_name}` with `Range` and `If-Range`; with `?format=iso`, `cso` or `zso` (RomM 5.4 with download conversion on: the heartbeat's `CONVERTO.ENABLED`, a ROM's `download_formats`), RomM converts the file first, answering 202 with `Retry-After` while it does and 406 when it cannot |
 | Cover | The ROM's `path_cover_small`, a file RomM's web server serves under `/assets/romm/resources/`, without a token |
 | Saves | The PSP ROMs with saves (the ROM list with `has_saves=true`), `POST /api/sync/negotiate`, `POST /api/saves` (multipart), `GET /api/saves/{id}` (its device), `GET /api/saves/{id}/content`, `POST /api/saves/{id}/downloaded`, `POST /api/sync/sessions/{id}/complete`, each tagged with this PSP's `device_id` (RomM 5.4) |
 | Sends | Games a player sends to this PSP from RomM's web UI (Install on device, RomM 5.4 while the heartbeat's `DEVICE_INSTALL.ENABLED` is true): `PUT /api/devices/{device_id}` with `{"capabilities":{"remote_install":true}}` (or `false`), `POST /api/devices/{device_id}/installs/claim`, `GET /api/roms/{id}` per send, and `PUT /api/devices/{device_id}/installs/{request_id}` with `done`, `already_installed` or `failed` and a reason (`devices.write`, a token bound to this device) |
@@ -1028,7 +1028,9 @@ Every failure becomes one code (`skiff_net_error_from_curl()`, table-tested in
 | Bad server address or unreadable CA file | 402 |
 
 An HTTP response is not a network failure: callers map its status with `skiff_http_status_error()`
-(401, 403, 404 → 200–202; 408 and 504 → 103; 502 → 102; other 5xx → 203).
+(401, 403, 404 → 200–202; 408 and 504 → 103; 502 → 102; other 5xx → 203). Downloads use
+`skiff_http_download_status_error()`, which also reads a conversion's answers: 202 (RomM still
+converting, ask again after `Retry-After`) → 220, 406 (no format asked for can be served) → 221.
 
 Skiff sets no cipher list. Mbed TLS's default order offers ChaCha20-Poly1305 first for both TLS
 1.3 and 1.2, and keeps AES-GCM and the rest for servers without it. On a PSP-1000 ChaCha20 decrypts

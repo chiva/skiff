@@ -127,7 +127,8 @@ the screen; claims every 20 s were too slow to wait for, so #108 made it 10 s. S
 ## Phase 5: PS1
 
 Next. Decide how `.bin/.cue/.chd` becomes `EBOOT.PBP` (server-side conversion vs on-device
-packaging), then add the PS1 installer.
+packaging), then add the PS1 installer. The format, the hardware tests behind it and the options
+for converting are in [PS1 games on PSP](pops.md).
 
 ## Phase 6: More systems
 

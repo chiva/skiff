@@ -8,6 +8,8 @@
 - [Hardware findings](hardware-findings.md): what Phase 1 measured on a real PSP, and the decisions
   it settled
 - [Adding a platform](adding-a-platform.md): installing games for another system
+- [PS1 games on PSP](pops.md): how POPS runs PS1 EBOOTs, their file layout, hardware test results,
+  and how to build them without Sony-made data
 - [Roadmap](roadmap.md)
 
 Start with [CONTRIBUTING.md](../../CONTRIBUTING.md) for the workflow.

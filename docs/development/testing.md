@@ -187,7 +187,9 @@ full page lists them in name order, the save disc's list item and details carry 
 read from it (the other two none), RomM 5.4 syncs saves, the second file's details match the seed, and its download URL,
 built from the name with reserved characters, brings back exactly its bytes; the seeded cover comes
 back without the token from the URL its ROM's details give, the other ROM has none, and a cover
-RomM lacks is a 404; the favourites list holds the seeded favourite with its file; the token with
+RomM lacks is a 404; the payload's details carry the description and facts the seed entered as the
+web UI does (its typographic punctuation comes back ASCII, its release date as 2010), the other
+ROM's none; the favourites list holds the seeded favourite with its file; the token with
 `collections.read` lists the admin's three collections and the viewer's public one (not the
 viewer's private one, nor the favourites), while the other token's request is refused (201, RomM's
 403); each collection's games list with `roms.read` alone, and the viewer's private collection
@@ -656,6 +658,15 @@ free stack), and a
 the wait for the screen, and a `cover:` line for each cover the details screen asked for: from the
 Memory Stick cache or RomM, its bytes and size, the time to fetch and to decode it, and how the
 cache read and write went.
+
+**Details (A2).** With the same library, open Skiff Test Payload: beside the cover, its facts
+(2010, Puzzle, Simulator, Skiff Test Studio / Skiff Test Publishing, the size) and, under a line,
+the seed's description. Check that it scrolls with Up and Down (L and R a screen), that the arrows
+beside it and the Scroll hint show only while there is more to see, that its quotes, dash and
+ellipsis read as plain ASCII (nothing drawn as a placeholder), and that the name, facts and free
+space stay put while it scrolls. Read back: no `slow frame:` line from opening the details (the
+description is wrapped once, the first time) or from scrolling. A game without metadata (Skiff
+Library 01) shows its name, file, size and free space as before.
 
 **Covers (A2).** With the same library: open Skiff Library 01 (a PNG cover) and check it appears
 beside the details without the text moving; Back, open it again (the `cover:` line says `cached`);

@@ -1927,13 +1927,32 @@ static void test_a_rom_reads_its_description_and_facts(void) {
     TEST_ASSERT_EQUAL_STRING("Spanish", m->languages[1]);
 }
 
-static void test_the_recorded_unidentified_rom_has_no_metadata(void) {
+static void test_the_recorded_roms_carry_the_seeds_metadata_or_none(void) {
     serve_fixture("/api/roms/1", "romm/rom.http");
+    serve_fixture("/api/roms/2", "romm/rom-extra.http");
     skiff_romm_rom rom;
-    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
     const skiff_romm_rom_metadata *m = &rom.metadata;
+    TEST_PRINTF("the payload: the description and facts tests/integration/seed.py entered, sent "
+                "with raw UTF-8 punctuation");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, PAYLOAD_ROM_ID, &rom));
     print_metadata(m);
-    TEST_PRINTF("summary null, metadatum empty but for RomM's default player_count \"1\"");
+    TEST_ASSERT_EQUAL_STRING_LEN("Skiff Test Payload is not a game", m->description, 32);
+    TEST_ASSERT_NOT_NULL(strstr(m->description, "so Skiff's details screen"));
+    TEST_ASSERT_NOT_NULL(strstr(m->description, "show.\n\nThis second paragraph"));
+    TEST_ASSERT_NOT_NULL(strstr(m->description, "on a PSP - four or five"));
+    TEST_ASSERT_NOT_NULL(strstr(m->description, "Its \"quotes\", its dash and its ellipsis..."));
+    TEST_ASSERT_EQUAL_INT(2010, m->release_year);
+    TEST_ASSERT_EQUAL_size_t(2, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING("Puzzle", m->genres[0]);
+    TEST_ASSERT_EQUAL_STRING("Simulator", m->genres[1]);
+    TEST_ASSERT_EQUAL_STRING("Skiff Test Studio", m->developer);
+    TEST_ASSERT_EQUAL_STRING("Skiff Test Publishing", m->publisher);
+    TEST_PRINTF("RomM's default player_count \"1\" and its null rating are not shown");
+    TEST_ASSERT_EQUAL_STRING("", m->players);
+    TEST_ASSERT_EQUAL_UINT(0, m->rating);
+    TEST_PRINTF("the extra ROM: summary null, metadatum empty but for player_count \"1\"");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, EXTRA_ROM_ID, &rom));
+    print_metadata(m);
     TEST_ASSERT_EQUAL_STRING("", m->description);
     TEST_ASSERT_EQUAL_INT(0, m->release_year);
     TEST_ASSERT_EQUAL_UINT(0, m->rating);
@@ -2273,7 +2292,7 @@ int main(void) {
     RUN_TEST(test_a_rom_with_many_files_counts_them_all);
     RUN_TEST(test_a_rom_without_files_or_with_a_broken_file_is_refused);
     RUN_TEST(test_a_rom_reads_its_description_and_facts);
-    RUN_TEST(test_the_recorded_unidentified_rom_has_no_metadata);
+    RUN_TEST(test_the_recorded_roms_carry_the_seeds_metadata_or_none);
     RUN_TEST(test_a_description_keeps_its_paragraphs_and_drops_control_characters);
     RUN_TEST(test_a_long_description_is_cut_at_a_character_with_a_marker);
     RUN_TEST(test_facts_that_do_not_read_are_left_out_not_refused);

@@ -3,8 +3,8 @@
  * and the TLS stack the PSP links: the version check, the PSP platform, every ROM page by page, the
  * seeded favourite with its file, the seeded collections (listed only with collections.read) and
  * their games, a ROM's files, and a download URL built from a file name full of reserved characters
- * that brings back exactly the bytes RomM recorded the CRC-32 of, and the seeded cover, fetched
- * without the token from the URL its ROM's details give.
+ * that brings back exactly the bytes RomM recorded the CRC-32 of, the seeded cover, fetched
+ * without the token from the URL its ROM's details give, and the seeded description and facts.
  *
  * Then games sent from RomM's web UI (skiff/romm_installs.h): a PSP paired with every scope Skiff
  * asks for registers remote_install, the admin sends it the payload and the seed's game of another
@@ -386,6 +386,43 @@ static void test_a_cover_comes_without_the_token_from_its_rom_details(void) {
     TEST_ASSERT_EQUAL_INT(HTTP_NOT_FOUND, get_without_token(url, &got));
 }
 
+/* The payload's description and facts as Skiff keeps them: tests/integration/seed.py's
+ * PAYLOAD_SUMMARY with its typographic punctuation made ASCII, and PAYLOAD_MANUAL_METADATA. */
+#define SEEDED_DESCRIPTION                                                                         \
+    "Skiff Test Payload is not a game: the integration seed makes up its bytes, its cover and "    \
+    "this text, so Skiff's details screen has something to show.\n\nThis second paragraph is "     \
+    "here to make the description scroll on a PSP - four or five lines beside the cover are not "  \
+    "enough for it. Its \"quotes\", its dash and its ellipsis... come out as plain ASCII.\n\nA "   \
+    "third paragraph closes it. Nothing here comes from a real game, a metadata provider or a "    \
+    "player."
+#define SEEDED_RELEASE_YEAR 2010
+
+static void test_a_roms_details_carry_its_description_and_facts(void) {
+    skiff_romm_rom rom;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, payload.rom_id, &rom));
+    const skiff_romm_rom_metadata *m = &rom.metadata;
+    TEST_PRINTF("ROM %llu: year %d, %zu genre(s), '%s' / '%s', players '%s', rating %u",
+                (unsigned long long)payload.rom_id, m->release_year, m->genre_count, m->developer,
+                m->publisher, m->players, m->rating);
+    TEST_PRINTF("description: '%s'", m->description);
+    TEST_ASSERT_EQUAL_STRING(SEEDED_DESCRIPTION, m->description);
+    TEST_ASSERT_EQUAL_INT(SEEDED_RELEASE_YEAR, m->release_year);
+    TEST_ASSERT_EQUAL_size_t(2, m->genre_count);
+    TEST_ASSERT_EQUAL_STRING("Puzzle", m->genres[0]);
+    TEST_ASSERT_EQUAL_STRING("Simulator", m->genres[1]);
+    TEST_ASSERT_EQUAL_STRING("Skiff Test Studio", m->developer);
+    TEST_ASSERT_EQUAL_STRING("Skiff Test Publishing", m->publisher);
+    TEST_PRINTF("manual metadata sets no player count (RomM's \"1\") and no rating");
+    TEST_ASSERT_EQUAL_STRING("", m->players);
+    TEST_ASSERT_EQUAL_UINT(0, m->rating);
+    TEST_ASSERT_EQUAL_size_t(0, m->region_count);
+    TEST_PRINTF("the extra ROM has none of it");
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_romm_get_rom(&client, extra.rom_id, &rom));
+    TEST_ASSERT_EQUAL_STRING("", m->description);
+    TEST_ASSERT_EQUAL_INT(0, m->release_year);
+    TEST_ASSERT_EQUAL_size_t(0, m->genre_count);
+}
+
 /* Sends a request as the admin, as RomM's web UI does; returns the HTTP status. */
 static long admin_request(skiff_http_method method, const char *path, const char *body) {
     char url[PATH_MAX_LENGTH];
@@ -560,6 +597,7 @@ int main(void) {
     RUN_TEST(test_a_collections_games_are_listed_with_roms_read_alone);
     RUN_TEST(test_a_reserved_file_name_downloads_through_its_url);
     RUN_TEST(test_a_cover_comes_without_the_token_from_its_rom_details);
+    RUN_TEST(test_a_roms_details_carry_its_description_and_facts);
     RUN_TEST(test_a_wrong_token_is_refused_by_romm);
     RUN_TEST(test_a_psp_receives_the_games_the_web_ui_sends);
     const int failures = UNITY_END();

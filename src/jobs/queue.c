@@ -20,6 +20,7 @@
 #define KEY_ATTEMPTS "attempts"
 #define KEY_REPLACE "replace"
 #define KEY_REPLACE_SIZE "replace_size"
+#define KEY_FORMAT "format"
 #define CRC32_HEX_DIGITS 8
 #define HEX_BASE 16
 #define ASCII_DELETE 0x7F
@@ -123,6 +124,25 @@ static int read_crc32(const cJSON *object, skiff_job *job) {
     return 1;
 }
 
+/* A format RomM converts into, by its name; absent (or a version 1 file) is the stored file. */
+static int read_format(const cJSON *object, int stored_only, skiff_romm_format *out) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, KEY_FORMAT);
+    *out = SKIFF_ROMM_FORMAT_STORED;
+    if (item == NULL || stored_only) {
+        return item == NULL;
+    }
+    if (!cJSON_IsString(item) || item->valuestring == NULL) {
+        return 0;
+    }
+    for (int f = SKIFF_ROMM_FORMAT_STORED + 1; f < SKIFF_ROMM_FORMAT_COUNT; f++) {
+        if (strcmp(item->valuestring, skiff_romm_format_name((skiff_romm_format)f)) == 0) {
+            *out = (skiff_romm_format)f;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int read_state(const cJSON *object, skiff_job_state *out) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, KEY_STATE);
     if (!cJSON_IsString(item) || item->valuestring == NULL) {
@@ -137,7 +157,7 @@ static int read_state(const cJSON *object, skiff_job_state *out) {
     return 0;
 }
 
-static int parse_job(const cJSON *object, skiff_job *job) {
+static int parse_job(const cJSON *object, int stored_only, skiff_job *job) {
     double id = 0;
     double rom_id = 0;
     double size = 0;
@@ -148,6 +168,7 @@ static int parse_job(const cJSON *object, skiff_job *job) {
         id == 0 || !read_number(object, KEY_ROM_ID, JSON_ID_LIMIT, &rom_id) ||
         !read_text(object, KEY_TITLE, job->title, sizeof job->title, 1) ||
         !read_text(object, KEY_FILE_NAME, job->file_name, sizeof job->file_name, 0) ||
+        !read_format(object, stored_only, &job->format) ||
         !read_text(object, KEY_TARGET, job->target, sizeof job->target, 0) ||
         !target_fits(job->target) ||
         !read_number(object, KEY_SIZE, (double)SKIFF_STORAGE_MAX_FILE_BYTES, &size) || size == 0 ||
@@ -184,6 +205,8 @@ static int drop_oldest_finished(jobs_table *table) {
 
 static int request_valid(const skiff_job_request *request) {
     return request->file_name != NULL && request->target != NULL && request->size > 0 &&
+           (request->format == SKIFF_ROMM_FORMAT_STORED ||
+            skiff_romm_format_name(request->format) != NULL) &&
            (double)request->rom_id <= JSON_ID_LIMIT &&
            request->size <= SKIFF_STORAGE_MAX_FILE_BYTES &&
            text_fits(request->title != NULL ? request->title : "", SKIFF_JOBS_TITLE_MAX, 1) &&
@@ -280,7 +303,7 @@ skiff_err skiff_jobs_parse(const char *json, size_t length, skiff_job *out, size
     double next = 0;
     const cJSON *list = cJSON_GetObjectItemCaseSensitive(root, KEY_JOBS);
     if (root == NULL || !read_number(root, KEY_VERSION, JSON_UINT32_LIMIT, &version) ||
-        version != SKIFF_JOBS_VERSION ||
+        (version != SKIFF_JOBS_VERSION && version != SKIFF_JOBS_VERSION_STORED_ONLY) ||
         !read_number(root, KEY_NEXT_ID, JSON_UINT32_LIMIT, &next) || !cJSON_IsArray(list)) {
         cJSON_Delete(root);
         return SKIFF_ERR_CONFIG_PARSE;
@@ -289,7 +312,7 @@ skiff_err skiff_jobs_parse(const char *json, size_t length, skiff_job *out, size
     const cJSON *item = NULL;
     cJSON_ArrayForEach(item, list) {
         skiff_job job;
-        const int parsed = parse_job(item, &job);
+        const int parsed = parse_job(item, version == SKIFF_JOBS_VERSION_STORED_ONLY, &job);
         /* Dropped jobs' ids are not given out again either. */
         largest = parsed && job.id > largest ? job.id : largest;
         if (*count == SKIFF_JOBS_MAX || !parsed || id_taken(out, *count, job.id) ||
@@ -322,7 +345,10 @@ static cJSON *job_object(const skiff_job *job) {
         cJSON_AddNumberToObject(object, KEY_ATTEMPTS, (double)job->attempts) == NULL ||
         cJSON_AddBoolToObject(object, KEY_REPLACE, job->replace_target != 0) == NULL ||
         (job->replace_target &&
-         cJSON_AddNumberToObject(object, KEY_REPLACE_SIZE, (double)job->replace_size) == NULL)) {
+         cJSON_AddNumberToObject(object, KEY_REPLACE_SIZE, (double)job->replace_size) == NULL) ||
+        (job->format != SKIFF_ROMM_FORMAT_STORED &&
+         cJSON_AddStringToObject(object, KEY_FORMAT, skiff_romm_format_name(job->format)) ==
+             NULL)) {
         cJSON_Delete(object);
         return NULL;
     }
@@ -625,6 +651,7 @@ static void fill_job(skiff_job *job, uint32_t id, const skiff_job_request *reque
         memcpy(job->title, request->title, strlen(request->title) + 1);
     }
     memcpy(job->file_name, request->file_name, strlen(request->file_name) + 1);
+    job->format = request->format;
     memcpy(job->target, request->target, strlen(request->target) + 1);
     job->size = request->size;
     job->has_crc32 = request->has_crc32;

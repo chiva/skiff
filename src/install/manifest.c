@@ -13,6 +13,7 @@
 #define KEY_SIZE "size"
 #define KEY_CRC32 "crc32"
 #define KEY_INSTALLED_MS "installed_ms"
+#define KEY_SOURCE "source"
 #define CRC32_FORMAT "%08lx"
 #define CRC32_HEX_DIGITS 8
 #define HEX_BASE 16
@@ -71,7 +72,8 @@ static int record_valid(const skiff_install_record *record) {
            memchr(record->path, '\0', sizeof record->path) != NULL &&
            fits(record->file_name, sizeof record->file_name) &&
            fits(record->path, sizeof record->path) && is_logical_path(record->path) &&
-           record->installed_ms >= 0 && (double)record->installed_ms < JSON_INTEGER_LIMIT;
+           record->installed_ms >= 0 && (double)record->installed_ms < JSON_INTEGER_LIMIT &&
+           (!record->has_source || (double)record->source_size < JSON_INTEGER_LIMIT);
 }
 
 /* ---- Finding records ---- */
@@ -215,13 +217,22 @@ static cJSON *record_to_json(const skiff_install_record *record) {
         cJSON_Delete(item);
         return NULL;
     }
-    if (record->has_crc32) {
-        char crc[CRC32_HEX_DIGITS + 1];
-        snprintf(crc, sizeof crc, CRC32_FORMAT, (unsigned long)record->crc32);
-        if (cJSON_AddStringToObject(item, KEY_CRC32, crc) == NULL) {
-            cJSON_Delete(item);
-            return NULL;
-        }
+    char crc[CRC32_HEX_DIGITS + 1];
+    snprintf(crc, sizeof crc, CRC32_FORMAT, (unsigned long)record->crc32);
+    if (record->has_crc32 && cJSON_AddStringToObject(item, KEY_CRC32, crc) == NULL) {
+        cJSON_Delete(item);
+        return NULL;
+    }
+    if (!record->has_source) {
+        return item;
+    }
+    cJSON *source = cJSON_AddObjectToObject(item, KEY_SOURCE);
+    snprintf(crc, sizeof crc, CRC32_FORMAT, (unsigned long)record->source_crc32);
+    if (source == NULL ||
+        cJSON_AddNumberToObject(source, KEY_SIZE, (double)record->source_size) == NULL ||
+        (record->has_source_crc32 && cJSON_AddStringToObject(source, KEY_CRC32, crc) == NULL)) {
+        cJSON_Delete(item);
+        return NULL;
     }
     return item;
 }
@@ -312,7 +323,8 @@ static int read_string(const cJSON *object, const char *key, char *out, size_t o
     return 1;
 }
 
-static int read_crc32(const cJSON *object, skiff_install_record *record) {
+/* object's "crc32": absent (*has 0), or exactly eight hexadecimal digits. */
+static int read_crc32(const cJSON *object, int *has, uint32_t *crc32) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, KEY_CRC32);
     if (item == NULL) {
         return 1;
@@ -322,8 +334,25 @@ static int read_crc32(const cJSON *object, skiff_install_record *record) {
         strspn(text, "0123456789abcdefABCDEF") != CRC32_HEX_DIGITS) {
         return 0;
     }
-    record->has_crc32 = 1;
-    record->crc32 = (uint32_t)strtoul(text, NULL, HEX_BASE);
+    *has = 1;
+    *crc32 = (uint32_t)strtoul(text, NULL, HEX_BASE);
+    return 1;
+}
+
+/* The file a converted one came from, or none: absent, or an object with its size. */
+static int read_source(const cJSON *object, skiff_install_record *record) {
+    const cJSON *source = cJSON_GetObjectItemCaseSensitive(object, KEY_SOURCE);
+    if (source == NULL) {
+        return 1;
+    }
+    double size = 0.0;
+    if (!cJSON_IsObject(source) ||
+        !read_whole_number(source, KEY_SIZE, JSON_INTEGER_LIMIT - 1.0, &size) ||
+        !read_crc32(source, &record->has_source_crc32, &record->source_crc32)) {
+        return 0;
+    }
+    record->has_source = 1;
+    record->source_size = (uint64_t)size;
     return 1;
 }
 
@@ -337,7 +366,7 @@ static int read_record(const cJSON *item, skiff_install_record *record) {
         !read_whole_number(item, KEY_SIZE, (double)SKIFF_STORAGE_MAX_FILE_BYTES, &size) ||
         !read_string(item, KEY_FILE_NAME, record->file_name, sizeof record->file_name) ||
         !read_string(item, KEY_PATH, record->path, sizeof record->path) ||
-        !read_crc32(item, record)) {
+        !read_crc32(item, &record->has_crc32, &record->crc32) || !read_source(item, record)) {
         return 0;
     }
     if (cJSON_GetObjectItemCaseSensitive(item, KEY_INSTALLED_MS) != NULL &&

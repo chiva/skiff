@@ -189,6 +189,8 @@ typedef enum skiff_language {
     X(SKIFF_TEXT_PROGRESS_RATE, 2, "{1}/s, about {2} left", "{1}/s, quedan unos {2}")              \
     X(SKIFF_TEXT_QUEUE_REJOINING, 0, "Reconnecting to Wi-Fi...", "Reconectando al wifi...")        \
     X(SKIFF_TEXT_QUEUE_RETRYING, 1, "Trying again in {1}", "Se reintentará en {1}")                \
+    X(SKIFF_TEXT_QUEUE_CONVERTING, 1, "RomM is converting it; asking again in {1}",                \
+      "RomM lo está convirtiendo; se preguntará de nuevo en {1}")                                  \
     X(SKIFF_TEXT_QUEUE_ADDED, 1, "Added to downloads: {1}", "Añadido a las descargas: {1}")        \
     X(SKIFF_TEXT_QUEUE_FULL, 0,                                                                    \
       "The download list is full. Clear finished downloads to add more.",                          \

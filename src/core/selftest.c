@@ -10,6 +10,7 @@
 #include "skiff/app.h"
 #include "skiff/config.h"
 #include "skiff/cover.h"
+#include "skiff/disc_image.h"
 #include "skiff/download.h"
 #include "skiff/http.h"
 #include "skiff/i18n.h"
@@ -662,13 +663,13 @@ static const char *check_install_manifest(void) {
     skiff_install_manifest *parsed = NULL;
     char text[SKIFF_SELFTEST_MANIFEST_TEXT_MAX];
     size_t length = 0;
-    const skiff_install_record record = {SKIFF_INSTALL_ROM_ID_MAX,
-                                         "Caf\xC3\xA9.iso",
-                                         "games:/Caf\xC3\xA9.iso",
-                                         SKIFF_STORAGE_MAX_FILE_BYTES,
-                                         1,
-                                         SKIFF_SELFTEST_STATE_CRC32,
-                                         SKIFF_SELFTEST_MANIFEST_MS};
+    const skiff_install_record record = {.rom_id = SKIFF_INSTALL_ROM_ID_MAX,
+                                         .file_name = "Caf\xC3\xA9.iso",
+                                         .path = "games:/Caf\xC3\xA9.iso",
+                                         .size = SKIFF_STORAGE_MAX_FILE_BYTES,
+                                         .has_crc32 = 1,
+                                         .crc32 = SKIFF_SELFTEST_STATE_CRC32,
+                                         .installed_ms = SKIFF_SELFTEST_MANIFEST_MS};
     const char *failure = NULL;
     if (skiff_install_manifest_create(&manifest) != SKIFF_OK ||
         skiff_install_manifest_create(&parsed) != SKIFF_OK ||
@@ -795,6 +796,80 @@ static const char *check_storage_list(void) {
     const skiff_err removed = skiff_storage_rmdir(storage, folder);
     if (removed != SKIFF_OK && failure == NULL) {
         failure = storage_failure("the emptied scratch folder was not removed", removed);
+    }
+    return failure;
+}
+
+/* A one-sector CSO as rom-converto writes one: the header, two index entries, the sector stored as
+ * it is (with the index's top bit). The check reads its 64-bit size and index little-endian, which
+ * must hold on the PSP's MIPS as on the host. */
+enum {
+    SELFTEST_CSO_HEADER = 24,
+    SELFTEST_CSO_DATA_AT = SELFTEST_CSO_HEADER + 8,
+    SELFTEST_CSO_BYTES = SELFTEST_CSO_DATA_AT + 2048,
+};
+
+static const char *check_disc_image(void) {
+    if (run_env == NULL || run_env->storage == NULL || run_env->roots == NULL) {
+        return "no storage to check";
+    }
+    static unsigned char cso[SELFTEST_CSO_BYTES];
+    static const unsigned char header[SELFTEST_CSO_DATA_AT] = {'C',
+                                                               'I',
+                                                               'S',
+                                                               'O',
+                                                               24,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               8,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               8,
+                                                               0,
+                                                               0,
+                                                               1,
+                                                               0,
+                                                               0,
+                                                               0,
+                                                               SELFTEST_CSO_DATA_AT,
+                                                               0,
+                                                               0,
+                                                               0x80,
+                                                               SELFTEST_CSO_BYTES & 0xFF,
+                                                               SELFTEST_CSO_BYTES >> 8,
+                                                               0,
+                                                               0};
+    memset(cso, 0, sizeof cso);
+    memcpy(cso, header, sizeof header);
+    char path[SKIFF_STORAGE_PATH_MAX];
+    skiff_err err =
+        skiff_storage_resolve(run_env->roots, SKIFF_SELFTEST_DISC_FILE, path, sizeof path);
+    if (err == SKIFF_OK) {
+        err = skiff_storage_replace_whole(run_env->storage, path, cso, sizeof cso);
+    }
+    if (err != SKIFF_OK) {
+        return storage_failure("could not write the scratch CSO", err);
+    }
+    const char *failure = NULL;
+    err = skiff_disc_image_check(run_env->storage, path, sizeof cso, SKIFF_ROMM_FORMAT_CSO);
+    if (err != SKIFF_OK) {
+        failure = storage_failure("a whole CSO did not pass", err);
+    } else if (skiff_disc_image_check(run_env->storage, path, sizeof cso - 1,
+                                      SKIFF_ROMM_FORMAT_CSO) != SKIFF_ERR_ROMM_CONVERTED_DAMAGED ||
+               skiff_disc_image_check(run_env->storage, path, sizeof cso, SKIFF_ROMM_FORMAT_ISO) !=
+                   SKIFF_ERR_ROMM_CONVERTED_DAMAGED) {
+        failure = "a cut CSO, or a CSO taken for an ISO, passed";
+    }
+    err = skiff_storage_remove(run_env->storage, path);
+    if (err != SKIFF_OK && failure == NULL) {
+        failure = storage_failure("the scratch CSO was not removed", err);
     }
     return failure;
 }
@@ -1194,6 +1269,7 @@ static const selftest_check CHECKS[] = {
     {"jobs-queue", check_jobs_queue},
     {"install-manifest", check_install_manifest},
     {"storage-list", check_storage_list},
+    {"disc-image", check_disc_image},
     {"saves-unit", check_saves_unit},
     {"saves-restore", check_saves_restore},
 };

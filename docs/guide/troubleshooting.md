@@ -65,7 +65,7 @@ under **Settings → Devices**.
 | 110 | Could not join the Wi-Fi network | The PSP has the connection saved but could not join it. Check that the access point is on and in range, and that its settings suit the PSP: 2.4 GHz, 802.11b allowed, WPA/WPA2 mixed rather than WPA2-only ([guide](02-wifi.md)). Test the connection in Settings → Network Settings |
 | 111 | The connection to the server was lost | The connection dropped in the middle of a transfer, usually because the Wi-Fi signal faded, the PSP's Wi-Fi switch was turned off or the server restarted. Move closer to the router and try again; a download continues from where it stopped |
 
-## RomM errors (200–221)
+## RomM errors (200–223)
 
 | Code | Meaning | What to try |
 |---|---|---|
@@ -91,6 +91,8 @@ under **Settings → Devices**.
 | 219 | That game is not a PSP game | Not shown on the PSP: it is the reason RomM shows ("That game is not a PSP game [219]", or "Ese juego no es de PSP [219]" on a PSP set to Spanish) for a game sent to this PSP from RomM's web UI that belongs to another platform. RomM offers **Install on device** for games of any platform but Windows ones, but Skiff only installs PSP games. Send a game from RomM's PSP platform instead |
 | 220 | RomM is still converting the game | Not an error: RomM is converting a game stored in a format the PSP cannot run (such as CHD) into one it can, and asked Skiff to come back later. Skiff waits and asks again by itself; a whole UMD takes RomM a few minutes |
 | 221 | RomM cannot convert this game for the PSP | The game is stored in a format the PSP cannot run (such as CHD), and RomM would not convert it into one it can. Download conversion is off on the server (an admin turns it on with `ROM_CONVERTO_ENABLED` and, in RomM's settings, conversion of downloads), or RomM tried and failed, or its conversion cache is full. Ask the RomM admin, or store the game as ISO or CSO |
+| 222 | RomM took too long to convert the game | Skiff asked RomM for the converted game for 30 minutes and RomM was still converting it, which a single UMD should never take. RomM may be busy converting others (it converts two at a time unless `ROM_CONVERTO_MAX_CONCURRENCY` says otherwise) or stuck: check RomM's logs, then retry the download; RomM keeps a conversion it finished |
+| 223 | The game RomM converted arrived damaged | The whole file arrived, but it is not a valid disc image of the format Skiff asked for (it does not start like one, or its index points past its end), so Skiff deleted it rather than install it. RomM sends no checksum for a converted file, so this check is what catches a broken conversion or a proxy that changed the file. Retry the download; if it keeps happening, check RomM's logs for the conversion |
 
 ## Memory Stick errors (300–309)
 

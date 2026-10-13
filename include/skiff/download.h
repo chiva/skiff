@@ -80,6 +80,11 @@ typedef void (*skiff_download_progress_fn)(void *ctx, uint64_t done, uint64_t to
  * anyway, so other writes (the log's) cost the transfer nothing extra now. */
 typedef void (*skiff_download_write_fn)(void *ctx);
 
+/* Asked whether the finished file at part_path (size bytes, still under its .part name) may become
+ * the target: SKIFF_OK, or why not (skiff/disc_image.h's check, for a file RomM converted). */
+typedef skiff_err (*skiff_download_check_fn)(void *ctx, skiff_storage *storage,
+                                             const char *part_path, uint64_t size);
+
 typedef struct skiff_download_spec {
     /* The file's URL and the request headers (an Authorization header, for RomM). */
     const char *url;
@@ -94,10 +99,18 @@ typedef struct skiff_download_spec {
      * there is still exactly that size, otherwise the same refusal. */
     int replace_target;
     uint64_t replace_size;
-    /* What RomM records for the file: its size (required) and, when known, its CRC-32. */
+    /* What RomM records for the file: its size and, when known, its CRC-32. A file RomM converts
+     * as it is downloaded (?format=, skiff/romm.h) has neither: expected_size 0 takes the size from
+     * the response (a 200's Content-Length, which it must have, or a resumed 206's Content-Range
+     * total, which must match the size the .resume file saved), and has_expected_crc32 must be 0.
+     */
     uint64_t expected_size;
     int has_expected_crc32;
     uint32_t expected_crc32;
+    /* Run on the finished file before it takes the target's name; NULL for none. A refusal deletes
+     * the .part file and the progress, so the next attempt starts over, and is returned. */
+    skiff_download_check_fn check;
+    void *check_ctx;
     /* Passed to the transport (skiff/transport.h); NULL for none. */
     skiff_http_stop_fn should_stop;
     void *stop_ctx;
@@ -118,6 +131,10 @@ typedef struct skiff_download_result {
     int restarted;
     /* The target is in place and matched the expected size and CRC-32. */
     int complete;
+    /* The file's size: expected_size, or the size the response gave; 0 while unknown. */
+    uint64_t size;
+    /* With complete: the CRC-32 of the file in place, computed as it arrived. */
+    uint32_t crc32;
     /* The last response (status, ETag, TLS version and cipher), for logs. */
     skiff_http_response response;
 } skiff_download_result;
@@ -126,22 +143,27 @@ typedef struct skiff_download_result {
  * Runs one attempt and fills result. SKIFF_OK means the target is complete; otherwise the progress
  * made is kept for the next attempt, except as noted:
  *   - SKIFF_ERR_INVALID_ARG: a NULL argument, a missing URL or target, a target without a folder,
- *     a zero size, a path too long for SKIFF_DOWNLOAD_PATH_MAX;
- *   - SKIFF_ERR_STORAGE_FILE_TOO_LARGE: expected_size above SKIFF_DOWNLOAD_MAX_BYTES;
- *   - before any request, skiff_storage_check_room()'s error for the target's folder:
+ *     a path too long for SKIFF_DOWNLOAD_PATH_MAX, an expected CRC-32 without an expected size;
+ *   - SKIFF_ERR_STORAGE_FILE_TOO_LARGE: the size above SKIFF_DOWNLOAD_MAX_BYTES (the expected one,
+ *     before any request; one the response gives, before anything is written);
+ *   - skiff_storage_check_room()'s error for the target's folder, before any request (for a size
+ *     still unknown, the margin alone) and again once the response gives the size:
  *     SKIFF_ERR_STORAGE_NO_SPACE when it has less free space than what is still to come plus
  *     SKIFF_STORAGE_FREE_MARGIN_BYTES, SKIFF_ERR_STORAGE_NOT_FOUND when the folder is missing; a
  *     device that cannot tell its free space (SKIFF_ERR_NOT_IMPLEMENTED) is not refused;
  *   - the transport's error (skiff_transport_perform()), or the stop hook's;
- *   - the RomM error for an HTTP status other than 200 or 206 (skiff_http_status_error()); the
+ *   - the RomM error for an HTTP status other than 200 or 206 (skiff_http_download_status_error():
+ *     SKIFF_ERR_ROMM_CONVERTING while RomM converts the file, with the response's Retry-After); the
  *     .part file is not touched;
- *   - SKIFF_ERR_ROMM_BAD_RESPONSE: a size, range or status that does not fit the file; a 416 also
- *     discards the progress, since the server no longer has what it was resuming;
+ *   - SKIFF_ERR_ROMM_BAD_RESPONSE: a size, range or status that does not fit the file, or a 200
+ *     without Content-Length when the size comes from the response; a 416 also discards the
+ *     progress, since the server no longer has what it was resuming;
  *   - SKIFF_ERR_NET_CONNECTION_LOST: the body ended early without a transport error;
  *   - SKIFF_ERR_ROMM_CHECKSUM: the whole file arrived but its CRC-32 is not the expected one; the
  *     .part file and the progress are deleted, so the next attempt starts over;
  *   - SKIFF_ERR_STORAGE_IO also when the finished .part file is not exactly the expected size; it
  * is deleted with the progress, so the next attempt starts over;
+ *   - the check hook's refusal, with the .part file and the progress deleted;
  *   - SKIFF_ERR_STORAGE_NAME_TAKEN: the whole file arrived and checked out, but a file is already
  *     at the target and replace_target is 0, or it is not replace_size bytes; the progress is
  *     kept;

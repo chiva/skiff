@@ -17,8 +17,9 @@
 
 enum {
     CAPTURE_MAX_LINES = 32,
-    /* storage-list, saves-unit and saves-restore: what fails without a usable storage. */
-    STORAGE_CHECKS = 3,
+    /* storage-list, saves-unit, saves-restore and disc-image: what fails without a usable
+     * storage. */
+    STORAGE_CHECKS = 4,
 };
 
 typedef struct capture {
@@ -79,6 +80,16 @@ static void assert_scratch_folder_gone(void) {
                                   "the scratch folder is removed after the check");
 }
 
+static void assert_disc_file_gone(void) {
+    char file[SKIFF_STORAGE_PATH_MAX];
+    skiff_storage_info info;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_storage_resolve(&roots, SKIFF_SELFTEST_DISC_FILE, file, sizeof file));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SKIFF_ERR_STORAGE_NOT_FOUND,
+                                  skiff_storage_stat(storage, file, &info),
+                                  "the scratch CSO is removed after the check");
+}
+
 static void assert_saves_folder_gone(void) {
     char folder[SKIFF_STORAGE_PATH_MAX];
     skiff_storage_info info;
@@ -113,7 +124,9 @@ static void test_all_checks_pass_on_host(void) {
     TEST_ASSERT_EQUAL_STRING("PASS storage-list", line_of("storage-list"));
     TEST_ASSERT_EQUAL_STRING("PASS saves-unit", line_of("saves-unit"));
     TEST_ASSERT_EQUAL_STRING("PASS saves-restore", line_of("saves-restore"));
+    TEST_ASSERT_EQUAL_STRING("PASS disc-image", line_of("disc-image"));
     assert_scratch_folder_gone();
+    assert_disc_file_gone();
     assert_saves_folder_gone();
     assert_restore_folder_gone();
     assert_real_saves_untouched();
@@ -127,6 +140,7 @@ static void test_storage_checks_fail_without_a_storage(void) {
     TEST_ASSERT_EQUAL_STRING("FAIL storage-list: no storage to check", line_of("storage-list"));
     TEST_ASSERT_EQUAL_STRING("FAIL saves-unit: no storage to check", line_of("saves-unit"));
     TEST_ASSERT_EQUAL_STRING("FAIL saves-restore: no storage to check", line_of("saves-restore"));
+    TEST_ASSERT_EQUAL_STRING("FAIL disc-image: no storage to check", line_of("disc-image"));
     memset(&captured, 0, sizeof captured);
     TEST_ASSERT_EQUAL_INT(STORAGE_CHECKS,
                           skiff_selftest_run(&none, capture_line, &captured).failed);
@@ -243,6 +257,40 @@ static void test_storage_list_fails_when_the_scratch_folder_does_not_fit(void) {
                              line_of("saves-unit"));
     TEST_ASSERT_EQUAL_STRING("FAIL saves-restore: the restore folders do not fit under app:",
                              line_of("saves-restore"));
+    TEST_PRINTF("%s", line_of("disc-image"));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line_of("disc-image"),
+                                     "FAIL disc-image: could not write the scratch CSO (", 49));
+}
+
+/* The disc-image check names a Memory Stick that cannot write or read its scratch CSO. */
+static void test_disc_image_reports_the_failing_step(void) {
+    static const struct {
+        const char *suffix;
+        int read_fault;
+        const char *expected;
+    } CASES[] = {
+        {"selftest-disc.cso.tmp", 0,
+         "FAIL disc-image: could not write the scratch CSO (SKIFF_ERR_STORAGE_IO)"},
+        {"selftest-disc.cso", 1,
+         "FAIL disc-image: a whole CSO did not pass (SKIFF_ERR_STORAGE_IO)"},
+    };
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        fake_storage fake;
+        fake_storage_init(&fake, storage);
+        fake.fail_suffix = CASES[i].suffix;
+        if (CASES[i].read_fault) {
+            fake.read_error = SKIFF_ERR_STORAGE_IO;
+        } else {
+            fake.write_error = SKIFF_ERR_STORAGE_IO;
+        }
+        const skiff_selftest_env faked = {&fake.base, &roots};
+        memset(&captured, 0, sizeof captured);
+        (void)skiff_selftest_run(&faked, capture_line, &captured);
+        TEST_PRINTF("fault on \"%s\": %s", CASES[i].suffix, line_of("disc-image"));
+        TEST_ASSERT_EQUAL_STRING(CASES[i].expected, line_of("disc-image"));
+        assert_disc_file_gone();
+        skiff_storage_destroy(&fake.base);
+    }
 }
 
 typedef enum saves_fault {
@@ -462,6 +510,7 @@ int main(void) {
     RUN_TEST(test_storage_checks_fail_without_a_storage);
     RUN_TEST(test_storage_list_reports_the_failing_step);
     RUN_TEST(test_storage_list_fails_when_the_scratch_folder_does_not_fit);
+    RUN_TEST(test_disc_image_reports_the_failing_step);
     RUN_TEST(test_saves_unit_reports_the_failing_step);
     RUN_TEST(test_saves_restore_reports_the_failing_step);
     RUN_TEST(test_saves_restore_survives_a_leftover_backup);

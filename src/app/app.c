@@ -263,7 +263,7 @@ static skiff_err record_and_save(skiff_app *app, const skiff_install_record *rec
     return err;
 }
 
-static void on_downloaded(void *ctx, const skiff_job *job) {
+static void on_downloaded(void *ctx, const skiff_job *job, const skiff_jobs_installed *file) {
     skiff_app *app = ctx;
     skiff_install_record record;
     memset(&record, 0, sizeof record);
@@ -277,9 +277,16 @@ static void on_downloaded(void *ctx, const skiff_job *job) {
     if (err == SKIFF_OK) {
         record.rom_id = job->rom_id;
         snprintf(record.file_name, sizeof record.file_name, "%s", job->file_name);
-        record.size = job->size;
-        record.has_crc32 = job->has_crc32;
-        record.crc32 = job->crc32;
+        /* What is on the Memory Stick, which Skiff compares its own copy against later. */
+        record.size = file->size;
+        record.has_crc32 = 1;
+        record.crc32 = file->crc32;
+        if (job->format != SKIFF_ROMM_FORMAT_STORED) {
+            record.has_source = 1;
+            record.source_size = job->size;
+            record.has_source_crc32 = job->has_crc32;
+            record.source_crc32 = job->crc32;
+        }
         if (app->config.clock == NULL ||
             app->config.clock(app->config.clock_ctx, &record.installed_ms) == 0) {
             record.installed_ms = 0;

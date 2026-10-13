@@ -73,6 +73,8 @@
     X(SKIFF_ERR_ROMM_SEND_NOT_PSP, "Ese juego no es de PSP")                                       \
     X(SKIFF_ERR_ROMM_CONVERTING, "RomM aún está convirtiendo el juego")                            \
     X(SKIFF_ERR_ROMM_CONVERSION_UNAVAILABLE, "RomM no puede convertir este juego para la PSP")     \
+    X(SKIFF_ERR_ROMM_CONVERSION_TIMEOUT, "RomM ha tardado demasiado en convertir el juego")        \
+    X(SKIFF_ERR_ROMM_CONVERTED_DAMAGED, "El juego que RomM ha convertido ha llegado dañado")       \
     X(SKIFF_ERR_STORAGE_NO_MEDIA, "No se encuentra ningún Memory Stick")                           \
     X(SKIFF_ERR_STORAGE_NO_SPACE, "No hay suficiente espacio libre en el Memory Stick")            \
     X(SKIFF_ERR_STORAGE_IO, "No se puede leer o escribir en el Memory Stick")                      \

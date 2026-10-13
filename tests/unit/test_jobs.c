@@ -79,6 +79,10 @@ typedef struct fake_env {
     int cancel_after_sleeps;
     /* The switch comes back after this many sleeps (0 for never). */
     int switch_back_after_sleeps;
+    /* The PSP suspends during this sleep (0 for never): the connection is gone, though the access
+     * point may still read as joined (online_after_suspend). */
+    int suspend_after_sleeps;
+    int online_after_suspend;
     /* What each attempt meets, by the order of transport openings. */
     attempt_script script[SCRIPT_MAX];
 } fake_env;
@@ -248,6 +252,10 @@ static void env_sleep(void *ctx, uint32_t ms) {
     if (e->switch_back_after_sleeps != 0 && e->sleeps >= e->switch_back_after_sleeps) {
         e->switch_on = 1;
     }
+    if (e->sleeps == e->suspend_after_sleeps) {
+        e->suspends++;
+        e->online = e->online_after_suspend;
+    }
     if (e->sleeps == e->cancel_after_sleeps) {
         TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_cancel(jobs, e->cancel_id));
     }
@@ -275,6 +283,7 @@ static void serve(void) {
 typedef struct downloaded_hook {
     int calls;
     skiff_job job;
+    skiff_jobs_installed file;
     skiff_job_state listed_state;
     int state_held;
     int commit_held;
@@ -282,10 +291,11 @@ typedef struct downloaded_hook {
 
 static downloaded_hook handed_over;
 
-static void on_downloaded(void *ctx, const skiff_job *job) {
+static void on_downloaded(void *ctx, const skiff_job *job, const skiff_jobs_installed *file) {
     downloaded_hook *seen = ctx;
     seen->calls++;
     seen->job = *job;
+    seen->file = *file;
     seen->state_held = locks.state.held;
     seen->commit_held = locks.commit.held;
     skiff_job listed[SKIFF_JOBS_MAX];
@@ -571,7 +581,7 @@ static void test_a_damaged_queue_file_starts_an_empty_queue(void) {
     create_jobs();
     TEST_ASSERT_EQUAL_size_t(0, skiff_jobs_list(jobs, NULL, 0));
     skiff_jobs_destroy(jobs);
-    write_text(queue_path, "{\"version\":2,\"next_id\":1,\"jobs\":[]}");
+    write_text(queue_path, "{\"version\":3,\"next_id\":1,\"jobs\":[]}");
     create_jobs();
     TEST_ASSERT_EQUAL_size_t(0, skiff_jobs_list(jobs, NULL, 0));
     skiff_log_flush(logger);
@@ -1087,6 +1097,273 @@ static void test_a_cancel_during_a_wait_ends_the_wait(void) {
     TEST_ASSERT_EQUAL_UINT64(SKIFF_JOBS_POLL_MS, env_state.slept_ms);
 }
 
+/* ---- Files RomM converts ---- */
+
+#define CONVERTED_PATH CONTENT_PATH "?format=cso"
+#define CONVERTED_NAME "Skiff Test.cso"
+/* A synthetic CSO of a disc of CSO_BLOCKS sectors: header, index, every block stored as it is. */
+#define CSO_BLOCKS 8U
+#define CSO_SECTOR 2048U
+#define CSO_HEADER 24U
+#define CSO_INDEX ((CSO_BLOCKS + 1) * 4U)
+#define CSO_BYTES (CSO_HEADER + CSO_INDEX + CSO_BLOCKS * CSO_SECTOR)
+#define LOG_TEXT_MAX (64 * 1024)
+#define PENDING_202(retry_after) "HTTP/1.1 202 Accepted\r\n" retry_after "Content-Length: 0\r\n\r\n"
+
+static char converted_target[TEMP_DIR_PATH_MAX];
+/* The CRC-32 of the CSO serve_conversion() serves last. */
+static uint32_t cso_crc32;
+
+static void put_le32(unsigned char *at, uint32_t value) {
+    for (int i = 0; i < 4; i++) {
+        at[i] = (unsigned char)(value >> (8 * i));
+    }
+}
+
+/* RomM answers 202 to the first `pending` requests (each answer one of `answers`, in order, the
+ * last repeated), then serves the CSO (or `damaged` bytes in its place). */
+static void serve_conversion(const char *const *answers, size_t answer_count, int pending,
+                             int damaged) {
+    for (int i = 0; i < pending; i++) {
+        const char *answer = answers[(size_t)i < answer_count ? (size_t)i : answer_count - 1];
+        fake_route *wait =
+            fake_transport_add_raw(&transport, CONVERTED_PATH, answer, strlen(answer));
+        TEST_ASSERT_NOT_NULL(wait);
+        wait->max_uses = 1;
+    }
+    static unsigned char cso[CSO_BYTES];
+    memset(cso, 0, sizeof cso);
+    static const unsigned char MAGIC[] = {'C', 'I', 'S', 'O'};
+    static const unsigned char NOT_MAGIC[] = {'H', 'T', 'M', 'L'};
+    memcpy(cso, damaged ? NOT_MAGIC : MAGIC, sizeof MAGIC);
+    put_le32(cso + 4, CSO_HEADER);
+    put_le32(cso + 8, CSO_BLOCKS * CSO_SECTOR);
+    put_le32(cso + 16, CSO_SECTOR);
+    cso[20] = 1;
+    for (uint32_t block = 0; block <= CSO_BLOCKS; block++) {
+        put_le32(cso + CSO_HEADER + (size_t)4 * block, CSO_HEADER + CSO_INDEX + block * CSO_SECTOR);
+    }
+    cso_crc32 = (uint32_t)crc32(0L, cso, (uInt)CSO_BYTES);
+    char headers[HEADERS_MAX];
+    const int used = snprintf(headers, sizeof headers,
+                              "HTTP/1.1 200 OK\r\nETag: %s\r\nContent-Length: %u\r\n\r\n", ETAG,
+                              (unsigned)CSO_BYTES);
+    char *raw = malloc((size_t)used + CSO_BYTES);
+    TEST_ASSERT_NOT_NULL(raw);
+    memcpy(raw, headers, (size_t)used);
+    memcpy(raw + used, cso, CSO_BYTES);
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&transport, CONVERTED_PATH, raw, (size_t)used + CSO_BYTES));
+    free(raw);
+}
+
+static uint32_t add_converted_job(void) {
+    TEST_ASSERT_TRUE(
+        temp_dir_path(dir, "ISO/" CONVERTED_NAME, converted_target, sizeof converted_target));
+    skiff_job_request request = request_for(FILE_NAME, converted_target);
+    request.format = SKIFF_ROMM_FORMAT_CSO;
+    uint32_t id = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &id));
+    return id;
+}
+
+/* The waits RomM's 202s caused, in order, from the recovery events. */
+static size_t conversion_waits(uint32_t *out, size_t max) {
+    size_t count = 0;
+    for (size_t i = 0; i < event_count && count < max; i++) {
+        if (events[i].kind == SKIFF_JOBS_EVENT_RECOVERY &&
+            events[i].step == SKIFF_JOBS_CONVERTING) {
+            out[count++] = events[i].retry_in_ms;
+        }
+    }
+    return count;
+}
+
+static void test_a_converted_job_waits_for_romm_then_downloads(void) {
+    static const char *const ANSWERS[] = {PENDING_202("Retry-After: 30\r\n")};
+    serve_conversion(ANSWERS, 1, 2, 0);
+    const uint32_t id = add_converted_job();
+    run();
+    report(id);
+    const skiff_job job = job_with(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job.state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, job.error);
+    TEST_ASSERT_EQUAL_UINT32(3, job.attempts);
+    TEST_ASSERT_EQUAL_STRING(SERVER CONVERTED_PATH, transport.log[0].url);
+    uint32_t waits[4] = {0};
+    TEST_ASSERT_EQUAL_size_t(2, conversion_waits(waits, 4));
+    TEST_ASSERT_EQUAL_UINT32(30000, waits[0]);
+    TEST_ASSERT_EQUAL_UINT32(30000, waits[1]);
+    TEST_ASSERT_EQUAL_UINT64(60000, env_state.slept_ms);
+    TEST_PRINTF("kept awake %d times over the minute of waiting", env_state.keep_awakes);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(55, env_state.keep_awakes);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, env_state.rejoins, "a 202 is not a network failure");
+    uint64_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_size(posix, converted_target, &size));
+    TEST_ASSERT_EQUAL_UINT64(CSO_BYTES, size);
+    TEST_ASSERT_EQUAL_INT(1, handed_over.calls);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_CSO, handed_over.job.format);
+    TEST_PRINTF("the installer gets the CSO's size and CRC-32, the job keeps RomM's file's");
+    TEST_ASSERT_EQUAL_UINT64(CSO_BYTES, handed_over.file.size);
+    TEST_ASSERT_EQUAL_HEX32(cso_crc32, handed_over.file.crc32);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, handed_over.job.size);
+    static char log_text[LOG_TEXT_MAX];
+    skiff_log_flush(logger);
+    read_text(log_path, log_text, sizeof log_text);
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "RomM is converting it to cso, asking again in 30 s"));
+    TEST_ASSERT_NOT_NULL(strstr(log_text, "RomM converted it to cso"));
+}
+
+static void test_retry_after_is_kept_within_bounds(void) {
+    static const char *const ANSWERS[] = {PENDING_202("Retry-After: 1\r\n"),
+                                          PENDING_202("Retry-After: 600\r\n"), PENDING_202("")};
+    serve_conversion(ANSWERS, 3, 3, 0);
+    const uint32_t id = add_converted_job();
+    run();
+    report(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    uint32_t waits[4] = {0};
+    TEST_ASSERT_EQUAL_size_t(3, conversion_waits(waits, 4));
+    TEST_PRINTF("waits %u, %u, %u ms", (unsigned)waits[0], (unsigned)waits[1], (unsigned)waits[2]);
+    TEST_ASSERT_EQUAL_UINT32(SKIFF_JOBS_CONVERT_WAIT_MIN_MS, waits[0]);
+    TEST_ASSERT_EQUAL_UINT32(SKIFF_JOBS_CONVERT_WAIT_MAX_MS, waits[1]);
+    TEST_ASSERT_EQUAL_UINT32(SKIFF_JOBS_CONVERT_WAIT_DEFAULT_MS, waits[2]);
+}
+
+static void test_a_cancel_while_romm_converts_ends_the_wait(void) {
+    static const char *const ANSWERS[] = {PENDING_202("Retry-After: 30\r\n")};
+    serve_conversion(ANSWERS, 1, 1, 0);
+    const uint32_t id = add_converted_job();
+    env_state.cancel_after_sleeps = 1;
+    env_state.cancel_id = id;
+    run();
+    report(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_CANCELLED, job_with(id).state);
+    TEST_ASSERT_EQUAL_UINT64(SKIFF_JOBS_POLL_MS, env_state.slept_ms);
+    TEST_ASSERT_EQUAL_INT(0, handed_over.calls);
+}
+
+static void test_a_suspend_while_romm_converts_rejoins_before_asking_again(void) {
+    static const char *const ANSWERS[] = {PENDING_202("Retry-After: 30\r\n")};
+    serve_conversion(ANSWERS, 1, 1, 0);
+    const uint32_t id = add_converted_job();
+    env_state.suspend_after_sleeps = 3;
+    env_state.online_after_suspend = 1;
+    run();
+    report(id);
+    TEST_PRINTF("the access point still read as joined after the suspend");
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_DONE, job_with(id).state);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, env_state.rejoins, "rejoined before asking again");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, env_state.opens, "on a new connection");
+    TEST_ASSERT_EQUAL_INT(1, count_events(SKIFF_JOBS_EVENT_RECOVERY, SKIFF_JOBS_REJOINING));
+}
+
+static void test_romm_converting_too_long_fails_the_job(void) {
+    static const char PENDING[] = PENDING_202("Retry-After: 60\r\n");
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&transport, CONVERTED_PATH, PENDING, sizeof PENDING - 1));
+    const uint32_t id = add_converted_job();
+    run();
+    report(id);
+    const skiff_job job = job_with(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_FAILED, job.state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERSION_TIMEOUT, job.error);
+    TEST_PRINTF("asked %zu times over %llu ms", transport.request_count,
+                (unsigned long long)env_state.slept_ms);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT64(
+        SKIFF_JOBS_CONVERT_TIMEOUT_MS - SKIFF_JOBS_CONVERT_WAIT_MAX_MS, env_state.slept_ms);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(SKIFF_JOBS_CONVERT_TIMEOUT_MS, env_state.slept_ms);
+    TEST_ASSERT_FALSE(exists(converted_target));
+}
+
+static void test_romm_unable_to_convert_fails_at_once(void) {
+    static const char REFUSED[] = "HTTP/1.1 406 Not Acceptable\r\nContent-Length: 2\r\n\r\n{}";
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_raw(&transport, CONVERTED_PATH, REFUSED, sizeof REFUSED - 1));
+    const uint32_t id = add_converted_job();
+    run();
+    report(id);
+    const skiff_job job = job_with(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_FAILED, job.state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERSION_UNAVAILABLE, job.error);
+    TEST_ASSERT_EQUAL_UINT32(1, job.attempts);
+    TEST_ASSERT_EQUAL_UINT64(0, env_state.slept_ms);
+}
+
+static void test_a_damaged_conversion_fails_and_leaves_nothing(void) {
+    serve_conversion(NULL, 0, 0, 1);
+    const uint32_t id = add_converted_job();
+    run();
+    report(id);
+    const skiff_job job = job_with(id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOB_FAILED, job.state);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERTED_DAMAGED, job.error);
+    TEST_ASSERT_FALSE(exists(converted_target));
+    char converted_part[TEMP_DIR_PATH_MAX + sizeof SKIFF_DOWNLOAD_PART_SUFFIX];
+    snprintf(converted_part, sizeof converted_part, "%s" SKIFF_DOWNLOAD_PART_SUFFIX,
+             converted_target);
+    TEST_ASSERT_FALSE(exists(converted_part));
+    TEST_ASSERT_EQUAL_INT(0, handed_over.calls);
+}
+
+static void test_a_converted_job_survives_a_restart(void) {
+    const uint32_t id = add_converted_job();
+    char text[TEXT_MAX];
+    read_text(queue_path, text, sizeof text);
+    TEST_PRINTF("queue file: %s", text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "\"version\":2"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "\"format\":\"cso\""));
+    skiff_jobs_destroy(jobs);
+    create_jobs();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_CSO, job_with(id).format);
+    TEST_PRINTF("a job that downloads the stored file writes no format");
+    char other[TEMP_DIR_PATH_MAX];
+    const skiff_job_request request = request_named("Other.iso", other, sizeof other);
+    uint32_t stored = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_jobs_add(jobs, &request, &stored));
+    TEST_ASSERT_NOT_EQUAL_UINT32(id, stored);
+    read_text(queue_path, text, sizeof text);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_STORED, job_with(stored).format);
+    const char *format = strstr(text, "\"format\"");
+    TEST_ASSERT_NOT_NULL(format);
+    TEST_ASSERT_NULL_MESSAGE(strstr(format + 1, "\"format\""), "only the converted job has one");
+}
+
+static void test_queue_files_and_requests_with_formats(void) {
+    skiff_jobs_destroy(jobs);
+    write_text(queue_path,
+               "{\"version\":1,\"next_id\":3,\"jobs\":["
+               "{\"id\":1,\"rom_id\":7,\"title\":\"A\",\"file_name\":\"a.iso\",\"target\":"
+               "\"ms0:/ISO/a.iso\",\"size\":10,\"state\":\"queued\",\"error\":0,\"attempts\":0},"
+               "{\"id\":2,\"rom_id\":8,\"title\":\"B\",\"file_name\":\"b.chd\",\"format\":\"cso\","
+               "\"target\":\"ms0:/ISO/b.cso\",\"size\":10,\"state\":\"queued\",\"error\":0,"
+               "\"attempts\":0}]}");
+    create_jobs();
+    skiff_job list[SKIFF_JOBS_MAX];
+    TEST_PRINTF("a version 1 file holds only stored downloads: a format there is not one of its");
+    TEST_ASSERT_EQUAL_size_t(1, skiff_jobs_list(jobs, list, SKIFF_JOBS_MAX));
+    TEST_ASSERT_EQUAL_UINT32(1, list[0].id);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_STORED, list[0].format);
+    skiff_jobs_destroy(jobs);
+    write_text(queue_path,
+               "{\"version\":2,\"next_id\":3,\"jobs\":["
+               "{\"id\":1,\"rom_id\":7,\"title\":\"A\",\"file_name\":\"a.chd\",\"format\":\"zso\","
+               "\"target\":\"ms0:/ISO/a.zso\",\"size\":10,\"state\":\"queued\",\"error\":0,"
+               "\"attempts\":0},"
+               "{\"id\":2,\"rom_id\":8,\"title\":\"B\",\"file_name\":\"b.chd\",\"format\":\"rvz\","
+               "\"target\":\"ms0:/ISO/b.rvz\",\"size\":10,\"state\":\"queued\",\"error\":0,"
+               "\"attempts\":0}]}");
+    create_jobs();
+    TEST_PRINTF("a format Skiff does not ask for drops its job");
+    TEST_ASSERT_EQUAL_size_t(1, skiff_jobs_list(jobs, list, SKIFF_JOBS_MAX));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ROMM_FORMAT_ZSO, list[0].format);
+    TEST_PRINTF("and a request for one is refused");
+    skiff_job_request request = request_for(FILE_NAME, target);
+    request.format = SKIFF_ROMM_FORMAT_COUNT;
+    uint32_t id = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, skiff_jobs_add(jobs, &request, &id));
+}
+
 static void test_an_active_cancel_whose_files_stay_fails_the_job(void) {
     const uint32_t id = add_job();
     env_state.cancel_at = 900;
@@ -1255,6 +1532,9 @@ static void test_a_finished_download_is_handed_over_before_it_shows_as_done(void
     TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, handed_over.job.size);
     TEST_ASSERT_TRUE(handed_over.job.has_crc32);
     TEST_ASSERT_EQUAL_HEX32(body_crc, handed_over.job.crc32);
+    TEST_PRINTF("the file in place is RomM's: the same size and CRC-32");
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, handed_over.file.size);
+    TEST_ASSERT_EQUAL_HEX32(body_crc, handed_over.file.crc32);
     TEST_PRINTF("the UI still saw it active: done comes only once the installer had its turn");
     TEST_ASSERT_EQUAL_INT(SKIFF_JOB_ACTIVE, handed_over.listed_state);
     TEST_ASSERT_EQUAL_INT(0, handed_over.state_held);
@@ -1822,6 +2102,15 @@ int main(void) {
     RUN_TEST(test_a_network_that_never_comes_back_fails_the_job);
     RUN_TEST(test_a_cancel_mid_transfer_stops_and_deletes_the_progress);
     RUN_TEST(test_a_cancel_during_a_wait_ends_the_wait);
+    RUN_TEST(test_a_converted_job_waits_for_romm_then_downloads);
+    RUN_TEST(test_retry_after_is_kept_within_bounds);
+    RUN_TEST(test_a_cancel_while_romm_converts_ends_the_wait);
+    RUN_TEST(test_a_suspend_while_romm_converts_rejoins_before_asking_again);
+    RUN_TEST(test_romm_converting_too_long_fails_the_job);
+    RUN_TEST(test_romm_unable_to_convert_fails_at_once);
+    RUN_TEST(test_a_damaged_conversion_fails_and_leaves_nothing);
+    RUN_TEST(test_a_converted_job_survives_a_restart);
+    RUN_TEST(test_queue_files_and_requests_with_formats);
     RUN_TEST(test_an_active_cancel_whose_files_stay_fails_the_job);
     RUN_TEST(test_an_active_cancel_the_file_refuses_keeps_the_progress);
     RUN_TEST(test_a_retry_cannot_take_another_jobs_target);

@@ -203,7 +203,11 @@ often the same server is checked.
 The second runs resumable downloads (`include/skiff/download.h`) into a temporary directory: a
 download stopped at 40% by its stop hook continues on a new connection with 206 from the saved
 offset, a `.resume` file with an ETag the server no longer has restarts with 200, and both match
-the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind.
+the seeded CRC-32; a wrong expected CRC-32 gives 206 and leaves no file behind. Then downloads RomM
+converts: the fast CHD asked for as `cso`, `zso` and `iso` takes its size from the response and
+passes the disc image check in each format (the ISO is the seeded disc's size), and the slow CHD
+asked for as `zso` is answered 202 with `Retry-After: 30` and arrives when asked again (with the
+app's 30 s stall timeout, since RomM holds the first request 15 s).
 
 The third drives the RomM client (`include/skiff/romm.h`): the version check passes, the `psp`
 platform holds the five seeded ROMs, pages of one ROM return each once and then an empty page, a

@@ -701,6 +701,15 @@ network is back.
   on a PSP-1000), continued from the saved value on resume, so resuming never re-reads the `.part`
   file. A finished file that does not match is deleted with its progress (206): the usual cause is a
   file replaced on the server without a rescan, so RomM's checksum is stale.
+- **Files RomM converts** (`?format=`, RomM 5.4): RomM records neither size nor CRC-32 for the
+  converted file, so the spec gives none (`expected_size` 0). The size comes from the 200's
+  `Content-Length` (refused without one), the free space is checked again once it is known, and
+  the `.resume` file keeps it for a resume, whose 206 must give the same total. Instead of a
+  CRC-32 the finished file's structure is checked before the rename (`skiff_download_spec.check`,
+  `include/skiff/disc_image.h`): an ISO's primary volume descriptor at sector 16, a CSO's or
+  ZSO's header and index within the file. A file that fails is deleted with its progress (223).
+  RomM refreshes a converted copy's modification time on every request, and nginx builds its ETag
+  from it, so a resume a second later gets the whole file again (200): safe, only slow.
 - **The log rides on the writes**: the engine calls `after_write` right after each block reaches
   the Memory Stick, and the runner flushes the log then, while Wi-Fi reception is paused anyway.
 - **Throughput**: writes go to the Memory Stick in 1 MiB blocks
@@ -737,17 +746,25 @@ network is back.
   (`CON`, `NUL`, `COM1`…) gets a leading `_`; a name over 127 bytes is shortened between characters,
   keeping its extension. A name that cleans to nothing (`..`) is refused.
 - **The download queue** (`PSP/GAME/Skiff/queue.json`, `include/skiff/jobs.h`): each job is a
-  ROM id, its file's name in RomM, the target path the installer chose, the size and CRC-32, a
-  state (queued, active, done, failed, cancelled), the last error and the attempt count. It is
+  ROM id, its file's name in RomM, the format to ask RomM for (none for the stored file), the
+  target path the installer chose, the size and CRC-32 of RomM's file, a state (queued, active,
+  done, failed, cancelled), the last error and the attempt count. Version 2 of the file added the
+  format: an older Skiff refuses the file rather than download a stored CHD under a `.cso` name;
+  version 1 files load as stored downloads. It is
   saved on every state change, replaced whole (below). The URL is built when the job runs, so a new
   server address or token applies to jobs already queued. A job left active by a quit or a crash
   is queued again on the next launch and resumes from its `.part` file; a damaged queue file is not
   used (the queue starts empty, and the log says so), and an unusable job in it is dropped alone.
   The same file of the same ROM is never queued twice. At most 64 jobs: finished ones make room.
+  While RomM converts a job's file it answers 202: the runner shows "RomM is converting it" and
+  asks again after `Retry-After` (kept within 5–60 s, 30 s without one), keeping the PSP awake;
+  these answers are not failed attempts. After 30 minutes of converting the job fails (222); a
+  406 fails it at once (221).
   Many downloads are queued with one save (`skiff_jobs_add_many()`): every request is checked
   before any is queued, and a batch that would pass 64 unfinished jobs queues only those that fit.
   When a download finishes, the runner hands the job to the app (`skiff_jobs_config.downloaded`,
-  on the worker thread, with neither queue lock held) before it saves the job as done, so the
+  on the worker thread, with neither queue lock held), with the size and CRC-32 of the file now at
+  the target (a converted file's, not RomM's), before it saves the job as done, so the
   installer records the file in `installed.json` before the UI can show the job finished; the
   record takes the logical path (`games:/Game.iso`) back from the job's real one
   (`skiff_storage_logical_path()`). A record that cannot be saved leaves the file counted as copied
@@ -761,7 +778,9 @@ network is back.
   file without the file is put in place, and one beside the file is dropped.
 - **Installed state**: `app:/installed.json` (`include/skiff/install.h`) records every file Skiff
   installed: RomM id, RomM file name, logical path (`games:/Game.iso`, so it follows the device),
-  size, CRC-32 and when, replaced whole like `config.ini`. At most 512 records and 640 KB (512
+  size, CRC-32 and when, replaced whole like `config.ini`. A file RomM converted also records the
+  size and CRC-32 of RomM's file it came from (`"source"`): the library compares those with what
+  RomM lists, while Skiff's checks of its own copy use the file's. At most 512 records and 640 KB (512
   records with the longest names fit, so whatever is recorded can be saved); a file
   Skiff cannot read (cut, edited by hand, written by a newer Skiff) loads as empty, with a warning,
   and the next save first moves it to `installed.json.damaged`, so its records are never destroyed.

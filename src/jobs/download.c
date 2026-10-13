@@ -22,6 +22,9 @@ typedef struct download {
     char state_path[SKIFF_DOWNLOAD_PATH_MAX];
     /* What is durable: state.offset bytes of the .part file and their CRC-32. */
     skiff_download_state state;
+    /* The file's size: the expected one, or the one a response gave (saved in state.size); 0 while
+     * unknown. */
+    uint64_t size;
     /* What has been accepted, in the file or still in the buffer. */
     uint64_t received;
     uint32_t crc32;
@@ -65,17 +68,19 @@ static int folder_of(const char *target, char *out) {
 }
 
 /*
- * Whether what is still to come fits, with the storage layer's margin, before any request: a
- * missing folder or Memory Stick fails here too. Only a device that cannot report its free space
- * is let through, to the writes, which fail with SKIFF_ERR_STORAGE_NO_SPACE when it fills up.
+ * Whether the rest of the file, beyond the on_device bytes it already takes, fits with the storage
+ * layer's margin: before any request (for a size still unknown, the margin alone), and again once a
+ * response gives the size. A missing folder or Memory Stick fails here too. Only a device that
+ * cannot report its free space is let through, to the writes, which fail with
+ * SKIFF_ERR_STORAGE_NO_SPACE when it fills up.
  */
-static skiff_err check_room(download *d) {
+static skiff_err check_room(download *d, uint64_t on_device) {
     char folder[SKIFF_DOWNLOAD_PATH_MAX];
     if (!folder_of(d->spec->target_path, folder)) {
         return SKIFF_ERR_INVALID_ARG;
     }
-    const skiff_err err =
-        skiff_storage_check_room(d->storage, folder, d->spec->expected_size - d->state.offset);
+    const uint64_t to_come = d->size > on_device ? d->size - on_device : 0;
+    const skiff_err err = skiff_storage_check_room(d->storage, folder, to_come);
     return err == SKIFF_ERR_NOT_IMPLEMENTED ? SKIFF_OK : err;
 }
 
@@ -134,11 +139,14 @@ static skiff_err checkpoint(download *d) {
 }
 
 /* A durable state for the same file, whose .part file holds at least its offset and no more than
- * the whole file (bytes past the offset are rewritten; bytes past the end would survive). */
+ * the whole file (bytes past the offset are rewritten; bytes past the end would survive). A file
+ * whose size comes from the response keeps the size an earlier response gave. */
 static int state_usable(const download *d, const skiff_download_state *state) {
     uint64_t part_size = 0;
-    return state->size == d->spec->expected_size &&
-           state->has_expected_crc32 == d->spec->has_expected_crc32 &&
+    const int same_size = d->spec->expected_size > 0
+                              ? state->size == d->spec->expected_size
+                              : state->size > 0 && state->size <= SKIFF_DOWNLOAD_MAX_BYTES;
+    return same_size && state->has_expected_crc32 == d->spec->has_expected_crc32 &&
            (!state->has_expected_crc32 || state->expected_crc32 == d->spec->expected_crc32) &&
            /* Resuming needs a strong ETag for If-Range; a complete .part file is only renamed. */
            (is_strong_etag(state->etag) || state->offset == state->size) &&
@@ -192,28 +200,53 @@ static skiff_err refuse(download *d, skiff_err err) {
     return err;
 }
 
+/* A 200 for a file whose size comes from the response: its Content-Length, which must fit the
+ * Memory Stick before anything is written. The whole file replaces any .part file, so the space
+ * that one takes counts as free (RomM answers a resumed converted download with the whole file). */
+static skiff_err take_size(download *d, const skiff_http_response *response) {
+    if (!response->has_content_length || response->content_length == 0) {
+        return SKIFF_ERR_ROMM_BAD_RESPONSE;
+    }
+    if (response->content_length > SKIFF_DOWNLOAD_MAX_BYTES) {
+        return SKIFF_ERR_STORAGE_FILE_TOO_LARGE;
+    }
+    d->size = response->content_length;
+    d->result->size = d->size;
+    uint64_t replaced = 0;
+    const skiff_err err = skiff_storage_size(d->storage, d->part_path, &replaced);
+    if (err != SKIFF_OK && err != SKIFF_ERR_STORAGE_NOT_FOUND) {
+        return err;
+    }
+    return check_room(d, err == SKIFF_OK ? replaced : 0);
+}
+
 /* Called with the first body bytes: the status and headers decide where they go, before anything
  * touches the Memory Stick. */
 static skiff_err accept_response(download *d) {
     const skiff_http_response *response = &d->result->response;
-    const uint64_t size = d->spec->expected_size;
     if (response->status == HTTP_STATUS_PARTIAL) {
         if (!d->range_requested || !response->has_content_range ||
-            response->range_start != d->state.offset || response->range_total != size) {
+            response->range_start != d->state.offset || response->range_total != d->size) {
             return refuse(d, SKIFF_ERR_ROMM_BAD_RESPONSE);
         }
         return open_part(d, SKIFF_FILE_WRITE_AT, d->state.offset, d->state.crc32);
     }
     if (response->status != HTTP_STATUS_OK) {
-        const skiff_err err = skiff_http_status_error(response->status);
+        const skiff_err err = skiff_http_download_status_error(response->status);
         return refuse(d, err != SKIFF_OK ? err : SKIFF_ERR_ROMM_BAD_RESPONSE);
     }
-    if (response->has_content_length && response->content_length != size) {
+    if (d->spec->expected_size == 0) {
+        const skiff_err err = take_size(d, response);
+        if (err != SKIFF_OK) {
+            return refuse(d, err);
+        }
+    } else if (response->has_content_length && response->content_length != d->size) {
         return refuse(d, SKIFF_ERR_ROMM_BAD_RESPONSE);
     }
     /* The whole file: whatever was saved belongs to another version, or the server ignores ranges.
      * The .resume file is rewritten first, so it never vouches for bytes from the old version. */
     d->result->restarted = d->range_requested;
+    d->state.size = d->size;
     d->state.offset = 0;
     d->state.crc32 = 0;
     snprintf(d->state.etag, sizeof d->state.etag, "%s",
@@ -230,7 +263,7 @@ static skiff_err on_body(void *ctx, const unsigned char *data, size_t size) {
             return err;
         }
     }
-    if (size > d->spec->expected_size - d->received) {
+    if (size > d->size - d->received) {
         return refuse(d, SKIFF_ERR_ROMM_BAD_RESPONSE);
     }
     d->crc32 = (uint32_t)crc32(d->crc32, data, (uInt)size);
@@ -257,7 +290,7 @@ static skiff_err on_body(void *ctx, const unsigned char *data, size_t size) {
         }
     }
     if (d->spec->on_progress != NULL) {
-        d->spec->on_progress(d->spec->progress_ctx, d->received, d->spec->expected_size);
+        d->spec->on_progress(d->spec->progress_ctx, d->received, d->size);
     }
     return SKIFF_OK;
 }
@@ -286,11 +319,17 @@ static skiff_err finish(download *d) {
     if (err != SKIFF_OK) {
         return err;
     }
-    if (part_size != d->spec->expected_size) {
+    if (part_size != d->size) {
         return discard_with(d, SKIFF_ERR_STORAGE_IO);
     }
     if (d->spec->has_expected_crc32 && d->state.crc32 != d->spec->expected_crc32) {
         return discard_with(d, SKIFF_ERR_ROMM_CHECKSUM);
+    }
+    if (d->spec->check != NULL) {
+        err = d->spec->check(d->spec->check_ctx, d->storage, d->part_path, d->size);
+        if (err != SKIFF_OK) {
+            return discard_with(d, err);
+        }
     }
     /* Checked now, not when the download was planned: a file copied there meanwhile (over USB,
      * between two launches) is never Skiff's to remove, and Skiff's own copy only while it is still
@@ -313,6 +352,7 @@ static skiff_err finish(download *d) {
     /* Best effort: a .resume file left behind has no .part file, so it is never trusted again. */
     remove_if_present(d->storage, d->state_path);
     d->result->complete = 1;
+    d->result->crc32 = d->state.crc32;
     return SKIFF_OK;
 }
 
@@ -324,7 +364,7 @@ static skiff_err conclude(download *d, skiff_err err) {
         return discard_with(d, SKIFF_ERR_ROMM_BAD_RESPONSE);
     }
     if (d->part != NULL) {
-        const int whole = err == SKIFF_OK && d->received == d->spec->expected_size;
+        const int whole = err == SKIFF_OK && d->received == d->size;
         const skiff_err closed = close_part(d, 1);
         if (err != SKIFF_OK || closed != SKIFF_OK) {
             return err != SKIFF_OK ? err : closed;
@@ -334,14 +374,14 @@ static skiff_err conclude(download *d, skiff_err err) {
     if (err != SKIFF_OK || d->refused) {
         return err;
     }
-    /* No body at all: an empty error page. */
-    const skiff_err status_err = skiff_http_status_error(response->status);
+    /* No body at all: an empty error page, or RomM still converting the file. */
+    const skiff_err status_err = skiff_http_download_status_error(response->status);
     return status_err != SKIFF_OK ? status_err : SKIFF_ERR_ROMM_BAD_RESPONSE;
 }
 
 static int spec_valid(const skiff_download_spec *spec) {
     return spec->url != NULL && spec->url[0] != '\0' && spec->target_path != NULL &&
-           spec->target_path[0] != '\0' && spec->expected_size > 0;
+           spec->target_path[0] != '\0' && (spec->expected_size > 0 || !spec->has_expected_crc32);
 }
 
 skiff_err skiff_download_attempt(skiff_transport *transport, skiff_storage *storage,
@@ -369,12 +409,14 @@ skiff_err skiff_download_attempt(skiff_transport *transport, skiff_storage *stor
     if (err != SKIFF_OK) {
         return err;
     }
+    d.size = d.state.size;
+    result->size = d.size;
     result->resumed_from = d.state.offset;
-    if (d.state.offset == spec->expected_size) {
+    if (d.size > 0 && d.state.offset == d.size) {
         /* Everything arrived before, but the attempt ended before the rename. */
         return finish(&d);
     }
-    err = check_room(&d);
+    err = check_room(&d, d.state.offset);
     if (err != SKIFF_OK) {
         return err;
     }

@@ -371,7 +371,79 @@ static void test_the_library_shows_installed_and_changed_games(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_NOT_INSTALLED, skiff_install_state_of(manifest, NULL));
 }
 
+/* A CSO RomM converted from this ROM's CHD: the CSO's size and CRC-32, and RomM's file's. */
+static skiff_install_record converted_record(void) {
+    skiff_install_record record = record_of(ROM_ID, "Game.chd", "games:/Game.cso");
+    record.size = GAME_SIZE / 2;
+    record.crc32 = GAME_CRC32 ^ 0xFFU;
+    record.has_source = 1;
+    record.source_size = GAME_SIZE;
+    record.has_source_crc32 = 1;
+    record.source_crc32 = GAME_CRC32;
+    return record;
+}
+
+static void test_a_converted_game_is_compared_by_the_file_romm_converted(void) {
+    const skiff_install_record record = converted_record();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    TEST_PRINTF("RomM lists its CHD as it was: installed, though the CSO differs in size and CRC");
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_INSTALLED, skiff_install_state_of(manifest, &rom));
+    rom.crc32 = GAME_CRC32 + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_CHANGED, skiff_install_state_of(manifest, &rom));
+    rom.crc32 = GAME_CRC32;
+    rom.size = GAME_SIZE + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_CHANGED, skiff_install_state_of(manifest, &rom));
+    TEST_PRINTF("a source without a CRC-32: the size decides");
+    skiff_install_record no_crc = converted_record();
+    no_crc.has_source_crc32 = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &no_crc));
+    rom.size = GAME_SIZE;
+    rom.crc32 = GAME_CRC32 + 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_INSTALLED, skiff_install_state_of(manifest, &rom));
+    TEST_PRINTF("and Skiff's own copy is the CSO: kept at startup while it is the CSO's size");
+    put_file_of("games:/Game.cso", record.size);
+    size_t forgotten = 0;
+    TEST_ASSERT_EQUAL_INT(
+        SKIFF_OK, skiff_install_manifest_reconcile(manifest, &storage.base, &roots, &forgotten));
+    TEST_ASSERT_EQUAL_size_t(0, forgotten);
+}
+
 /* ---- The manifest ---- */
+
+static void test_a_converted_record_round_trips_with_its_source(void) {
+    const skiff_install_record record = converted_record();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
+    skiff_install_record no_crc = record_of(OTHER_ROM_ID, "Other.chd", "games:/Other.zso");
+    no_crc.has_source = 1;
+    no_crc.source_size = 9;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &no_crc));
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK,
+                          skiff_install_manifest_save(manifest, &storage.base, manifest_path));
+    char text[TEXT_MAX];
+    read_manifest(text, sizeof text);
+    TEST_PRINTF("installed.json: %s", text);
+    TEST_ASSERT_NOT_NULL(strstr(text, "\"source\":{\"size\":"));
+    TEST_ASSERT_NOT_NULL(strstr(text, "\"source\":{\"size\":9}"));
+    TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_LOADED, load());
+    const skiff_install_record *first = skiff_install_manifest_find_rom(manifest, ROM_ID);
+    TEST_ASSERT_NOT_NULL(first);
+    TEST_ASSERT_EQUAL_UINT64(GAME_SIZE / 2, first->size);
+    TEST_ASSERT_EQUAL_HEX32(GAME_CRC32 ^ 0xFFU, first->crc32);
+    TEST_ASSERT_TRUE(first->has_source);
+    TEST_ASSERT_EQUAL_UINT64(GAME_SIZE, first->source_size);
+    TEST_ASSERT_TRUE(first->has_source_crc32);
+    TEST_ASSERT_EQUAL_HEX32(GAME_CRC32, first->source_crc32);
+    const skiff_install_record *second = skiff_install_manifest_find_rom(manifest, OTHER_ROM_ID);
+    TEST_ASSERT_NOT_NULL(second);
+    TEST_ASSERT_TRUE(second->has_source);
+    TEST_ASSERT_FALSE(second->has_source_crc32);
+    TEST_PRINTF("a file downloaded as stored has no source");
+    add_record(OTHER_ROM_ID, "Other.iso", "games:/Other.iso");
+    const skiff_install_record *stored =
+        skiff_install_manifest_find(manifest, OTHER_ROM_ID, "Other.iso");
+    TEST_ASSERT_NOT_NULL(stored);
+    TEST_ASSERT_FALSE(stored->has_source);
+}
 
 static void test_the_manifest_round_trips_through_the_memory_stick(void) {
     TEST_ASSERT_EQUAL_INT(SKIFF_INSTALL_NO_MANIFEST, load());
@@ -436,6 +508,12 @@ static void test_a_damaged_manifest_loads_empty_and_is_replaced_on_save(void) {
         "\"games:/a.iso\",\"size\":4294967296}]}",
         "{\"version\":1,\"installed\":[{\"rom_id\":1,\"file_name\":\"a.iso\",\"path\":"
         "\"games:/a.iso\",\"size\":1,\"crc32\":\"xyz\"}]}",
+        "{\"version\":1,\"installed\":[{\"rom_id\":1,\"file_name\":\"a.chd\",\"path\":"
+        "\"games:/a.cso\",\"size\":1,\"source\":5}]}",
+        "{\"version\":1,\"installed\":[{\"rom_id\":1,\"file_name\":\"a.chd\",\"path\":"
+        "\"games:/a.cso\",\"size\":1,\"source\":{\"crc32\":\"0a1b2c3d\"}}]}",
+        "{\"version\":1,\"installed\":[{\"rom_id\":1,\"file_name\":\"a.chd\",\"path\":"
+        "\"games:/a.cso\",\"size\":1,\"source\":{\"size\":2,\"crc32\":\"xyz\"}}]}",
         "{\"version\":1,\"installed\":[{\"rom_id\":1,\"file_name\":\"a\\u0000b.iso\",\"path\":"
         "\"games:/a.iso\",\"size\":1}]}",
         "{\"version\":1,\"installed\":[{\"rom_id\":1,\"path\":\"games:/a.iso\",\"size\":1}]}",
@@ -581,6 +659,10 @@ static void test_a_full_manifest_of_the_longest_names_still_saves(void) {
         record.size = SKIFF_STORAGE_MAX_FILE_BYTES;
         record.has_crc32 = 1;
         record.installed_ms = INSTALLED_MS;
+        /* Converted, from a source as large as a JSON integer stays exact. */
+        record.has_source = 1;
+        record.source_size = (uint64_t)1 << 52;
+        record.has_source_crc32 = 1;
         TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_install_manifest_record(manifest, &record));
     }
     TEST_ASSERT_EQUAL_INT(SKIFF_OK,
@@ -752,6 +834,8 @@ int main(void) {
     RUN_TEST(test_planning_refuses_null_arguments);
     RUN_TEST(test_the_library_shows_installed_and_changed_games);
     RUN_TEST(test_the_manifest_round_trips_through_the_memory_stick);
+    RUN_TEST(test_a_converted_record_round_trips_with_its_source);
+    RUN_TEST(test_a_converted_game_is_compared_by_the_file_romm_converted);
     RUN_TEST(test_a_name_with_a_literal_backslash_u0000_round_trips);
     RUN_TEST(test_unknown_fields_are_ignored);
     RUN_TEST(test_a_damaged_manifest_loads_empty_and_is_replaced_on_save);

@@ -45,6 +45,11 @@ SKIFF_IT_CONVERT_SAVE_TARGET="$(jq -er .convert.fast.save_target "$SEED")"
 SKIFF_IT_CONVERT_SLOW_SAVE_TARGET="$(jq -er .convert.slow.save_target "$SEED")"
 export SKIFF_IT_CONVERT_ROM_ID SKIFF_IT_CONVERT_SLOW_ROM_ID SKIFF_IT_CONVERT_SAVE_TARGET
 export SKIFF_IT_CONVERT_SLOW_SAVE_TARGET
+# Their names URL-encoded, and the disc inside them, for the converted downloads.
+SKIFF_IT_CONVERT_FILE_NAME="$(jq -rn --arg n "$(jq -er .convert.fast.file_name "$SEED")" '$n | @uri')"
+SKIFF_IT_CONVERT_SLOW_FILE_NAME="$(jq -rn --arg n "$(jq -er .convert.slow.file_name "$SEED")" '$n | @uri')"
+SKIFF_IT_CONVERT_ISO_SIZE="$(jq -er .convert.fast.iso.size "$SEED")"
+export SKIFF_IT_CONVERT_FILE_NAME SKIFF_IT_CONVERT_SLOW_FILE_NAME SKIFF_IT_CONVERT_ISO_SIZE
 # The collections: a token that may list them, and the seeded ones' ids and the shelf's size.
 SKIFF_IT_COLLECTIONS_TOKEN="$(jq -r .collections_token "$SEED")"
 SKIFF_IT_SHELF_ID="$(jq -r .collections.shelf "$SEED")"

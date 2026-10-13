@@ -3,7 +3,9 @@
  * transport and the TLS stack the PSP links, into a temporary directory: a download stopped part
  * way continues on a new connection with 206 from the saved offset, a .resume file whose ETag the
  * server no longer has starts over with 200, and either way the file matches the CRC-32 RomM
- * recorded for it.
+ * recorded for it. Downloads RomM converts (?format=) take their size from the response and pass
+ * the disc image check in every format, and one RomM is still converting is answered 202 with
+ * Retry-After, then arrives.
  *
  * Run by `scripts/dev.sh romm-test` (tests/integration/transport-test.sh), with the server's
  * details in SKIFF_IT_* environment variables. Not a ctest test: it needs the server.
@@ -11,8 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "skiff/curl_transport.h"
+#include "skiff/disc_image.h"
 #include "skiff/download.h"
 
 #include "storage_posix.h"
@@ -29,6 +33,10 @@ enum { URL_MAX = 512, PATH_MAX_LENGTH = 256, HEX_BASE = 16, DECIMAL_BASE = 10 };
 /* The stop hook ends the first attempt once this share of the file has arrived. */
 #define STOP_NUMERATOR 2
 #define STOP_DENOMINATOR 5
+/* Asking again for a file RomM is converting: every this many seconds, at most this many times.
+ * The slow disc's conversion takes 20 s (tests/integration/rom-converto-delay.sh). */
+#define CONVERT_POLL_S 2U
+#define CONVERT_POLLS_MAX 30
 
 typedef struct server_details {
     const char *certs;
@@ -46,7 +54,18 @@ typedef struct stop_point {
     int polls;
 } stop_point;
 
+/* The synthetic CHDs RomM converts (tests/integration/seed.py), names URL-encoded. */
+typedef struct convert_details {
+    const char *rom_id;
+    const char *file_name;
+    const char *slow_rom_id;
+    const char *slow_file_name;
+    /* The disc inside them: what a conversion to ISO gives back. */
+    uint64_t iso_size;
+} convert_details;
+
 static server_details server;
+static convert_details convert;
 static char ca_file[PATH_MAX_LENGTH];
 static char authorization[PATH_MAX_LENGTH];
 static char url[URL_MAX];
@@ -203,6 +222,73 @@ static void test_a_wrong_checksum_leaves_nothing_behind(void) {
                           skiff_storage_size(storage, state_path, &size));
 }
 
+/* ---- Downloads RomM converts ---- */
+
+static skiff_err check_as(void *ctx, skiff_storage *checked, const char *part_path, uint64_t size) {
+    const skiff_romm_format *format = ctx;
+    return skiff_disc_image_check(checked, part_path, size, *format);
+}
+
+/* A download of the CHD rom_id/file_name converted into format, with the app's stall timeout: RomM
+ * holds a request up to 15 s while it converts. */
+static void expect_converted(const char *rom_id, const char *file_name, skiff_romm_format *format) {
+    snprintf(url, sizeof url, TLS_SITE "/api/roms/%s/content/%s?format=%s", rom_id, file_name,
+             skiff_romm_format_name(*format));
+    spec.expected_size = 0;
+    spec.has_expected_crc32 = 0;
+    spec.expected_crc32 = 0;
+    spec.check = check_as;
+    spec.check_ctx = format;
+    skiff_transport_destroy(transport);
+    transport = NULL;
+    const skiff_curl_config config = {.ca_file = ca_file,
+                                      .connect_timeout_s = TEST_CONNECT_TIMEOUT_S};
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_curl_transport_create(&config, &transport));
+}
+
+static void test_romm_converts_a_chd_into_every_format_skiff_asks_for(void) {
+    static skiff_romm_format formats[] = {SKIFF_ROMM_FORMAT_CSO, SKIFF_ROMM_FORMAT_ZSO,
+                                          SKIFF_ROMM_FORMAT_ISO};
+    for (size_t i = 0; i < sizeof formats / sizeof formats[0]; i++) {
+        expect_converted(convert.rom_id, convert.file_name, &formats[i]);
+        TEST_PRINTF("%s", url);
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+        TEST_PRINTF("%s: %llu bytes, checked", skiff_romm_format_name(formats[i]),
+                    (unsigned long long)result.size);
+        TEST_ASSERT_TRUE(result.complete);
+        uint64_t size = 0;
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_size(storage, target, &size));
+        TEST_ASSERT_EQUAL_UINT64(result.size, size);
+        if (formats[i] == SKIFF_ROMM_FORMAT_ISO) {
+            TEST_ASSERT_EQUAL_UINT64(convert.iso_size, size);
+        }
+        TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_remove(storage, target));
+    }
+}
+
+static void test_a_download_waits_out_romm_converting(void) {
+    static skiff_romm_format format = SKIFF_ROMM_FORMAT_ZSO;
+    expect_converted(convert.slow_rom_id, convert.slow_file_name, &format);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERTING, attempt());
+    TEST_ASSERT_TRUE(result.response.has_retry_after);
+    TEST_ASSERT_EQUAL_UINT32(30, result.response.retry_after_s);
+    uint64_t size = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NOT_FOUND,
+                          skiff_storage_size(storage, state_path, &size));
+    skiff_err err = SKIFF_ERR_ROMM_CONVERTING;
+    int polls = 0;
+    while (err == SKIFF_ERR_ROMM_CONVERTING && polls < CONVERT_POLLS_MAX) {
+        sleep(CONVERT_POLL_S);
+        polls++;
+        err = attempt();
+    }
+    TEST_PRINTF("the ZSO came after %d more request(s)", polls);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, err);
+    TEST_ASSERT_TRUE(result.complete);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_storage_size(storage, target, &size));
+    TEST_ASSERT_EQUAL_UINT64(result.size, size);
+}
+
 int main(void) {
     server.certs = required_env("SKIFF_IT_CERTS");
     server.token = required_env("SKIFF_IT_TOKEN");
@@ -213,6 +299,11 @@ int main(void) {
     snprintf(ca_file, sizeof ca_file, "%s/ca.crt", server.certs);
     snprintf(authorization, sizeof authorization, "Bearer %s", server.token);
     snprintf(url, sizeof url, TLS_SITE "/api/roms/%s/content/%s", server.rom_id, server.file_name);
+    convert.rom_id = required_env("SKIFF_IT_CONVERT_ROM_ID");
+    convert.file_name = required_env("SKIFF_IT_CONVERT_FILE_NAME");
+    convert.slow_rom_id = required_env("SKIFF_IT_CONVERT_SLOW_ROM_ID");
+    convert.slow_file_name = required_env("SKIFF_IT_CONVERT_SLOW_FILE_NAME");
+    convert.iso_size = strtoull(required_env("SKIFF_IT_CONVERT_ISO_SIZE"), NULL, DECIMAL_BASE);
     if (skiff_net_global_init() != SKIFF_OK) {
         printf("setup failed: TLS could not be seeded\n");
         return EXIT_FAILURE;
@@ -222,6 +313,8 @@ int main(void) {
     RUN_TEST(test_stopped_download_resumes_on_a_new_connection);
     RUN_TEST(test_progress_for_another_version_of_the_file_starts_over);
     RUN_TEST(test_a_wrong_checksum_leaves_nothing_behind);
+    RUN_TEST(test_romm_converts_a_chd_into_every_format_skiff_asks_for);
+    RUN_TEST(test_a_download_waits_out_romm_converting);
     const int failures = UNITY_END();
 
     skiff_net_global_cleanup();

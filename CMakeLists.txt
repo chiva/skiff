@@ -84,6 +84,7 @@ add_library(
   src/i18n/i18n.c
   src/install/install.c
   src/install/manifest.c
+  src/jobs/disc_image.c
   src/jobs/download.c
   src/jobs/download_state.c
   src/jobs/queue.c

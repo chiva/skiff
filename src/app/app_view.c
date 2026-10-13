@@ -1085,14 +1085,18 @@ static void recovery_line(skiff_app *app) {
     case SKIFF_JOBS_RELOADING:
         add_text(app, SKIFF_TEXT_QUEUE_REJOINING);
         break;
-    case SKIFF_JOBS_RETRYING: {
+    case SKIFF_JOBS_RETRYING:
+    case SKIFF_JOBS_CONVERTING: {
         char in[SKIFF_APP_DETAIL_MAX];
         if (skiff_ui_format_duration((recovery->retry_in_ms + APP_MS_PER_S - 1) / APP_MS_PER_S, in,
                                      sizeof in) != SKIFF_OK) {
             in[0] = '\0';
         }
         const char *args[] = {in};
-        add_formatted(app, SKIFF_TEXT_QUEUE_RETRYING, args, 1);
+        add_formatted(app,
+                      recovery->step == SKIFF_JOBS_CONVERTING ? SKIFF_TEXT_QUEUE_CONVERTING
+                                                              : SKIFF_TEXT_QUEUE_RETRYING,
+                      args, 1);
         break;
     }
     }

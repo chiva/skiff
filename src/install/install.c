@@ -90,9 +90,12 @@ skiff_install_state skiff_install_state_of(const skiff_install_manifest *manifes
     if (record == NULL) {
         return SKIFF_INSTALL_NOT_INSTALLED;
     }
-    const int crc_differs = record->has_crc32 && rom->has_crc32 && record->crc32 != rom->crc32;
-    return record->size != rom->size || crc_differs ? SKIFF_INSTALL_CHANGED
-                                                    : SKIFF_INSTALL_INSTALLED;
+    /* A converted file's record keeps RomM's file apart from the file on the Memory Stick. */
+    const uint64_t size = record->has_source ? record->source_size : record->size;
+    const int has_crc32 = record->has_source ? record->has_source_crc32 : record->has_crc32;
+    const uint32_t crc32 = record->has_source ? record->source_crc32 : record->crc32;
+    const int crc_differs = has_crc32 && rom->has_crc32 && crc32 != rom->crc32;
+    return size != rom->size || crc_differs ? SKIFF_INSTALL_CHANGED : SKIFF_INSTALL_INSTALLED;
 }
 
 /* ---- Planning a download ---- */

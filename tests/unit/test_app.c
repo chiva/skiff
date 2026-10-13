@@ -2206,6 +2206,15 @@ static void test_the_downloads_screen_follows_the_worker(void) {
     app_queue_event(app, &event);
     frame(0);
     TEST_ASSERT_TRUE(shows("Trying again in 4 s"));
+    event.step = SKIFF_JOBS_CONVERTING;
+    event.retry_in_ms = 30000;
+    app_queue_event(app, &event);
+    frame(0);
+    TEST_ASSERT_TRUE(shows("RomM is converting it; asking again in 30 s"));
+    event.step = SKIFF_JOBS_RETRYING;
+    event.retry_in_ms = 4000;
+    app_queue_event(app, &event);
+    frame(0);
     TEST_PRINTF("progress, speed and recovery: %zu lines under the list (room for %d)",
                 view()->line_count, APP_QUEUE_DETAIL_LINES);
     TEST_ASSERT_TRUE(view()->lines_below);

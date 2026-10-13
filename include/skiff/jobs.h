@@ -27,7 +27,12 @@
  *   - after a suspend it rejoins before the next attempt (the connection is gone), and a Memory
  *     Stick error from an attempt the PSP slept through costs only that attempt (open files do not
  *     survive a suspend);
- *   - a cancelled job stops within about a second, and its partial files are deleted.
+ *   - a cancelled job stops within about a second, and its partial files are deleted;
+ *   - while RomM converts a job's file (202, a job with a format), the runner asks again after the
+ *     answer's Retry-After (between SKIFF_JOBS_CONVERT_WAIT_MIN_MS and
+ * SKIFF_JOBS_CONVERT_WAIT_MAX_MS, SKIFF_JOBS_CONVERT_WAIT_DEFAULT_MS without one), keeping the PSP
+ * awake, and fails the job with SKIFF_ERR_ROMM_CONVERSION_TIMEOUT once RomM has been converting for
+ *     SKIFF_JOBS_CONVERT_TIMEOUT_MS; these answers are not failed attempts.
  * Every attempt resumes from the .part file (skiff/download.h), so retrying costs only time.
  */
 
@@ -42,7 +47,11 @@
 #include "skiff/transport.h"
 
 #define SKIFF_JOBS_FILE_NAME "queue.json"
-#define SKIFF_JOBS_VERSION 1
+/* Version 2 added a job's format: an older Skiff, which would download the stored file under the
+ * converted file's name, refuses the file rather than misread it. Version 1 files are read as
+ * jobs that all download the stored file. */
+#define SKIFF_JOBS_VERSION 2
+#define SKIFF_JOBS_VERSION_STORED_ONLY 1
 /* Jobs the queue holds, finished ones included until cleared. */
 #define SKIFF_JOBS_MAX 64
 /* The queue file is at most this large: every string field of every job at its longest, escaped. */
@@ -57,6 +66,13 @@
 #define SKIFF_JOBS_BACKOFF_MAX_MS 30000U
 /* How often a wait looks at cancel and stop requests and at the Wi-Fi switch. */
 #define SKIFF_JOBS_POLL_MS 250U
+/* Waiting for RomM to convert a file (see above). RomM answers Retry-After: 30, and holds each
+ * request up to 15 s while it converts; its own limit is 10 minutes per conversion, plus a queue
+ * of two at a time. */
+#define SKIFF_JOBS_CONVERT_WAIT_MIN_MS 5000U
+#define SKIFF_JOBS_CONVERT_WAIT_MAX_MS 60000U
+#define SKIFF_JOBS_CONVERT_WAIT_DEFAULT_MS 30000U
+#define SKIFF_JOBS_CONVERT_TIMEOUT_MS (30U * 60U * 1000U)
 /* Discrete events kept for the UI; past this the oldest is dropped. */
 #define SKIFF_JOBS_EVENTS_MAX 16
 
@@ -83,6 +99,10 @@ typedef struct skiff_job {
     char title[SKIFF_JOBS_TITLE_MAX];
     /* The file's name in RomM, which its download URL is built from. */
     char file_name[SKIFF_JOBS_FILE_NAME_MAX];
+    /* SKIFF_ROMM_FORMAT_STORED downloads the file as RomM stores it, size bytes with that CRC-32;
+     * another format asks RomM to convert it first (skiff/romm.h), and the converted file's size
+     * comes from the response, while size and crc32 stay those of RomM's file. */
+    skiff_romm_format format;
     /* Where the file goes (a real path, e.g. "ms0:/ISO/Game.iso"). */
     char target[SKIFF_JOBS_TARGET_MAX];
     /* The file at target is Skiff's own earlier copy, replace_size bytes long, and may be replaced
@@ -99,6 +119,8 @@ typedef struct skiff_job_request {
     const char *file_name;
     const char *target;
     uint64_t size;
+    /* See skiff_job.format. */
+    skiff_romm_format format;
     int has_crc32;
     uint32_t crc32;
     /* See skiff_job.replace_target and replace_size. */
@@ -108,14 +130,23 @@ typedef struct skiff_job_request {
 
 typedef void (*skiff_jobs_lock_fn)(void *ctx);
 
+/* The file a finished job put at its target, as it arrived: RomM's file, or for a job with a format
+ * the file RomM converted, whose size and CRC-32 are not those of RomM's file (the job's). */
+typedef struct skiff_jobs_installed {
+    uint64_t size;
+    uint32_t crc32;
+} skiff_jobs_installed;
+
 /*
  * A job's file is complete at its target. Called on the runner's thread once per download that
- * finished, with the job as it was taken (its rom_id, file_name, target, size and CRC-32), before
- * the job is saved as done, so the UI's done event comes after it; neither queue lock is held, so
- * it may call skiff_jobs_list() and the like. The installer records the file here
- * (skiff/install.h): what it cannot record counts as copied by hand, which is never overwritten.
+ * finished, with the job as it was taken (its rom_id, file_name, format, target, and RomM's file's
+ * size and CRC-32) and the file now at the target, before the job is saved as done, so the UI's
+ * done event comes after it; neither queue lock is held, so it may call skiff_jobs_list() and the
+ * like. The installer records the file here (skiff/install.h): what it cannot record counts as
+ * copied by hand, which is never overwritten.
  */
-typedef void (*skiff_jobs_downloaded_fn)(void *ctx, const skiff_job *job);
+typedef void (*skiff_jobs_downloaded_fn)(void *ctx, const skiff_job *job,
+                                         const skiff_jobs_installed *file);
 
 typedef struct skiff_jobs_config {
     /* Not owned; must outlive the queue. */
@@ -156,6 +187,8 @@ typedef enum skiff_jobs_recovery {
     SKIFF_JOBS_RELOADING,
     /* The next attempt starts in retry_in_ms. */
     SKIFF_JOBS_RETRYING,
+    /* RomM is converting the file; the runner asks again in retry_in_ms. */
+    SKIFF_JOBS_CONVERTING,
 } skiff_jobs_recovery;
 
 typedef struct skiff_jobs_event {
@@ -302,7 +335,8 @@ skiff_err skiff_jobs_format(const skiff_job *jobs, size_t count, uint32_t next_i
 
 /*
  * Reads a queue file into out (SKIFF_JOBS_MAX entries) and its count, next_id and how many jobs
- * were dropped as unusable. SKIFF_ERR_CONFIG_PARSE for a file that is not a queue of this version,
+ * were dropped as unusable (a format Skiff does not ask for among them). SKIFF_ERR_CONFIG_PARSE for
+ * a file that is not a queue of this version or SKIFF_JOBS_VERSION_STORED_ONLY,
  * SKIFF_ERR_INVALID_ARG for a NULL argument.
  */
 skiff_err skiff_jobs_parse(const char *json, size_t length, skiff_job *out, size_t *count,

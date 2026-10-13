@@ -78,11 +78,20 @@ typedef struct skiff_install_record {
     char file_name[SKIFF_ROMM_FILE_NAME_MAX];
     /* Where it was installed, as a logical path ("games:/Game.iso"), so it follows the device. */
     char path[SKIFF_STORAGE_PATH_MAX];
+    /* The file at path, which Skiff checks its own copy against. */
     uint64_t size;
     int has_crc32;
     uint32_t crc32;
     /* When it was installed, ms since 1970 (UTC); 0 when unknown. */
     int64_t installed_ms;
+    /* A file RomM converted as it was downloaded (a format, skiff/romm.h) is not RomM's file:
+     * has_source, with the size and CRC-32 RomM listed for its file then, which the library
+     * compares with what RomM lists now. 0 for a file downloaded as RomM stores it, which size and
+     * crc32 describe for both. */
+    int has_source;
+    int has_source_crc32;
+    uint32_t source_crc32;
+    uint64_t source_size;
 } skiff_install_record;
 
 typedef struct skiff_install_manifest {
@@ -185,7 +194,9 @@ skiff_err skiff_install_manifest_reconcile(skiff_install_manifest *manifest, ski
 /*
  * installed.json: {"version":1,"installed":[{"rom_id":12,"file_name":"Game.iso",
  * "path":"games:/Game.iso","size":1048576,"crc32":"0a1b2c3d","installed_ms":1790000000000}]},
- * "crc32" absent when unknown. Writes it into out, terminated, with its length in *length.
+ * "crc32" absent when unknown; a converted file's record adds
+ * "source":{"size":2097152,"crc32":"1b2c3d4e"} (its "crc32" absent when unknown), which an older
+ * Skiff ignores. Writes it into out, terminated, with its length in *length.
  * SKIFF_ERR_BUFFER_TOO_SMALL when it does not fit out_size with its terminator,
  * SKIFF_ERR_NO_MEMORY, SKIFF_ERR_INVALID_ARG for a NULL argument.
  */
@@ -212,7 +223,8 @@ typedef enum skiff_install_state {
     SKIFF_INSTALL_CHANGED,
 } skiff_install_state;
 
-/* What the manifest says about rom (by its id, size and CRC-32); NOT_INSTALLED for NULL. Run
+/* What the manifest says about rom (by its id, size and CRC-32, against the record's source when it
+ * has one); NOT_INSTALLED for NULL. Run
  * skiff_install_manifest_reconcile() at startup so files deleted meanwhile count as not installed.
  */
 skiff_install_state skiff_install_state_of(const skiff_install_manifest *manifest,

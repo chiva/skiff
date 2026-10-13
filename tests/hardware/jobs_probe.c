@@ -504,6 +504,8 @@ static const char *recovery_name(skiff_jobs_recovery step) {
         return "reloading the network modules";
     case SKIFF_JOBS_RETRYING:
         return "retrying";
+    case SKIFF_JOBS_CONVERTING:
+        return "waiting for RomM to convert";
     }
     return "?";
 }
@@ -528,6 +530,9 @@ static void on_recovery(probe *p, watch *w, const skiff_jobs_event *event) {
         break;
     case SKIFF_JOBS_RETRYING:
         w->retries++;
+        break;
+    case SKIFF_JOBS_CONVERTING:
+        /* The probe downloads stored files only: RomM never converts them. */
         break;
     }
     char text[TEXT_LINE_MAX];

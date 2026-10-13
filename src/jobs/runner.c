@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "skiff/disc_image.h"
+
 #include "jobs_internal.h"
 
 /* How often the PSP is kept awake during a transfer. */
@@ -14,6 +16,8 @@ typedef struct run {
     skiff_jobs *jobs;
     const skiff_jobs_env *env;
     uint32_t job_id;
+    /* The format the job asks RomM for (skiff_job.format), for the check of the finished file. */
+    skiff_romm_format format;
     /* The suspend count when the attempt started: a different one means the PSP slept. */
     uint32_t suspends_seen;
     int suspended;
@@ -39,14 +43,20 @@ static skiff_err asked_to_stop(run *r) {
     return stop ? SKIFF_ERR_CANCELLED : SKIFF_OK;
 }
 
-static skiff_err should_stop(void *ctx) {
-    run *r = ctx;
+/* Keeps the PSP awake, about once every KEEP_AWAKE_INTERVAL_MS however often it is called. */
+static void stay_awake(run *r) {
     const skiff_jobs_env *env = r->env;
     const int64_t now = env->now_ms(env->ctx);
     if (now - r->last_awake_ms >= KEEP_AWAKE_INTERVAL_MS) {
         env->keep_awake(env->ctx);
         r->last_awake_ms = now;
     }
+}
+
+static skiff_err should_stop(void *ctx) {
+    run *r = ctx;
+    const skiff_jobs_env *env = r->env;
+    stay_awake(r);
     const skiff_err stop = asked_to_stop(r);
     if (stop != SKIFF_OK) {
         return stop;
@@ -114,6 +124,40 @@ static skiff_err wait_ms(run *r, uint32_t ms) {
         ms -= step;
     }
     return asked_to_stop(r);
+}
+
+/* As wait_ms(), keeping the PSP awake: a job is still running, RomM converting its file. */
+static skiff_err wait_awake_ms(run *r, uint32_t ms) {
+    while (ms > 0) {
+        stay_awake(r);
+        const uint32_t step = ms < SKIFF_JOBS_POLL_MS ? ms : SKIFF_JOBS_POLL_MS;
+        const skiff_err stop = wait_ms(r, step);
+        if (stop != SKIFF_OK) {
+            return stop;
+        }
+        ms -= step;
+    }
+    return SKIFF_OK;
+}
+
+/* How long to wait before asking RomM again for a file it is converting: its Retry-After, within
+ * the runner's bounds. */
+static uint32_t conversion_wait_ms(const skiff_http_response *response) {
+    if (!response->has_retry_after) {
+        return SKIFF_JOBS_CONVERT_WAIT_DEFAULT_MS;
+    }
+    const uint64_t ms = (uint64_t)response->retry_after_s * MS_PER_S;
+    if (ms < SKIFF_JOBS_CONVERT_WAIT_MIN_MS) {
+        return SKIFF_JOBS_CONVERT_WAIT_MIN_MS;
+    }
+    return ms > SKIFF_JOBS_CONVERT_WAIT_MAX_MS ? SKIFF_JOBS_CONVERT_WAIT_MAX_MS : (uint32_t)ms;
+}
+
+/* The download engine's check of a finished file RomM converted (skiff/disc_image.h). */
+static skiff_err check_converted(void *ctx, skiff_storage *storage, const char *part_path,
+                                 uint64_t size) {
+    const run *r = ctx;
+    return skiff_disc_image_check(storage, part_path, size, r->format);
 }
 
 /* Waits for the Wi-Fi switch, however long it takes. */
@@ -192,13 +236,13 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
     memcpy(file.file_name, job->file_name, strlen(job->file_name) + 1);
     file.name_status = SKIFF_ROMM_NAME_OK;
     char url[SKIFF_ROMM_CONTENT_URL_MAX];
-    err = skiff_romm_content_url(r->env->romm, job->rom_id, &file, SKIFF_ROMM_FORMAT_STORED, url,
-                                 sizeof url);
+    err = skiff_romm_content_url(r->env->romm, job->rom_id, &file, job->format, url, sizeof url);
     if (err != SKIFF_OK) {
         return err;
     }
     skiff_http_header authorization;
     const size_t header_count = skiff_romm_auth_header(r->env->romm, &authorization);
+    const int converted = job->format != SKIFF_ROMM_FORMAT_STORED;
     const skiff_download_spec spec = {
         .url = url,
         .headers = header_count > 0 ? &authorization : NULL,
@@ -206,9 +250,13 @@ static skiff_err attempt(run *r, skiff_transport *transport, const skiff_job *jo
         .target_path = job->target,
         .replace_target = job->replace_target,
         .replace_size = job->replace_size,
-        .expected_size = job->size,
-        .has_expected_crc32 = job->has_crc32,
-        .expected_crc32 = job->crc32,
+        /* A converted file's size and CRC-32 are not RomM's file's: the response gives the size,
+         * and the finished file's structure is checked instead. */
+        .expected_size = converted ? 0 : job->size,
+        .has_expected_crc32 = !converted && job->has_crc32,
+        .expected_crc32 = converted ? 0 : job->crc32,
+        .check = converted ? check_converted : NULL,
+        .check_ctx = r,
         .should_stop = should_stop,
         .stop_ctx = r,
         .on_progress = on_progress,
@@ -339,14 +387,18 @@ skiff_err skiff_jobs_run_one(skiff_jobs *jobs, const skiff_jobs_env *env, int *r
     r.jobs = jobs;
     r.env = env;
     r.job_id = job.id;
+    r.format = job.format;
     r.last_awake_ms = env->now_ms(env->ctx);
     skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG, "job %u: start, %llu bytes",
                     (unsigned)job.id, (unsigned long long)job.size);
     skiff_transport *transport = NULL;
     uint32_t attempts = job.attempts;
     int idle_attempts = 0;
+    /* When RomM first answered that it was converting the file; -1 before. */
+    int64_t converting_since_ms = -1;
     skiff_job_state state = SKIFF_JOB_FAILED;
     skiff_err err = SKIFF_OK;
+    skiff_jobs_installed installed = {0, 0};
     for (;;) {
         if (transport == NULL) {
             err = env->open_transport(env->ctx, &transport);
@@ -359,12 +411,54 @@ skiff_err skiff_jobs_run_one(skiff_jobs *jobs, const skiff_jobs_env *env, int *r
         err = attempt(&r, transport, &job, &result);
         attempts++;
         if (err == SKIFF_OK) {
+            if (job.format != SKIFF_ROMM_FORMAT_STORED) {
+                skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG,
+                                "job %u: RomM converted it to %s, %llu bytes", (unsigned)job.id,
+                                skiff_romm_format_name(job.format),
+                                (unsigned long long)result.size);
+            }
+            installed.size = result.size;
+            installed.crc32 = result.crc32;
             state = SKIFF_JOB_DONE;
             break;
         }
         if (err == SKIFF_ERR_CANCELLED) {
             state = stopped_state(jobs);
             break;
+        }
+        if (err == SKIFF_ERR_ROMM_CONVERTING) {
+            const int64_t now = env->now_ms(env->ctx);
+            if (converting_since_ms < 0) {
+                converting_since_ms = now;
+            }
+            if (now - converting_since_ms >= (int64_t)SKIFF_JOBS_CONVERT_TIMEOUT_MS) {
+                err = SKIFF_ERR_ROMM_CONVERSION_TIMEOUT;
+                break;
+            }
+            const uint32_t delay = conversion_wait_ms(&result.response);
+            skiff_log_write(jobs->log, SKIFF_LOG_INFO, JOBS_LOG_TAG,
+                            "job %u: RomM is converting it to %s, asking again in %u s",
+                            (unsigned)job.id, skiff_romm_format_name(job.format),
+                            (unsigned)(delay / MS_PER_S));
+            idle_attempts = 0;
+            push_recovery(&r, SKIFF_JOBS_CONVERTING, delay);
+            if (wait_awake_ms(&r, delay) == SKIFF_ERR_CANCELLED) {
+                err = SKIFF_ERR_CANCELLED;
+                state = stopped_state(jobs);
+                break;
+            }
+            /* A suspend during the wait leaves a connection that is gone, while the access point
+             * may still read as joined: rejoin before asking again. A failed rejoin is left to the
+             * next attempt, whose network error the retry policy handles. */
+            if (env->suspends(env->ctx) != r.suspends_seen) {
+                r.suspended = 1;
+            }
+            if (r.suspended || !env->online(env->ctx)) {
+                skiff_transport_destroy(transport);
+                transport = NULL;
+                (void)reconnect(&r);
+            }
+            continue;
         }
         skiff_log_write(jobs->log, SKIFF_LOG_WARN, JOBS_LOG_TAG,
                         "job %u attempt %u: %s (%d), %llu bytes received", (unsigned)job.id,
@@ -420,7 +514,7 @@ skiff_err skiff_jobs_run_one(skiff_jobs *jobs, const skiff_jobs_env *env, int *r
     /* Before the queue says done, so the UI never sees a finished job the installer has not
      * recorded. */
     if (state == SKIFF_JOB_DONE && jobs->downloaded != NULL) {
-        jobs->downloaded(jobs->downloaded_ctx, &job);
+        jobs->downloaded(jobs->downloaded_ctx, &job, &installed);
     }
     conclude(&r, &job, state, err, attempts);
     return SKIFF_OK;

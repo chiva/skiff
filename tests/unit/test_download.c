@@ -9,6 +9,7 @@
 #include <string.h>
 #include <zlib.h>
 
+#include "skiff/disc_image.h"
 #include "skiff/download.h"
 
 #include "fake_storage.h"
@@ -26,6 +27,11 @@
 /* Two checkpoints and an odd tail. */
 #define BODY_BYTES (9 * MIB + 77)
 #define HEADERS_MAX 256
+/* The recorded conversion of a synthetic CHD (tests/integration/seed.py): a CSO of a 64 KiB disc.
+ */
+#define CONVERTED_PATH "/api/roms/5/content/Skiff%20Convert%20Disc.chd?format=cso"
+#define CONVERTED_URL "https://romm.test" CONVERTED_PATH
+#define CONVERTED_BYTES 9007U
 
 static char dir[TEMP_DIR_PATH_MAX];
 static char target[TEMP_DIR_PATH_MAX];
@@ -782,6 +788,230 @@ static void test_retryable_failures(void) {
     }
 }
 
+/* ---- Files RomM converts: the size comes from the response, the structure is checked ---- */
+
+/* A download of a file RomM converts: no expected size or CRC-32. */
+static void expect_converted(void) {
+    spec.expected_size = 0;
+    spec.has_expected_crc32 = 0;
+    spec.expected_crc32 = 0;
+}
+
+static void test_a_converted_file_takes_its_size_from_the_response(void) {
+    serve(ETAG);
+    expect_converted();
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_PRINTF("size from Content-Length: %llu", (unsigned long long)result.size);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, result.size);
+    TEST_ASSERT_EQUAL_HEX32_MESSAGE(body_crc, result.crc32, "computed as it arrived");
+    assert_complete();
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, progress.last_done);
+}
+
+static void test_a_converted_file_without_content_length_is_refused(void) {
+    serve_on(&transport, "HTTP/1.1 200 OK", ETAG, 0, BODY_BYTES);
+    expect_converted();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, attempt());
+    TEST_ASSERT_FALSE_MESSAGE(exists(part), "nothing was written");
+    TEST_ASSERT_FALSE(exists(state_file));
+    TEST_ASSERT_EQUAL_UINT64(0, result.size);
+}
+
+static void test_a_converted_file_too_large_for_fat_is_refused_before_writing(void) {
+    static const char RAW[] =
+        "HTTP/1.1 200 OK\r\nContent-Length: 4294967296\r\nETag: \"v1\"\r\n\r\nCISO";
+    TEST_ASSERT_NOT_NULL(fake_transport_add_raw(&transport, CONTENT_PATH, RAW, sizeof RAW - 1));
+    expect_converted();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_FILE_TOO_LARGE, attempt());
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
+static void test_a_converted_file_needs_room_once_its_size_is_known(void) {
+    serve(ETAG);
+    expect_converted();
+    storage.has_free_bytes = 1;
+    storage.free_bytes = BODY_BYTES + SKIFF_STORAGE_FREE_MARGIN_BYTES - 1;
+    TEST_PRINTF("free %llu: the margin fits, the file does not",
+                (unsigned long long)storage.free_bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(1, transport.request_count, "the size came with the response");
+    TEST_ASSERT_FALSE_MESSAGE(exists(part), "nothing was written");
+    TEST_ASSERT_FALSE(exists(state_file));
+    TEST_PRINTF("without even the margin, nothing is asked for");
+    storage.free_bytes = SKIFF_STORAGE_FREE_MARGIN_BYTES - 1;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, attempt());
+    TEST_ASSERT_EQUAL_size_t(1, transport.request_count);
+    storage.free_bytes = BODY_BYTES + SKIFF_STORAGE_FREE_MARGIN_BYTES;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    assert_complete();
+}
+
+static void test_a_converted_file_resumes_with_the_size_it_saved(void) {
+    fake_route *route = serve(ETAG);
+    expect_converted();
+    cut_after(route, 5 * MIB);
+    const skiff_download_state saved = saved_state();
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, saved.size);
+    TEST_ASSERT_FALSE(saved.has_expected_crc32);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_EQUAL_INT64(206, result.response.status);
+    TEST_ASSERT_EQUAL_UINT64(5 * MIB, result.resumed_from);
+    TEST_ASSERT_EQUAL_UINT64(BODY_BYTES, result.size);
+    assert_complete();
+}
+
+/* RomM refreshes a converted copy's modification time on every request, so its ETag changes and a
+ * resume gets the whole file again; a copy converted again may differ in size. */
+static void test_a_converted_file_whose_etag_changed_restarts_with_the_new_size(void) {
+    fake_route *route = serve(ETAG);
+    expect_converted();
+    spec.on_progress = NULL;
+    cut_after(route, 5 * MIB);
+    skiff_transport_destroy(&transport.base);
+    fake_transport_init(&transport);
+    const size_t smaller = (size_t)(BODY_BYTES - 1000);
+    serve_on(&transport, "HTTP/1.1 200 OK", CHANGED_ETAG, 1, smaller);
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_TRUE(result.restarted);
+    TEST_ASSERT_EQUAL_STRING(ETAG, last_request()->if_range);
+    TEST_ASSERT_EQUAL_UINT64(smaller, result.size);
+    TEST_ASSERT_EQUAL_UINT64(smaller, size_of(target));
+}
+
+/* A restart truncates the .part file, so the bytes it holds count as free space for the whole file:
+ * RomM answers every resume of a converted file with the whole file. */
+static void test_a_restarted_converted_file_counts_the_part_it_replaces(void) {
+    fake_route *route = serve(ETAG);
+    expect_converted();
+    spec.on_progress = NULL;
+    const uint64_t cut = 5 * MIB;
+    cut_after(route, cut);
+    skiff_transport_destroy(&transport.base);
+    fake_transport_init(&transport);
+    serve_on(&transport, "HTTP/1.1 200 OK", CHANGED_ETAG, 1, BODY_BYTES);
+    storage.has_free_bytes = 1;
+    storage.free_bytes = BODY_BYTES - cut + SKIFF_STORAGE_FREE_MARGIN_BYTES - 1;
+    TEST_PRINTF("free %llu: one byte short of the file, less its .part, plus the margin",
+                (unsigned long long)storage.free_bytes);
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_STORAGE_NO_SPACE, attempt());
+    assert_durable_prefix(cut);
+    storage.free_bytes++;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_TRUE(result.restarted);
+    assert_complete();
+}
+
+static void test_a_partial_response_must_match_the_saved_size(void) {
+    fake_route *route = serve(ETAG);
+    expect_converted();
+    cut_after(route, 5 * MIB);
+    skiff_transport_destroy(&transport.base);
+    fake_transport_init(&transport);
+    char raw[HEADERS_MAX];
+    const uint64_t saved = 5 * MIB;
+    const int length =
+        snprintf(raw, sizeof raw,
+                 "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes %llu-%llu/%llu"
+                 "\r\n\r\nxx",
+                 (unsigned long long)saved, (unsigned long long)BODY_BYTES,
+                 (unsigned long long)BODY_BYTES + 1ULL);
+    TEST_ASSERT_NOT_NULL(fake_transport_add_raw(&transport, CONTENT_PATH, raw, (size_t)length));
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_BAD_RESPONSE, attempt());
+    assert_durable_prefix(5 * MIB);
+}
+
+static void test_romm_still_converting_is_not_a_failure_of_the_file(void) {
+    TEST_ASSERT_NOT_NULL(fake_transport_add_fixture(&transport, CONVERTED_PATH,
+                                                    "romm/rom-content-convert-pending.http"));
+    spec.url = CONVERTED_URL;
+    expect_converted();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERTING, attempt());
+    TEST_PRINTF("Retry-After %u s (present %d)", (unsigned)result.response.retry_after_s,
+                result.response.has_retry_after);
+    TEST_ASSERT_TRUE(result.response.has_retry_after);
+    TEST_ASSERT_EQUAL_UINT32(30, result.response.retry_after_s);
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+    TEST_ASSERT_FALSE(skiff_download_retryable(SKIFF_ERR_ROMM_CONVERTING));
+}
+
+static void test_romm_unable_to_convert_is_its_own_error(void) {
+    TEST_ASSERT_NOT_NULL(fake_transport_add_fixture(&transport, CONVERTED_PATH,
+                                                    "romm/rom-content-convert-unavailable.http"));
+    spec.url = CONVERTED_URL;
+    expect_converted();
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERSION_UNAVAILABLE, attempt());
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
+static skiff_err check_as(void *ctx, skiff_storage *checked, const char *part_path, uint64_t size) {
+    const skiff_romm_format *format = ctx;
+    const skiff_err err = skiff_disc_image_check(checked, part_path, size, *format);
+    TEST_PRINTF("check %s as %s: %s", part_path, skiff_romm_format_name(*format),
+                skiff_err_name(err));
+    return err;
+}
+
+static void test_the_recorded_conversion_passes_the_cso_check(void) {
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, CONVERTED_PATH, "romm/rom-content-convert.http"));
+    spec.url = CONVERTED_URL;
+    spec.on_progress = NULL;
+    expect_converted();
+    skiff_romm_format format = SKIFF_ROMM_FORMAT_CSO;
+    spec.check = check_as;
+    spec.check_ctx = &format;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, attempt());
+    TEST_ASSERT_TRUE(result.complete);
+    TEST_ASSERT_EQUAL_UINT64(CONVERTED_BYTES, result.size);
+    TEST_ASSERT_EQUAL_UINT64(CONVERTED_BYTES, size_of(target));
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
+static void test_a_file_the_check_refuses_is_deleted(void) {
+    TEST_ASSERT_NOT_NULL(
+        fake_transport_add_fixture(&transport, CONVERTED_PATH, "romm/rom-content-convert.http"));
+    spec.url = CONVERTED_URL;
+    spec.on_progress = NULL;
+    expect_converted();
+    skiff_romm_format format = SKIFF_ROMM_FORMAT_ISO;
+    spec.check = check_as;
+    spec.check_ctx = &format;
+    TEST_PRINTF("a CSO checked as the ISO that was asked for");
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERTED_DAMAGED, attempt());
+    TEST_ASSERT_FALSE(result.complete);
+    TEST_ASSERT_FALSE_MESSAGE(exists(target), "never under its final name");
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
+static void test_a_finished_part_is_checked_before_it_is_renamed(void) {
+    serve(ETAG);
+    expect_converted();
+    write_all(part, body, (size_t)BODY_BYTES);
+    skiff_download_state done;
+    memset(&done, 0, sizeof done);
+    done.size = BODY_BYTES;
+    done.offset = BODY_BYTES;
+    done.crc32 = body_crc;
+    snprintf(done.etag, sizeof done.etag, "%s", ETAG);
+    char text[SKIFF_DOWNLOAD_STATE_MAX];
+    size_t length = 0;
+    TEST_ASSERT_EQUAL_INT(SKIFF_OK, skiff_download_state_format(&done, text, sizeof text, &length));
+    write_all(state_file, text, length);
+    skiff_romm_format format = SKIFF_ROMM_FORMAT_CSO;
+    spec.check = check_as;
+    spec.check_ctx = &format;
+    TEST_ASSERT_EQUAL_INT(SKIFF_ERR_ROMM_CONVERTED_DAMAGED, attempt());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, transport.request_count, "finished without a request");
+    TEST_ASSERT_FALSE(exists(target));
+    TEST_ASSERT_FALSE(exists(part));
+    TEST_ASSERT_FALSE(exists(state_file));
+}
+
 static void test_arguments_and_limits(void) {
     char long_path[SKIFF_DOWNLOAD_PATH_MAX];
     memset(long_path, 'a', sizeof long_path - 3);
@@ -795,6 +1025,7 @@ static void test_arguments_and_limits(void) {
                           skiff_download_attempt(&transport.base, &storage.base, NULL, &result));
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG,
                           skiff_download_attempt(&transport.base, &storage.base, &spec, NULL));
+    TEST_PRINTF("an expected CRC-32 needs the expected size");
     spec.expected_size = 0;
     TEST_ASSERT_EQUAL_INT(SKIFF_ERR_INVALID_ARG, attempt());
     spec.expected_size = SKIFF_DOWNLOAD_MAX_BYTES + 1;
@@ -880,6 +1111,19 @@ int main(void) {
     RUN_TEST(test_skiffs_copy_changed_meanwhile_is_not_replaced);
     RUN_TEST(test_stop_hook_ends_the_attempt_and_keeps_the_progress);
     RUN_TEST(test_retryable_failures);
+    RUN_TEST(test_a_converted_file_takes_its_size_from_the_response);
+    RUN_TEST(test_a_converted_file_without_content_length_is_refused);
+    RUN_TEST(test_a_converted_file_too_large_for_fat_is_refused_before_writing);
+    RUN_TEST(test_a_converted_file_needs_room_once_its_size_is_known);
+    RUN_TEST(test_a_converted_file_resumes_with_the_size_it_saved);
+    RUN_TEST(test_a_converted_file_whose_etag_changed_restarts_with_the_new_size);
+    RUN_TEST(test_a_restarted_converted_file_counts_the_part_it_replaces);
+    RUN_TEST(test_a_partial_response_must_match_the_saved_size);
+    RUN_TEST(test_romm_still_converting_is_not_a_failure_of_the_file);
+    RUN_TEST(test_romm_unable_to_convert_is_its_own_error);
+    RUN_TEST(test_the_recorded_conversion_passes_the_cso_check);
+    RUN_TEST(test_a_file_the_check_refuses_is_deleted);
+    RUN_TEST(test_a_finished_part_is_checked_before_it_is_renamed);
     RUN_TEST(test_arguments_and_limits);
     RUN_TEST(test_discard_removes_the_progress);
     RUN_TEST(test_after_write_follows_every_block_written);

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/chiva/skiff/compare/v0.5.0...v0.6.0) (2026-10-13)
+
+
+### Features
+
+* **app:** show a game's description and facts in its details ([#111](https://github.com/chiva/skiff/issues/111)) ([a6519d5](https://github.com/chiva/skiff/commit/a6519d5a90feb11ea2ffce68185e037e813fc10c))
+* **details:** draw the game's name as a larger heading ([#114](https://github.com/chiva/skiff/issues/114)) ([a0c2275](https://github.com/chiva/skiff/commit/a0c227500a1ae9db8fa9c89a23d01ac6b2c22a02))
+
 ## [0.5.0](https://github.com/chiva/skiff/compare/v0.4.0...v0.5.0) (2026-10-12)
 
 

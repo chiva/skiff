@@ -47,6 +47,8 @@ _Static_assert(SKIFF_APP_LINE_HEIGHT == SKIFF_PSP_UI_ROW_HEIGHT,
                "skiff/app.h's line height must be a list row's");
 _Static_assert(SKIFF_APP_SYMBOL_WIDTH == SKIFF_PSP_UI_SYMBOL_WIDTH,
                "skiff/app.h's tables leave a button symbol the room the renderer draws it in");
+_Static_assert(SKIFF_UI_SYMBOL_SIZE <= SKIFF_APP_SYMBOL_WIDTH,
+               "a scrolling text leaves its arrows the room they are drawn in");
 
 /* ---- Measurements (hardware row A1, debug level) ---- */
 
@@ -598,11 +600,33 @@ static void draw_cover(const skiff_psp_ui *ui, const skiff_cover *cover) {
     }
 }
 
+/* Line index of a view with a scrolling window, at y: the rule across the empty line before the
+ * window, and the arrows at the window's right edge beside its first line (more above) and its
+ * last (more below). */
+static void draw_scroll_marks(const skiff_psp_ui *ui, const skiff_app_view *view, size_t index,
+                              int y) {
+    const int width = (int)view->scroll_width;
+    if (index + 1 == view->scroll_line) {
+        skiff_psp_ui_rect(ui, SKIFF_PSP_UI_MARGIN, y + LINE_HEIGHT / 2, width, 1,
+                          SKIFF_PSP_UI_COLOUR_RULE);
+    }
+    const int mark_x = SKIFF_PSP_UI_MARGIN + width - SKIFF_UI_SYMBOL_SIZE;
+    if (index == view->scroll_line && view->more_above) {
+        skiff_psp_ui_symbol(ui, SKIFF_UI_ACTION_UP, mark_x, y + LINE_BASELINE);
+    }
+    if (index + 1 == view->line_count && view->more_below) {
+        skiff_psp_ui_symbol(ui, SKIFF_UI_ACTION_DOWN, mark_x, y + LINE_BASELINE);
+    }
+}
+
 /* The view's lines from y down, then its progress bar: where they end. */
 static int draw_details(const skiff_psp_ui *ui, const skiff_app_view *view, int y) {
     for (size_t i = 0; i < view->line_count; i++) {
         skiff_psp_ui_text(ui, SKIFF_PSP_UI_MARGIN, y + LINE_BASELINE, SKIFF_PSP_UI_TEXT_SIZE,
                           SKIFF_PSP_UI_COLOUR_TEXT, view->lines[i]);
+        if (view->has_scroll) {
+            draw_scroll_marks(ui, view, i, y);
+        }
         y += LINE_HEIGHT;
     }
     if (view->has_progress) {

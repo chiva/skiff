@@ -73,10 +73,11 @@ static size_t longest_fitting(const char *text, size_t length, float width,
     return best;
 }
 
-/* Bytes of text that fit width on one line, ending at a word where one fits. */
-static size_t line_length(const char *text, float width, skiff_ui_measure_fn measure, void *ctx) {
+/* Bytes of text, the length bytes before its line break or end, that fit width on one line,
+ * ending at a word where one fits. */
+static size_t line_length(const char *text, size_t length, float width, skiff_ui_measure_fn measure,
+                          void *ctx) {
     char candidate[SKIFF_TEXT_MAX];
-    const size_t length = strlen(text);
     size_t best = 0;
     for (size_t end = 0; end <= length && end < sizeof candidate; end++) {
         if (end < length && text[end] != ' ') {
@@ -91,9 +92,63 @@ static size_t line_length(const char *text, float width, skiff_ui_measure_fn mea
     }
     if (best == 0) {
         const size_t word = strcspn(text, " ");
-        best = longest_fitting(text, word, width, measure, ctx);
+        best = longest_fitting(text, word < length ? word : length, width, measure, ctx);
     }
     return best;
+}
+
+/* The line of text that starts at *at or after the blanks there, into *span (without the blanks
+ * around it), *at moved past it and the line break that ends it; an empty line for a line break
+ * right there. 0 when only blanks are left. */
+static int next_line(const char *text, size_t *at, float width, skiff_ui_measure_fn measure,
+                     void *ctx, skiff_app_span *span) {
+    const size_t start = *at + strspn(text + *at, " ");
+    span->start = start;
+    span->length = 0;
+    if (text[start] == '\0') {
+        *at = start;
+        return 0;
+    }
+    if (text[start] == '\n') {
+        *at = start + 1;
+        return 1;
+    }
+    size_t length = line_length(text + start, strcspn(text + start, "\n"), width, measure, ctx);
+    if (length >= SKIFF_TEXT_MAX) {
+        length = SKIFF_TEXT_MAX - 1;
+    }
+    size_t end = length;
+    while (end > 0 && text[start + end - 1] == ' ') {
+        end--;
+    }
+    span->length = end;
+    size_t next = start + length;
+    next += strspn(text + next, " ");
+    /* The break that ends this line, not an empty line of its own. */
+    *at = text[next] == '\n' ? next + 1 : next;
+    return 1;
+}
+
+/* What is left of text from rest on, as one line within width, cut with SKIFF_UI_ELLIPSIS: line
+ * breaks read as spaces, blanks at its end dropped. */
+static void fit_rest(const char *rest, float width, skiff_ui_measure_fn measure, void *ctx,
+                     char *out) {
+    /* Longer than out holds, so a longer rest is still cut with the ellipsis. */
+    char joined[2 * SKIFF_TEXT_MAX];
+    size_t used = 0;
+    for (const char *c = rest; *c != '\0' && used + 1 < sizeof joined; c++) {
+        const int blank = *c == ' ' || *c == '\n';
+        if (!blank || (used > 0 && joined[used - 1] != ' ')) {
+            joined[used++] = blank ? ' ' : *c;
+        }
+    }
+    while (used > 0 && joined[used - 1] == ' ') {
+        used--;
+    }
+    joined[used] = '\0';
+    if (skiff_ui_fit_text(joined, width, measure, ctx, out, SKIFF_TEXT_MAX) != SKIFF_OK) {
+        out[0] = '\0';
+    }
 }
 
 size_t skiff_app_wrap(const char *text, float width, skiff_ui_measure_fn measure, void *measure_ctx,
@@ -102,32 +157,49 @@ size_t skiff_app_wrap(const char *text, float width, skiff_ui_measure_fn measure
         return 0;
     }
     size_t count = 0;
-    const char *rest = text;
+    size_t at = 0;
     while (count < max_lines) {
-        rest += strspn(rest, " ");
-        if (*rest == '\0') {
+        const size_t start = at + strspn(text + at, " ");
+        if (text[start] == '\0') {
             break;
         }
         if (count + 1 == max_lines) {
-            if (skiff_ui_fit_text(rest, width, measure, measure_ctx, lines[count],
-                                  SKIFF_TEXT_MAX) != SKIFF_OK) {
-                lines[count][0] = '\0';
-            }
+            fit_rest(text + start, width, measure, measure_ctx, lines[count]);
             count++;
             break;
         }
-        size_t length = line_length(rest, width, measure, measure_ctx);
-        if (length >= SKIFF_TEXT_MAX) {
-            length = SKIFF_TEXT_MAX - 1;
-        }
-        memcpy(lines[count], rest, length);
-        size_t end = length;
-        while (end > 0 && lines[count][end - 1] == ' ') {
-            end--;
-        }
-        lines[count][end] = '\0';
+        skiff_app_span span;
+        (void)next_line(text, &at, width, measure, measure_ctx, &span);
+        memcpy(lines[count], text + span.start, span.length);
+        lines[count][span.length] = '\0';
         count++;
-        rest += length;
+    }
+    return count;
+}
+
+size_t skiff_app_wrap_spans(const char *text, float width, skiff_ui_measure_fn measure,
+                            void *measure_ctx, skiff_app_span *spans, size_t max_spans, int *cut) {
+    if (cut != NULL) {
+        *cut = 0;
+    }
+    if (text == NULL || measure == NULL || spans == NULL) {
+        return 0;
+    }
+    size_t count = 0;
+    size_t at = 0;
+    skiff_app_span span;
+    while (next_line(text, &at, width, measure, measure_ctx, &span)) {
+        if (count == max_spans) {
+            /* What ends cut ends on text, so a mark after it reads as the cut. */
+            while (count > 0 && spans[count - 1].length == 0) {
+                count--;
+            }
+            if (cut != NULL) {
+                *cut = 1;
+            }
+            break;
+        }
+        spans[count++] = span;
     }
     return count;
 }
@@ -622,7 +694,7 @@ static void library_view(skiff_app *app) {
 }
 
 /* A game's name beside the cover: at most APP_DETAILS_NAME_LINES lines, the last cut with "..."
- * when there is more, so the size, the download state and the free space always fit under it. */
+ * when there is more, so the facts, the download state and the free space always fit under it. */
 static void add_name_within(skiff_app *app, const char *name, float width) {
     char lines[SKIFF_APP_LINES_MAX][SKIFF_TEXT_MAX];
     const size_t count =
@@ -649,6 +721,189 @@ static void add_name_within(skiff_app *app, const char *name, float width) {
     }
 }
 
+/* RomM's language names (backend/handler/filesystem/base_handler.py, 5.4.0) as its own short
+ * codes, so a game's languages fit beside the cover; another name shows as it is. */
+typedef struct language_code {
+    const char *name;
+    const char *code;
+} language_code;
+
+static const language_code LANGUAGE_CODES[] = {
+    {"Arabic", "Ar"},    {"Danish", "Da"},   {"German", "De"},     {"Greek", "El"},
+    {"English", "En"},   {"Spanish", "Es"},  {"Finnish", "Fi"},    {"French", "Fr"},
+    {"Italian", "It"},   {"Japanese", "Ja"}, {"Korean", "Ko"},     {"Dutch", "Nl"},
+    {"Norwegian", "No"}, {"Polish", "Pl"},   {"Portuguese", "Pt"}, {"Russian", "Ru"},
+    {"Serbian", "Sr"},   {"Swedish", "Sv"},  {"Chinese", "Zh"},
+};
+/* RomM's tag for a game without language (a "nolang" file name): nothing to show. */
+#define LANGUAGE_NONE "No Language"
+
+static const char *language_shown(const char *name) {
+    if (strcmp(name, LANGUAGE_NONE) == 0) {
+        return "";
+    }
+    for (size_t i = 0; i < sizeof LANGUAGE_CODES / sizeof LANGUAGE_CODES[0]; i++) {
+        if (strcmp(name, LANGUAGE_CODES[i].name) == 0) {
+            return LANGUAGE_CODES[i].code;
+        }
+    }
+    return name;
+}
+
+/* The texts of a list joined with ", " into out (SKIFF_TEXT_MAX), empty ones left out. */
+static void join_list(const char (*texts)[SKIFF_ROMM_FACT_MAX], size_t count, int languages,
+                      char *out) {
+    size_t used = 0;
+    out[0] = '\0';
+    for (size_t i = 0; i < count; i++) {
+        const char *text = languages ? language_shown(texts[i]) : texts[i];
+        if (text[0] == '\0') {
+            continue;
+        }
+        const int written =
+            snprintf(out + used, SKIFF_TEXT_MAX - used, "%s%s", used > 0 ? ", " : "", text);
+        if (written < 0 || (size_t)written >= SKIFF_TEXT_MAX - used) {
+            return;
+        }
+        used += (size_t)written;
+    }
+}
+
+/* The most facts a game shows: year, genres, players, rating, companies, regions, languages and
+ * size. */
+#define DETAILS_FACTS_MAX 8
+
+/* The game's facts, each in display form, in the order they are shown; only the ones RomM has,
+ * and the size, which every game has. */
+static size_t details_facts(const skiff_app *app, char (*facts)[SKIFF_TEXT_MAX]) {
+    const skiff_romm_rom_metadata *m = &app->rom.metadata;
+    size_t count = 0;
+    if (m->release_year > 0) {
+        snprintf(facts[count++], SKIFF_TEXT_MAX, "%d", m->release_year);
+    }
+    join_list(m->genres, m->genre_count, 0, facts[count]);
+    count += facts[count][0] != '\0';
+    if (m->players[0] != '\0') {
+        const char *args[] = {m->players};
+        app_format(app, SKIFF_TEXT_DETAILS_PLAYERS, args, 1, facts[count++]);
+    }
+    if (m->rating > 0) {
+        char rating[24];
+        char scale[24];
+        snprintf(rating, sizeof rating, "%u", m->rating);
+        snprintf(scale, sizeof scale, "%u", (unsigned)SKIFF_ROMM_RATING_SCALE);
+        const char *args[] = {rating, scale};
+        app_format(app, SKIFF_TEXT_DETAILS_RATING, args, 2, facts[count++]);
+    }
+    /* "Developer / Publisher", or the one RomM has, or one name for a studio that is both. */
+    const int both = m->developer[0] != '\0' && m->publisher[0] != '\0' &&
+                     strcmp(m->developer, m->publisher) != 0;
+    if (m->developer[0] != '\0' || m->publisher[0] != '\0') {
+        snprintf(facts[count++], SKIFF_TEXT_MAX, "%s%s%s",
+                 m->developer[0] != '\0' ? m->developer : m->publisher, both ? " / " : "",
+                 both ? m->publisher : "");
+    }
+    join_list(m->regions, m->region_count, 0, facts[count]);
+    count += facts[count][0] != '\0';
+    join_list(m->languages, m->language_count, 1, facts[count]);
+    count += facts[count][0] != '\0';
+    char size[SKIFF_APP_DETAIL_MAX];
+    app_format_bytes(app, app->rom.summary.size, size, sizeof size);
+    const char *args[] = {size};
+    app_format(app, SKIFF_TEXT_DETAILS_SIZE, args, 1, facts[count++]);
+    return count;
+}
+
+/* A line of the view, text fitted to width; nothing once the view is full. */
+static void add_fitted_line(skiff_app *app, const char *text, float width) {
+    skiff_app_view *view = &app->view;
+    if (view->line_count < SKIFF_APP_LINES_MAX) {
+        app_fit(app, text, width, view->lines[view->line_count++], SKIFF_TEXT_MAX);
+    }
+}
+
+/* Appends as much of text to the string in out (size bytes) as fits: a line longer than the view's
+ * is fitted to its width afterwards, never shown cut here. */
+static void append_text(char *out, size_t size, const char *text) {
+    const size_t used = strnlen(out, size - 1);
+    const size_t length = strnlen(text, size - 1 - used);
+    memcpy(out + used, text, length);
+    out[used + length] = '\0';
+}
+
+/* The game's facts joined with APP_DETAILS_FACT_SEPARATOR, a fact never split across lines: a
+ * fact that does not fit after the others on a line starts the next one, and the last of
+ * APP_DETAILS_FACT_LINES takes what is left, cut with "..." when it is too long. */
+static void add_facts(skiff_app *app, float width) {
+    char facts[DETAILS_FACTS_MAX][SKIFF_TEXT_MAX];
+    const size_t count = details_facts(app, facts);
+    char line[2 * SKIFF_TEXT_MAX];
+    line[0] = '\0';
+    size_t lines = 0;
+    for (size_t i = 0; i < count; i++) {
+        char joined[sizeof line];
+        memcpy(joined, line, sizeof line);
+        if (line[0] != '\0') {
+            append_text(joined, sizeof joined, APP_DETAILS_FACT_SEPARATOR);
+        }
+        append_text(joined, sizeof joined, facts[i]);
+        const int last_line = lines + 1 >= APP_DETAILS_FACT_LINES;
+        if (line[0] != '\0' && !last_line && app->env.measure(app->env.ctx, joined) > width) {
+            add_fitted_line(app, line, width);
+            lines++;
+            line[0] = '\0';
+            append_text(line, sizeof line, facts[i]);
+        } else {
+            memcpy(line, joined, sizeof line);
+        }
+    }
+    add_fitted_line(app, line, width);
+}
+
+/* The game's description under a rule, as much of it as the body has room for from the line the
+ * player scrolled to, marked by arrows where more is above or below. Wrapped once per game. */
+static void add_description(skiff_app *app) {
+    skiff_app_view *view = &app->view;
+    app_description *description = &app->description;
+    const char *text = app->rom.metadata.description;
+    description->window = 0;
+    if (!description->wrapped) {
+        description->line_count =
+            skiff_app_wrap_spans(text, APP_DESCRIPTION_WIDTH, app->env.measure, app->env.ctx,
+                                 description->lines, APP_DESCRIPTION_LINES_MAX, &description->cut);
+        description->wrapped = 1;
+    }
+    /* The rule's line and at least one of text. */
+    if (description->line_count == 0 || view->line_count + 2 > SKIFF_APP_LINES_MAX) {
+        return;
+    }
+    view->lines[view->line_count++][0] = '\0';
+    const size_t room = SKIFF_APP_LINES_MAX - view->line_count;
+    const size_t window = room < description->line_count ? room : description->line_count;
+    const size_t last_first = description->line_count - window;
+    if (description->first > last_first) {
+        description->first = last_first;
+    }
+    description->window = window;
+    view->has_scroll = 1;
+    view->scroll_line = view->line_count;
+    view->scroll_width = SKIFF_APP_COVER_TEXT_WIDTH;
+    view->more_above = description->first > 0;
+    view->more_below = description->first + window < description->line_count;
+    for (size_t i = 0; i < window; i++) {
+        const size_t index = description->first + i;
+        const skiff_app_span *span = &description->lines[index];
+        char *line = view->lines[view->line_count++];
+        memcpy(line, text + span->start, span->length);
+        line[span->length] = '\0';
+        if (description->cut && index + 1 == description->line_count) {
+            char ended[SKIFF_TEXT_MAX + sizeof SKIFF_UI_ELLIPSIS];
+            snprintf(ended, sizeof ended, "%s" SKIFF_UI_ELLIPSIS, line);
+            app_fit(app, ended, APP_DESCRIPTION_WIDTH, line, SKIFF_TEXT_MAX);
+        }
+    }
+}
+
 static void details_view(skiff_app *app) {
     skiff_app_view *view = &app->view;
     set_title(app, app_text(app, SKIFF_TEXT_TITLE_DETAILS));
@@ -666,10 +921,7 @@ static void details_view(skiff_app *app) {
     if (rom->name[0] != '\0') {
         add_name_within(app, rom->fs_name, width);
     }
-    char size[SKIFF_APP_DETAIL_MAX];
-    app_format_bytes(app, rom->size, size, sizeof size);
-    const char *args[] = {size};
-    add_formatted_within(app, SKIFF_TEXT_DETAILS_SIZE, args, 1, width);
+    add_facts(app, width);
     const skiff_text_id refusal = app_details_refusal(app);
     char detail[SKIFF_APP_DETAIL_MAX];
     app_rom_detail(app, rom, detail, sizeof detail);
@@ -683,11 +935,15 @@ static void details_view(skiff_app *app) {
         add_wrapped_within(app, save, width);
     }
     add_free_space_within(app, width);
+    add_description(app);
     if (refusal == SKIFF_TEXT_COUNT) {
         add_hint(app, SKIFF_UI_ACTION_CONFIRM, SKIFF_TEXT_DOWNLOAD);
     }
     if (app_saves_details_offered(app)) {
         add_hint(app, SKIFF_UI_ACTION_EXTRA, SKIFF_TEXT_SYNC_SAVE);
+    }
+    if (view->more_above || view->more_below) {
+        add_hint(app, SKIFF_UI_ACTION_UP | SKIFF_UI_ACTION_DOWN, SKIFF_TEXT_SCROLL);
     }
     add_hint(app, SKIFF_UI_ACTION_BACK, SKIFF_TEXT_BACK);
 }

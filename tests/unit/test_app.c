@@ -114,8 +114,13 @@ static const skiff_transport_ops PROXY_OPS = {proxy_perform, proxy_destroy};
 
 static int64_t env_now(void *ctx) { return ((fake_env *)ctx)->now_ms; }
 
+/* Calls of the measure callback: the details screen must not measure its description again on
+ * every rebuild. */
+static unsigned long measure_calls;
+
 static float env_measure(void *ctx, const char *text) {
     (void)ctx;
+    measure_calls++;
     return CHAR_WIDTH * (float)strlen(text);
 }
 
@@ -3274,6 +3279,462 @@ static void test_wrapping_breaks_between_words_and_inside_long_ones(void) {
     TEST_ASSERT_EQUAL_STRING("cc...", lines[1]);
     TEST_ASSERT_EQUAL_size_t(0, skiff_app_wrap("   ", 30.0f, env_measure, NULL, lines, 2));
     TEST_ASSERT_EQUAL_size_t(0, skiff_app_wrap(NULL, 30.0f, env_measure, NULL, lines, 2));
+}
+
+static void test_wrapping_ends_lines_at_line_breaks(void) {
+    char lines[6][SKIFF_TEXT_MAX];
+    TEST_PRINTF("a break ends a line; a second one leaves an empty line; blanks around them go");
+    size_t count =
+        skiff_app_wrap("one two\nthree  \n\n  four five six", 60.0f, env_measure, NULL, lines, 6);
+    for (size_t i = 0; i < count; i++) {
+        TEST_PRINTF("  line %zu: '%s'", i, lines[i]);
+    }
+    TEST_ASSERT_EQUAL_size_t(5, count);
+    TEST_ASSERT_EQUAL_STRING("one two", lines[0]);
+    TEST_ASSERT_EQUAL_STRING("three", lines[1]);
+    TEST_ASSERT_EQUAL_STRING("", lines[2]);
+    TEST_ASSERT_EQUAL_STRING("four five", lines[3]);
+    TEST_ASSERT_EQUAL_STRING("six", lines[4]);
+    TEST_PRINTF("a line that ends where its paragraph does takes that break, not an empty line");
+    count = skiff_app_wrap("aaaaa bbbb\ncc", 60.0f, env_measure, NULL, lines, 6);
+    TEST_ASSERT_EQUAL_size_t(2, count);
+    TEST_ASSERT_EQUAL_STRING("aaaaa bbbb", lines[0]);
+    TEST_ASSERT_EQUAL_STRING("cc", lines[1]);
+    TEST_PRINTF("the last line takes what is left, its breaks read as spaces");
+    count = skiff_app_wrap("aa\nbb\n\ncc dd ee", 60.0f, env_measure, NULL, lines, 2);
+    TEST_ASSERT_EQUAL_size_t(2, count);
+    TEST_ASSERT_EQUAL_STRING("aa", lines[0]);
+    TEST_ASSERT_EQUAL_STRING("bb cc d...", lines[1]);
+    TEST_PRINTF("a break at the very end is no line of its own");
+    count = skiff_app_wrap("aa\nbb\n", 60.0f, env_measure, NULL, lines, 3);
+    TEST_ASSERT_EQUAL_size_t(2, count);
+    TEST_ASSERT_EQUAL_STRING("bb", lines[1]);
+
+    TEST_PRINTF("spans: the same lines, as places in the text");
+    static const char text[] = "one two\nthree  \n\n  four five six";
+    skiff_app_span spans[6];
+    int cut = -1;
+    count = skiff_app_wrap_spans(text, 60.0f, env_measure, NULL, spans, 6, &cut);
+    TEST_ASSERT_EQUAL_size_t(5, count);
+    TEST_ASSERT_EQUAL_INT(0, cut);
+    static const char *const EXPECTED[] = {"one two", "three", "", "four five", "six"};
+    for (size_t i = 0; i < count; i++) {
+        TEST_PRINTF("  span %zu: %zu+%zu '%.*s'", i, spans[i].start, spans[i].length,
+                    (int)spans[i].length, text + spans[i].start);
+        TEST_ASSERT_EQUAL_size_t(strlen(EXPECTED[i]), spans[i].length);
+        TEST_ASSERT_EQUAL_INT(0, strncmp(EXPECTED[i], text + spans[i].start, spans[i].length));
+    }
+    TEST_PRINTF("more lines than spans: the first ones, and the cut said; an empty line before "
+                "the cut is dropped, so a mark after the last line ends text");
+    count = skiff_app_wrap_spans(text, 60.0f, env_measure, NULL, spans, 3, &cut);
+    TEST_ASSERT_EQUAL_size_t(2, count);
+    TEST_ASSERT_EQUAL_INT(1, cut);
+    count = skiff_app_wrap_spans(text, 60.0f, env_measure, NULL, spans, 4, &cut);
+    TEST_ASSERT_EQUAL_size_t(4, count);
+    TEST_ASSERT_EQUAL_INT(1, cut);
+    TEST_PRINTF("exactly as many: no cut");
+    count = skiff_app_wrap_spans(text, 60.0f, env_measure, NULL, spans, 5, &cut);
+    TEST_ASSERT_EQUAL_size_t(5, count);
+    TEST_ASSERT_EQUAL_INT(0, cut);
+    TEST_ASSERT_EQUAL_size_t(0,
+                             skiff_app_wrap_spans("  ", 60.0f, env_measure, NULL, spans, 5, &cut));
+    TEST_ASSERT_EQUAL_size_t(0,
+                             skiff_app_wrap_spans(NULL, 60.0f, env_measure, NULL, spans, 5, &cut));
+    TEST_ASSERT_EQUAL_INT(0, cut);
+    TEST_ASSERT_EQUAL_size_t(0, skiff_app_wrap_spans(text, 60.0f, NULL, NULL, spans, 5, NULL));
+    TEST_ASSERT_EQUAL_size_t(0,
+                             skiff_app_wrap_spans(text, 60.0f, env_measure, NULL, NULL, 5, NULL));
+}
+
+/* ---- The details screen's facts and description ---- */
+
+/* ROM id's details with fields (JSON members) after its names: its description and facts. */
+static fake_route *serve_rom_with_metadata(unsigned id, const char *fields) {
+    static char raw[2 * RAW_MAX];
+    char item[512];
+    rom_item(item, sizeof item, id);
+    item[strlen(item) - 1] = '\0';
+    snprintf(raw, sizeof raw,
+             JSON_OK "%s,%s,\"files\":[{\"rom_id\":%u,\"file_name\":\"Game %u.iso\","
+                     "\"file_size_bytes\":%u,\"crc_hash\":\"%08x\"}]}",
+             item, fields, id, id, BODY_BYTES, (unsigned)body_crc);
+    char path[64];
+    snprintf(path, sizeof path, "/api/roms/%u", id);
+    return serve_raw(path, raw);
+}
+
+/* Synthetic facts as RomM 5.4 sends them for a game a provider identified. */
+#define EXAMPLE_FACTS                                                                              \
+    "\"regions\":[\"USA\",\"Europe\"],\"languages\":[\"English\",\"Spanish\",\"No Language\"],"    \
+    "\"metadatum\":{\"genres\":[\"Action\",\"Role-playing (RPG)\",\"Shooter\"],"                   \
+    "\"developers\":[\"Studio X\"],\"publishers\":[\"Pub Co.\"],\"player_count\":\"1-2\","         \
+    "\"first_release_date\":852076800000,\"average_rating\":82.4}"
+
+/* A description of count numbered paragraphs, each of words words, as a JSON member. */
+static void description_member(unsigned count, unsigned words, char *out, size_t size) {
+    size_t used = (size_t)snprintf(out, size, "\"summary\":\"");
+    for (unsigned p = 1; p <= count; p++) {
+        used += (size_t)snprintf(out + used, size - used, "%sP%u", p > 1 ? "\\n\\n" : "", p);
+        for (unsigned w = 1; w < words; w++) {
+            used += (size_t)snprintf(out + used, size - used, " word%u", w);
+        }
+    }
+    TEST_ASSERT_LESS_THAN_size_t(size, used + 2);
+    snprintf(out + used, size - used, "\"");
+}
+
+/* Every line within its width: the description's leaves its arrows room, the rest the cover. */
+static void assert_details_layout(void) {
+    const skiff_app_view *v = view();
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_LINES_MAX, v->line_count);
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(SKIFF_APP_HINTS_MAX, v->hint_count);
+    for (size_t i = 0; i < v->line_count; i++) {
+        const int description = v->has_scroll && i >= v->scroll_line;
+        const float width = description ? APP_DESCRIPTION_WIDTH : SKIFF_APP_COVER_TEXT_WIDTH;
+        if (env_measure(NULL, v->lines[i]) > width) {
+            TEST_PRINTF("line %zu is %.0f wide, over %.0f: '%s'", i, env_measure(NULL, v->lines[i]),
+                        width, v->lines[i]);
+            TEST_FAIL();
+        }
+    }
+    if (v->has_scroll) {
+        TEST_ASSERT_GREATER_THAN_size_t(0, v->scroll_line);
+        TEST_ASSERT_LESS_THAN_size_t(v->line_count, v->scroll_line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("", v->lines[v->scroll_line - 1], "the rule's line");
+        TEST_ASSERT_EQUAL_FLOAT(SKIFF_APP_COVER_TEXT_WIDTH, v->scroll_width);
+        const size_t room = SKIFF_APP_LINES_MAX - v->scroll_line;
+        const size_t lines = app->description.line_count;
+        TEST_ASSERT_EQUAL_size_t(room < lines ? room : lines, app->description.window);
+        TEST_ASSERT_EQUAL_size_t(v->scroll_line + app->description.window, v->line_count);
+    }
+    const int scrolls = v->more_above || v->more_below;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        scrolls, hints(SKIFF_UI_ACTION_UP | SKIFF_UI_ACTION_DOWN, english(SKIFF_TEXT_SCROLL)),
+        "Scroll is offered exactly when the description overflows");
+}
+
+static void test_a_games_details_show_its_facts_and_description(void) {
+    open_paired_library(1);
+    serve_rom_with_metadata(1, "\"summary\":\"A young pilot must defend the colony.\\n\\nWaves "
+                               "of ships \\u2014 and a \\u201ctruth\\u201d.\"," EXAMPLE_FACTS);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    assert_details_layout();
+    static const char *const EXPECTED[] = {
+        "Game 1",
+        "Game 1.iso",
+        "1997 | Action, Role-playing (RPG) | 1-2 players",
+        "Rating 82/100 | Studio X / Pub Co. | USA, Europe",
+        "En, Es | Size: 2 KB",
+        "Free space: 1.5 GB",
+        "",
+        "A young pilot must defend the colony.",
+        "",
+        "Waves of ships - and a \"truth\".",
+    };
+    TEST_ASSERT_EQUAL_size_t(sizeof EXPECTED / sizeof EXPECTED[0], view()->line_count);
+    for (size_t i = 0; i < view()->line_count; i++) {
+        TEST_ASSERT_EQUAL_STRING(EXPECTED[i], view()->lines[i]);
+    }
+    TEST_PRINTF("a short description shows whole under its rule, with nothing to scroll");
+    TEST_ASSERT_TRUE(view()->has_scroll);
+    TEST_ASSERT_EQUAL_size_t(7, view()->scroll_line);
+    TEST_ASSERT_FALSE(view()->more_above);
+    TEST_ASSERT_FALSE(view()->more_below);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD)));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_BACK, english(SKIFF_TEXT_BACK)));
+    TEST_PRINTF("Up and Down change nothing when it all fits");
+    frame(SKIFF_UI_ACTION_DOWN);
+    frame(SKIFF_UI_ACTION_UP);
+    TEST_ASSERT_EQUAL_STRING(EXPECTED[7], view()->lines[7]);
+    TEST_ASSERT_EQUAL_size_t(0, app->description.first);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+}
+
+static void test_a_game_without_metadata_shows_its_details_as_before(void) {
+    open_paired_library(1);
+    fake_route *details = serve_rom_with_cover(1, NULL);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    assert_details_layout();
+    static const char *const EXPECTED[] = {"Game 1", "Game 1.iso", "Size: 2 KB",
+                                           "Free space: 1.5 GB"};
+    TEST_ASSERT_EQUAL_size_t(sizeof EXPECTED / sizeof EXPECTED[0], view()->line_count);
+    for (size_t i = 0; i < view()->line_count; i++) {
+        TEST_ASSERT_EQUAL_STRING(EXPECTED[i], view()->lines[i]);
+    }
+    TEST_ASSERT_FALSE(view()->has_scroll);
+    TEST_ASSERT_FALSE(view()->more_above || view()->more_below);
+    TEST_ASSERT_EQUAL_size_t(2, view()->hint_count);
+    TEST_PRINTF(
+        "RomM's empty metadata (null summary, player_count \"1\", empty lists) is the same");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    /* Later routes for a path answer once the earlier one is used up. */
+    details->max_uses = details->uses;
+    details = serve_rom_with_metadata(
+        1, "\"summary\":null,\"regions\":[],\"languages\":[],\"metadatum\":"
+           "{\"genres\":[],\"companies\":[],\"publishers\":[],"
+           "\"developers\":[],\"player_count\":\"1\",\"first_release_date\":"
+           "null,\"average_rating\":null}");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_size_t(sizeof EXPECTED / sizeof EXPECTED[0], view()->line_count);
+    for (size_t i = 0; i < view()->line_count; i++) {
+        TEST_ASSERT_EQUAL_STRING(EXPECTED[i], view()->lines[i]);
+    }
+    TEST_ASSERT_FALSE(view()->has_scroll);
+    TEST_PRINTF("a blank summary leaves no rule either");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    details->max_uses = details->uses;
+    serve_rom_with_metadata(1, "\"summary\":\" \\n\\t \"");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_size_t(sizeof EXPECTED / sizeof EXPECTED[0], view()->line_count);
+    TEST_ASSERT_FALSE(view()->has_scroll);
+}
+
+typedef struct facts_case {
+    const char *what;
+    const char *fields;
+    const char *const lines[APP_DETAILS_FACT_LINES];
+} facts_case;
+
+static void test_facts_are_shown_only_when_romm_has_them(void) {
+    static const facts_case CASES[] = {
+        {"year alone",
+         "\"metadatum\":{\"first_release_date\":852076800000}",
+         {"1997 | Size: 2 KB"}},
+        {"one genre and players",
+         "\"metadatum\":{\"genres\":[\"Puzzle\"],\"player_count\":\"4\"}",
+         {"Puzzle | 4 players | Size: 2 KB"}},
+        {"the same studio develops and publishes",
+         "\"metadatum\":{\"developers\":[\"Studio X\"],\"publishers\":[\"Studio X\"]}",
+         {"Studio X | Size: 2 KB"}},
+        {"a publisher alone",
+         "\"metadatum\":{\"publishers\":[\"Pub Co.\"]}",
+         {"Pub Co. | Size: 2 KB"}},
+        {"a company from an older scan",
+         "\"metadatum\":{\"companies\":[\"Old Co.\"]}",
+         {"Old Co. | Size: 2 KB"}},
+        {"regions alone, and a language RomM has no code for",
+         "\"regions\":[\"Japan\"],\"languages\":[\"Klingon\"]",
+         {"Japan | Klingon | Size: 2 KB"}},
+        {"a game without language", "\"languages\":[\"No Language\"]", {"Size: 2 KB"}},
+        {"a rating rounds",
+         "\"metadatum\":{\"average_rating\":99.5}",
+         {"Rating 100/100 | Size: 2 KB"}},
+        {"a fact too wide for a line alone is cut, the rest still shown",
+         "\"metadatum\":{\"developers\":[\"An Extremely Long Developer Name That Goes On And "
+         "On\"]},\"regions\":[\"USA\"]",
+         {"An Extremely Long Developer Name That Goes On...", "USA | Size: 2 KB"}},
+        {"more facts than three lines hold: the last one is cut",
+         "\"metadatum\":{\"genres\":[\"Genre Number One Is Long\",\"Genre Number Two Is "
+         "Long\"],\"developers\":[\"Developer Studio Name Long\"],\"publishers\":[\"Publisher "
+         "Company Name Long\"],\"player_count\":\"1-8\",\"first_release_date\":852076800000,"
+         "\"average_rating\":70},\"regions\":[\"USA\",\"Europe\",\"Japan\",\"World\"],"
+         "\"languages\":[\"English\",\"French\",\"German\",\"Italian\",\"Spanish\",\"Dutch\"]",
+         {"1997", "Genre Number One Is Long, Genre Number Two Is...",
+          "1-8 players | Rating 70/100 | Developer Studi..."}},
+    };
+    open_paired_library(1);
+    fake_route *details = NULL;
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+        TEST_PRINTF("%s", CASES[i].what);
+        if (details != NULL) {
+            frame(SKIFF_UI_ACTION_BACK);
+            run_until(SKIFF_APP_SCREEN_LIBRARY);
+            details->max_uses = details->uses;
+        }
+        details = serve_rom_with_metadata(1, CASES[i].fields);
+        frame(SKIFF_UI_ACTION_CONFIRM);
+        run_until(SKIFF_APP_SCREEN_DETAILS);
+        assert_details_layout();
+        /* After the name and the file name. */
+        const size_t first_fact = 2;
+        size_t expected_count = 0;
+        while (expected_count < APP_DETAILS_FACT_LINES && CASES[i].lines[expected_count] != NULL) {
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(CASES[i].lines[expected_count],
+                                             view()->lines[first_fact + expected_count],
+                                             CASES[i].what);
+            expected_count++;
+        }
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("Free space: 1.5 GB",
+                                         view()->lines[first_fact + expected_count], CASES[i].what);
+    }
+}
+
+/* The description lines the view shows, joined with '|', into out. */
+static void shown_description(char *out, size_t size) {
+    out[0] = '\0';
+    for (size_t i = view()->scroll_line; i < view()->line_count; i++) {
+        strncat(out, view()->lines[i], size - strlen(out) - 1);
+        strncat(out, "|", size - strlen(out) - 1);
+    }
+}
+
+static void test_a_long_description_scrolls_under_the_facts(void) {
+    open_paired_library(1);
+    static char fields[RAW_MAX];
+    /* 20 paragraphs of 2 lines and a rule's gap each: 59 lines at the description's width. */
+    description_member(20, 12, fields, sizeof fields);
+    strncat(fields, "," EXAMPLE_FACTS, sizeof fields - strlen(fields) - 1);
+    serve_rom_with_metadata(1, fields);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    assert_details_layout();
+    const app_description *description = &app->description;
+    const size_t window = description->window;
+    TEST_PRINTF("%zu lines of description, %zu shown from line %zu of the view",
+                description->line_count, window, view()->scroll_line);
+    TEST_ASSERT_EQUAL_size_t(59, description->line_count);
+    TEST_ASSERT_EQUAL_size_t(SKIFF_APP_LINES_MAX - view()->scroll_line, window);
+    TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->scroll_line - 2]);
+    TEST_ASSERT_FALSE(view()->more_above);
+    TEST_ASSERT_TRUE(view()->more_below);
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_UP | SKIFF_UI_ACTION_DOWN, english(SKIFF_TEXT_SCROLL)));
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_BACK), view()->hints[view()->hint_count - 1].label);
+    TEST_ASSERT_EQUAL_STRING_LEN("P1 word1", view()->lines[view()->scroll_line], 8);
+
+    TEST_PRINTF("Up at the top changes nothing");
+    char before[RAW_MAX];
+    char after[RAW_MAX];
+    shown_description(before, sizeof before);
+    frame(SKIFF_UI_ACTION_UP);
+    shown_description(after, sizeof after);
+    TEST_ASSERT_EQUAL_STRING(before, after);
+
+    TEST_PRINTF("Down moves it a line, without wrapping it again");
+    const char *second = app->rom.metadata.description + description->lines[1].start;
+    measure_calls = 0;
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_PRINTF("%lu measures to show it again", measure_calls);
+    TEST_ASSERT_LESS_THAN_UINT32(40, (uint32_t)measure_calls);
+    TEST_ASSERT_EQUAL_size_t(1, description->first);
+    TEST_ASSERT_EQUAL_STRING_LEN(second, view()->lines[view()->scroll_line],
+                                 description->lines[1].length);
+    TEST_ASSERT_TRUE(view()->more_above);
+    TEST_ASSERT_TRUE(view()->more_below);
+    assert_details_layout();
+
+    TEST_PRINTF("the facts, the state and the free space stay put above it");
+    TEST_ASSERT_EQUAL_STRING("Game 1", view()->lines[0]);
+    TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[view()->scroll_line - 2]);
+
+    TEST_PRINTF("R pages down a window, L back up; both stop at the ends");
+    frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    TEST_ASSERT_EQUAL_size_t(1 + window, description->first);
+    frame(SKIFF_UI_ACTION_PAGE_UP);
+    TEST_ASSERT_EQUAL_size_t(1, description->first);
+    frame(SKIFF_UI_ACTION_PAGE_UP);
+    TEST_ASSERT_EQUAL_size_t(0, description->first);
+    const size_t last_first = description->line_count - window;
+    for (int i = 0; i < 10; i++) {
+        frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    }
+    TEST_ASSERT_EQUAL_size_t(last_first, description->first);
+    TEST_PRINTF("at the end: the last paragraph's end on the last line, nothing below");
+    TEST_ASSERT_TRUE(view()->more_above);
+    TEST_ASSERT_FALSE(view()->more_below);
+    TEST_ASSERT_NOT_NULL(strstr(view()->lines[view()->line_count - 1], "word11"));
+    TEST_ASSERT_TRUE(hints(SKIFF_UI_ACTION_UP | SKIFF_UI_ACTION_DOWN, english(SKIFF_TEXT_SCROLL)));
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_EQUAL_size_t(last_first, description->first);
+    assert_details_layout();
+
+    TEST_PRINTF("a rebuild for something else (a note) keeps the place");
+    app_note(app, "Note");
+    frame(0);
+    TEST_ASSERT_EQUAL_size_t(last_first, description->first);
+    TEST_ASSERT_FALSE(view()->more_below);
+
+    TEST_PRINTF("Down is not Download, nor does it leave the screen");
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_EQUAL_size_t(0, app->queue.count);
+
+    TEST_PRINTF("the game's details again start at the top");
+    frame(SKIFF_UI_ACTION_BACK);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_ASSERT_EQUAL_size_t(0, description->first);
+    TEST_ASSERT_FALSE(view()->more_above);
+    TEST_ASSERT_TRUE(view()->more_below);
+}
+
+static void test_a_description_with_too_many_lines_ends_cut(void) {
+    open_paired_library(1);
+    static char fields[RAW_MAX];
+    /* One-word paragraphs: two lines each (the word and the gap), past the lines kept. */
+    description_member(APP_DESCRIPTION_LINES_MAX, 1, fields, sizeof fields);
+    serve_rom_with_metadata(1, fields);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    /* The last line kept would be the empty one after P64: it goes, so the mark ends text. */
+    TEST_ASSERT_EQUAL_size_t(APP_DESCRIPTION_LINES_MAX - 1, app->description.line_count);
+    TEST_ASSERT_TRUE(app->description.cut);
+    for (int i = 0; i < APP_DESCRIPTION_LINES_MAX; i++) {
+        frame(SKIFF_UI_ACTION_PAGE_DOWN);
+    }
+    const char *last = view()->lines[view()->line_count - 1];
+    TEST_PRINTF("the last line kept: '%s'", last);
+    TEST_ASSERT_FALSE(view()->more_below);
+    TEST_ASSERT_EQUAL_STRING("P64" SKIFF_UI_ELLIPSIS, last);
+    assert_details_layout();
+}
+
+static void test_a_refused_game_keeps_its_sentence_with_metadata(void) {
+    open_paired_library(1);
+    static char raw[2 * RAW_MAX];
+    static char fields[RAW_MAX];
+    description_member(20, 12, fields, sizeof fields);
+    snprintf(raw, sizeof raw,
+             JSON_OK "{\"id\":1,\"platform_id\":1,\"name\":\"Game 1\",\"fs_name\":\"Game 1.zip\","
+                     "\"fs_size_bytes\":%u,%s," EXAMPLE_FACTS ",\"files\":[{\"rom_id\":1,"
+                     "\"file_name\":\"Game 1.zip\",\"file_size_bytes\":%u}]}",
+             BODY_BYTES, fields, BODY_BYTES);
+    serve_raw("/api/roms/1", raw);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    assert_details_layout();
+    char joined[SKIFF_APP_LINES_MAX * SKIFF_TEXT_MAX];
+    joined[0] = '\0';
+    for (size_t i = 0; i < view()->scroll_line; i++) {
+        strncat(joined, view()->lines[i], sizeof joined - strlen(joined) - 2);
+        strncat(joined, " ", sizeof joined - strlen(joined) - 1);
+    }
+    TEST_PRINTF("above the description: %s", joined);
+    TEST_ASSERT_NOT_NULL(strstr(joined, english(SKIFF_TEXT_INSTALL_UNKNOWN_EXTENSION)));
+    TEST_ASSERT_FALSE(hints(SKIFF_UI_ACTION_CONFIRM, english(SKIFF_TEXT_DOWNLOAD)));
+    TEST_ASSERT_TRUE(view()->more_below);
+    TEST_PRINTF("Confirm still does nothing, Down still scrolls");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    frame(SKIFF_UI_ACTION_DOWN);
+    TEST_ASSERT_EQUAL_INT(SKIFF_APP_SCREEN_DETAILS, view()->screen);
+    TEST_ASSERT_EQUAL_size_t(1, app->description.first);
+}
+
+static void test_a_queued_game_shows_its_state_above_the_description(void) {
+    open_paired_library(1);
+    static char fields[RAW_MAX];
+    description_member(2, 4, fields, sizeof fields);
+    strncat(fields, "," EXAMPLE_FACTS, sizeof fields - strlen(fields) - 1);
+    serve_rom_with_metadata(1, fields);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    TEST_PRINTF("queued: the details say so above the description");
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    TEST_ASSERT_EQUAL_size_t(1, app->queue.count);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_DETAILS);
+    assert_details_layout();
+    const size_t state_line = view()->scroll_line - 3;
+    TEST_PRINTF("state line: '%s'", view()->lines[state_line]);
+    TEST_ASSERT_EQUAL_STRING(english(SKIFF_TEXT_QUEUE_WAITING), view()->lines[state_line]);
+    TEST_ASSERT_EQUAL_STRING("Free space: 1.5 GB", view()->lines[state_line + 1]);
+    TEST_ASSERT_EQUAL_STRING_LEN("P1 word1", view()->lines[view()->scroll_line], 8);
 }
 
 static int lock_takes;
@@ -6925,6 +7386,14 @@ int main(void) {
     RUN_TEST(test_an_unset_ca_file_trusts_the_bundled_cas);
     RUN_TEST(test_the_app_browses_and_downloads_with_the_bundled_cas);
     RUN_TEST(test_wrapping_breaks_between_words_and_inside_long_ones);
+    RUN_TEST(test_wrapping_ends_lines_at_line_breaks);
+    RUN_TEST(test_a_games_details_show_its_facts_and_description);
+    RUN_TEST(test_a_game_without_metadata_shows_its_details_as_before);
+    RUN_TEST(test_facts_are_shown_only_when_romm_has_them);
+    RUN_TEST(test_a_long_description_scrolls_under_the_facts);
+    RUN_TEST(test_a_description_with_too_many_lines_ends_cut);
+    RUN_TEST(test_a_refused_game_keeps_its_sentence_with_metadata);
+    RUN_TEST(test_a_queued_game_shows_its_state_above_the_description);
     RUN_TEST(test_bad_arguments_and_locks);
     RUN_TEST(test_the_launch_check_syncs_what_needs_no_choice_and_counts_the_rest);
     RUN_TEST(test_a_conflict_shows_both_saves_and_keep_this_psps_overwrites);

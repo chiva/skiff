@@ -32,6 +32,7 @@ Skiff is an independent project. It is not made by or affiliated with the RomM t
 | Pair with RomM by approving a code in the web UI (no typing tokens) | ✅ | |
 | HTTPS, your own certificate authority, and client certificates (mTLS) | ✅ | |
 | Cover art beside each game's details, kept on the Memory Stick (0.3.0) | ✅ | |
+| A game's facts and description from RomM beside its cover, the description scrolling (0.6.0) | ✅ | |
 | Favourites and collections from RomM, and "download all" for either (0.4.0) | ✅ | |
 | Sync PSP saves with RomM: one-sided changes sync on their own, and Skiff asks only when it cannot safely choose (0.4.0) | ✅ | |
 | Get games sent from RomM's web UI (Install on device, RomM 5.4) (0.5.0) | ✅ | |

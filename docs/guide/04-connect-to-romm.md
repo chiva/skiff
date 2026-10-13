@@ -76,6 +76,15 @@ installed. The games themselves stay on the Memory Stick.
   **Changed in RomM** means RomM now has a different file for that game.
 - Select a game to see its size and the free space on the Memory Stick, then choose **Download**.
   For a game already installed, Skiff asks before replacing your copy.
+- From Skiff 0.6.0, a game's details also show what RomM knows about it, when it knows it: the
+  year, genres, number of players, rating (RomM's average of its metadata providers' scores, out
+  of 100), developer and publisher, regions and languages, and under a line its description. A
+  long description scrolls with **Up** and **Down** (**L** and **R** a screen at a time); arrows
+  beside it show there is more, and **Scroll** appears among the buttons. A game RomM has not
+  identified with a metadata provider shows only its name, file, size and state, as before. Skiff
+  writes curly quotes, dashes and "…" as plain `'`, `"`, `-` and `...`, and shows at most about 2
+  KB of a description (its end then reads `...`). The PSP's font has no Japanese, Chinese or Korean
+  characters: they show as placeholders.
 - From Skiff 0.3.0, a game with cover art in RomM shows it beside its details, a moment after the
   text (0.5 to 0.8 seconds the first time). Skiff keeps the covers you have seen on the Memory
   Stick (`PSP/GAME/Skiff/covers/`, at most about 4.5 MB), so they come back at once; delete that

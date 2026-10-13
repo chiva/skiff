@@ -572,12 +572,23 @@ static const char *check_app_wrap(void) {
     const size_t count = skiff_app_wrap("A\xC3\xB1"
                                         "adido a las descargas: caf\xC3\xA9",
                                         12.0f, measure_characters, NULL, lines, 4);
-    return count == 4 &&
-                   strcmp(lines[0], "A\xC3\xB1"
-                                    "adido a") == 0 &&
-                   strcmp(lines[3], "caf\xC3\xA9") == 0
+    if (count != 4 ||
+        strcmp(lines[0], "A\xC3\xB1"
+                         "adido a") != 0 ||
+        strcmp(lines[3], "caf\xC3\xA9") != 0) {
+        return "a sentence was not wrapped between words";
+    }
+    /* A description's paragraphs: a line break ends a line, a second one leaves an empty line. */
+    static const char paragraphs[] = "Caf\xC3\xA9 con leche\n\nTres";
+    skiff_app_span spans[4];
+    int cut = 1;
+    const size_t span_count =
+        skiff_app_wrap_spans(paragraphs, 9.0f, measure_characters, NULL, spans, 4, &cut);
+    return span_count == 4 && cut == 0 && spans[0].start == 0 && spans[0].length == 9 &&
+                   spans[1].length == 5 && spans[2].length == 0 &&
+                   strcmp(paragraphs + spans[3].start, "Tres") == 0
                ? NULL
-               : "a sentence was not wrapped between words";
+               : "paragraphs were not wrapped at their line breaks";
 }
 
 /* The download queue's file is written with cJSON's number printing (newlib's snprintf on the

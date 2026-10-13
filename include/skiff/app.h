@@ -55,9 +55,10 @@
       ((progress) ? SKIFF_APP_BLOCK_GAP + SKIFF_APP_PROGRESS_HEIGHT : 0)) /                        \
      SKIFF_APP_LINE_HEIGHT)
 
-/* What the view holds. Twelve body lines take 156 of the body's 228 pixels: room for the pairing
- * screen beside its QR code, with a network error under it. A list alone fills the body. */
-#define SKIFF_APP_LINES_MAX 12
+/* What the view holds: as many lines as fill the body (17 of SKIFF_APP_LINE_HEIGHT under the gap
+ * above the first block), which the details screen uses beside the cover for the game's facts and
+ * description. A list alone fills the body too. */
+#define SKIFF_APP_LINES_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_ROWS_MAX SKIFF_APP_ROWS_FIT(0, 0)
 #define SKIFF_APP_HINTS_MAX 5
 #define SKIFF_APP_TITLE_MAX 64
@@ -223,6 +224,16 @@ typedef struct skiff_app_view {
      * into the app, valid until its next update. */
     int has_cover_box;
     const skiff_cover *cover;
+    /* A window on a longer text at the end of the lines (the details screen's description), from
+     * line scroll_line on, within scroll_width: the empty line just before it is drawn as a rule
+     * scroll_width wide, and an arrow at the window's right edge marks more text above it (beside
+     * its first line, more_above) or below it (beside its last line, more_below). Its lines leave
+     * the arrows SKIFF_APP_SYMBOL_WIDTH. */
+    int has_scroll;
+    size_t scroll_line;
+    float scroll_width;
+    int more_above;
+    int more_below;
     /* Tables under the lines, in order (skiff_app_table); never with lines_below. */
     size_t table_count;
     skiff_app_table tables[SKIFF_APP_TABLES_MAX];
@@ -401,11 +412,28 @@ skiff_err skiff_app_transport_settings_from(const skiff_config *config,
 
 /*
  * Breaks text into lines of at most width (measured), between words where it can and between
- * UTF-8 characters where a word alone is too wide. Writes up to max_lines lines of line_size bytes
- * into lines and returns how many; text that does not fit max_lines ends its last line cut with
- * SKIFF_UI_ELLIPSIS.
+ * UTF-8 characters where a word alone is too wide; a line break ('\n') always ends a line, and one
+ * right after another makes an empty line. Writes up to max_lines lines of line_size bytes into
+ * lines and returns how many; text that does not fit max_lines ends its last line cut with
+ * SKIFF_UI_ELLIPSIS, its remaining line breaks read as spaces.
  */
 size_t skiff_app_wrap(const char *text, float width, skiff_ui_measure_fn measure, void *measure_ctx,
                       char (*lines)[SKIFF_TEXT_MAX], size_t max_lines);
+
+/* A line of a wrapped text: length bytes of it from start, under SKIFF_TEXT_MAX. */
+typedef struct skiff_app_span {
+    size_t start;
+    size_t length;
+} skiff_app_span;
+
+/*
+ * Breaks text as skiff_app_wrap() does, but every line, the last included, into spans of text
+ * rather than copies, so a long text is wrapped once and its lines are taken when shown. Returns
+ * how many of max_spans it wrote; *cut (when not NULL) is 1 when text had more lines than that,
+ * and then the lines kept end on text (empty ones before the cut are dropped). 0 for a NULL text,
+ * measure or spans.
+ */
+size_t skiff_app_wrap_spans(const char *text, float width, skiff_ui_measure_fn measure,
+                            void *measure_ctx, skiff_app_span *spans, size_t max_spans, int *cut);
 
 #endif

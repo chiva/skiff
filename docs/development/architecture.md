@@ -172,6 +172,21 @@ dialogs and the network, and reaches it through `skiff_app_env`.
   when RomM answers 403, the screen says to pair again and offers Pair again (the same pairing as
   Settings', which keeps the address, the queue and the installs). A list that cannot load (214
   below, or a lost connection) is said on the screen with Retry, and SELECT still leaves it.
+- **A game's details** (`details_view()` in `src/app/app_view.c`) fill the body beside the
+  160×220 cover box (288 pixels of text, 17 lines of 13): the name and the file name (3 lines each
+  at most), the facts RomM has (year, genres, players, rating, developer / publisher, regions,
+  languages as RomM's two-letter codes, and the size, which every game has) joined with ` | ` and
+  packed into at most 3 lines without splitting one (the last is cut with `...`), then the
+  download state or the refusal, the save line and the free space, as before. Under a rule comes
+  the description, the only part that scrolls: Up and Down move it a line, L and R a window, and
+  the fixed part above it keeps the state and the free space in view. An arrow at the window's
+  right edge marks more above or below, the text leaving it room, and Scroll (the d-pad's arrows)
+  joins the hints only when the description overflows. A game RomM knows nothing about shows only
+  its name, file name, size, state and free space, line for line as before 0.6.0. The description
+  is wrapped once per game into spans of its text (`skiff_app_wrap_spans()`, at most 128 lines;
+  past that the last one shown ends with `...`), so a rebuild of the view (a note, a download's
+  progress, a scroll) measures only the fixed part; wrapping breaks at `\n`, which only the
+  description carries.
 - **Startup order**: heartbeat first (205 below RomM 5.3; a newer release line gets a notice once,
   remembered as `[skiff] romm_notice`), then pairing when there is no token, then the `psp`
   platform. The worker starts once RomM answered, with its own copies of the server address, token
@@ -293,7 +308,10 @@ The UI draws with the PSP's GU directly and renders text with intraFont, rather 
   renderer is fragile.
 - intraFont draws with the fonts in the PSP firmware, so nothing is bundled. Skiff loads only the
   Latin font (`ltn0.pgf`), which covers the accented letters English and Spanish need; a character
-  it lacks is drawn as a placeholder.
+  it lacks is drawn as a placeholder. Text from RomM's metadata has its typographic punctuation
+  (curly quotes, dashes, the ellipsis) made ASCII when it is parsed (see
+  [RomM integration](#romm-integration)): `ltn0.pgf`'s coverage past Latin-1 was not checked on
+  hardware, and ASCII is certain.
 - Japanese is not supported at first: intraFont loads a font file whole into the heap, and the
   Japanese one costs megabytes on a 32 MB PSP. If players ask for it, `jpn0.pgf` becomes the Latin
   font's fallback (`intraFontSetAltFont()`), loaded only when a string needs it. Text is UTF-8
@@ -311,7 +329,9 @@ The UI is split along the platform line:
   confirm and back follow the console's own setting, so Circle confirms on Japanese consoles and
   Cross elsewhere. A held d-pad direction or shoulder button repeats after 20 frames, then every 4.
   It also holds a scrolling list (up and down wrap, L and R page and stop at the ends), and text cut
-  to a width between UTF-8 characters with `...`, since the Latin firmware font has no `…`.
+  to a width between UTF-8 characters with `...`, since the Latin firmware font has no `…`. The
+  face buttons' symbols and the d-pad's up and down arrows (the Scroll hint, and the marks of a
+  scrolling text) are pixel patterns tested here and drawn one sprite a pixel.
   Measuring text costs time on the PSP, so labels are cut once, when they change, not every frame.
   The rest is download progress (percent, a rate smoothed over 2-second windows, time left) and
   sizes and durations as the player reads them (`1,5 GB` in Spanish, `2 h 05 min`).

@@ -40,6 +40,8 @@ enum {
 #define SKIFF_PSP_UI_COLOUR_SELECTION 0xFF805020U
 #define SKIFF_PSP_UI_COLOUR_BAR 0xFF404040U
 #define SKIFF_PSP_UI_COLOUR_BAR_FILL 0xFF30B060U
+/* The lines under the header, over the footer and before a text that scrolls. */
+#define SKIFF_PSP_UI_COLOUR_RULE 0xFF604030U
 /* Amber, for what needs the player (a save to choose). */
 #define SKIFF_PSP_UI_COLOUR_ATTENTION 0xFF30B8FFU
 /* Laid over the screen while a system dialog is open, as games do, so the dialog stands out. */
@@ -121,9 +123,10 @@ void skiff_psp_ui_backdrop(const skiff_psp_ui *ui);
 void skiff_psp_ui_header(const skiff_psp_ui *ui, const char *title, const char *status);
 /* Button hints along the footer, left to right. */
 void skiff_psp_ui_footer(const skiff_psp_ui *ui, const skiff_psp_ui_hint *hints, size_t count);
-/* The symbol of the face button action is on (SKIFF_UI_ACTION_CONFIRM, _BACK, _MENU, _EXTRA), as
- * the footer draws it, at x for text with its baseline at y: SKIFF_PSP_UI_SYMBOL_WIDTH wide with
- * its gap. Nothing for another action. */
+/* The symbol of the face button action is on (SKIFF_UI_ACTION_CONFIRM, _BACK, _MENU, _EXTRA), or
+ * the d-pad's arrow (SKIFF_UI_ACTION_UP, _DOWN, also the marks of a text that scrolls), as the
+ * footer draws it, at x for text with its baseline at y: SKIFF_PSP_UI_SYMBOL_WIDTH wide with its
+ * gap. Nothing for another action. A hint for both UP and DOWN shows both arrows. */
 void skiff_psp_ui_symbol(const skiff_psp_ui *ui, unsigned action, int x, int y);
 
 /* The label of item index, already fitted to the list's width (skiff_ui_fit_text()). */

@@ -79,7 +79,9 @@ unsigned skiff_ui_input_update(skiff_ui_input *input, unsigned buttons);
 #define SKIFF_UI_SYMBOL_SIZE 9
 typedef char skiff_ui_symbol_row[SKIFF_UI_SYMBOL_SIZE + 1];
 
-/* The pixels of SKIFF_UI_BUTTON_CROSS, _CIRCLE, _TRIANGLE or _SQUARE; NULL for another button. */
+/* The pixels of SKIFF_UI_BUTTON_CROSS, _CIRCLE, _TRIANGLE or _SQUARE, or the d-pad's
+ * SKIFF_UI_BUTTON_UP or _DOWN (a solid arrow, also the mark of text that scrolls); NULL for another
+ * button. */
 const skiff_ui_symbol_row *skiff_ui_symbol_pixels(unsigned button);
 
 /* ---- The backlight ---- */

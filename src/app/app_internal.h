@@ -40,6 +40,18 @@ typedef struct app_header_text {
 /* Lines a game's title and its file name each take at most on the details screen, beside the
  * cover: the size, the download state and the free space always fit under them. */
 #define APP_DETAILS_NAME_LINES 3
+/* The details screen's facts (year, genres, players, rating, companies, regions, languages, size)
+ * joined into lines of their own beside the cover: at most this many, the last cut with "..." when
+ * more remain. */
+#define APP_DETAILS_FACT_LINES 3
+/* What joins two facts on a line. */
+#define APP_DETAILS_FACT_SEPARATOR " | "
+/* The description scrolls under the facts, wrapped to what the cover leaves less the room of the
+ * arrows that mark more text (skiff_app_view.has_scroll), once per game: at most this many lines.
+ * A description of 2 KiB in ordinary prose takes about 45; more than this only comes of many short
+ * paragraphs, and its last line shown ends with SKIFF_UI_ELLIPSIS. */
+#define APP_DESCRIPTION_WIDTH (SKIFF_APP_COVER_TEXT_WIDTH - (float)SKIFF_APP_SYMBOL_WIDTH)
+#define APP_DESCRIPTION_LINES_MAX 128
 /* An open collection's name as the library's title, in the measure's units: drawn
  * SKIFF_APP_TITLE_SCALE the size of body text, it leaves the status on its right room for the
  * game count and the save notes. */
@@ -358,6 +370,20 @@ typedef struct app_pairing {
     skiff_ui_qr qr;
 } app_pairing;
 
+/* The details screen's description, wrapped (into spans of app->rom.metadata.description) the
+ * first time the game's details show and kept until another game's come: measuring text is slow
+ * on the PSP, and the view is built again for every change on screen. */
+typedef struct app_description {
+    int wrapped;
+    /* More lines than APP_DESCRIPTION_LINES_MAX: the last one ends with SKIFF_UI_ELLIPSIS. */
+    int cut;
+    size_t line_count;
+    skiff_app_span lines[APP_DESCRIPTION_LINES_MAX];
+    /* The first line shown (Up and Down move it), and how many lines the last view showed. */
+    size_t first;
+    size_t window;
+} app_description;
+
 /* What the queue screen shows: a copy of the queue and the active job's progress. */
 typedef struct app_queue_view {
     size_t count;
@@ -423,8 +449,9 @@ struct skiff_app {
     skiff_romm_collection collection;
     /* Why the list could not load (shown with Retry); SKIFF_OK when it did or loads. */
     skiff_err collections_error;
-    /* The ROM on the details screen. */
+    /* The ROM on the details screen, and its description as shown. */
     skiff_romm_rom rom;
+    app_description description;
     /* Its cover (when cover_key is its key, see app_cover_shown()), and the buffer the next one is
      * decoded into. */
     skiff_cover *cover;
@@ -574,6 +601,8 @@ void app_library_open(skiff_app *app);
 void app_library_update(skiff_app *app, unsigned actions);
 void app_library_refresh_markers(skiff_app *app);
 void app_details_update(skiff_app *app, unsigned actions);
+/* Another game's details: its description is wrapped again and shown from its start. */
+void app_details_forget_description(skiff_app *app);
 void app_download_confirmed(skiff_app *app);
 /* Starts the page or ROM request waiting in app->request, once no call runs. */
 void app_request_run(skiff_app *app);

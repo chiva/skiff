@@ -209,6 +209,7 @@ void app_rom_done(skiff_app *app) {
     }
     app->rom = *fetched;
     app->has_rom = 1;
+    app_details_forget_description(app);
     app_saves_rom_loaded(app);
     /* The cover after the details: they decide whether the game downloads, it is decoration. */
     if (app->rom.cover_path[0] != '\0' && !app_cover_shown(app)) {
@@ -511,6 +512,7 @@ void app_library_update(skiff_app *app, unsigned actions) {
         memset(&app->rom, 0, sizeof app->rom);
         app->rom.summary = *rom;
         app->has_rom = 0;
+        app_details_forget_description(app);
         app_set_screen(app, SKIFF_APP_SCREEN_DETAILS);
         app->request = REQUEST_ROM;
     }
@@ -675,8 +677,41 @@ static void download(skiff_app *app) {
     queue_download(app);
 }
 
+void app_details_forget_description(skiff_app *app) {
+    memset(&app->description, 0, sizeof app->description);
+}
+
+/* Up and Down move the description a line, L and R a window, stopping at its ends; only while it
+ * is longer than the room the last view gave it. */
+static void scroll_description(skiff_app *app, unsigned actions) {
+    app_description *description = &app->description;
+    const size_t window = description->window;
+    if (window == 0 || description->line_count <= window) {
+        return;
+    }
+    const size_t last_first = description->line_count - window;
+    size_t first = description->first < last_first ? description->first : last_first;
+    if (actions & SKIFF_UI_ACTION_UP) {
+        first = first > 0 ? first - 1 : 0;
+    }
+    if (actions & SKIFF_UI_ACTION_DOWN) {
+        first = first < last_first ? first + 1 : last_first;
+    }
+    if (actions & SKIFF_UI_ACTION_PAGE_UP) {
+        first = first > window ? first - window : 0;
+    }
+    if (actions & SKIFF_UI_ACTION_PAGE_DOWN) {
+        first = last_first - first > window ? first + window : last_first;
+    }
+    if (first != description->first) {
+        description->first = first;
+        app->dirty = 1;
+    }
+}
+
 void app_details_update(skiff_app *app, unsigned actions) {
     app_request_run(app);
+    scroll_description(app, actions);
     if (actions & SKIFF_UI_ACTION_BACK) {
         /* Leaving while the ROM or its cover loads: the request is dropped, or never made. */
         if (app->call.kind == CALL_ROM || app->call.kind == CALL_COVER) {

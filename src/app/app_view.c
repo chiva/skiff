@@ -1138,8 +1138,14 @@ static void queue_view(skiff_app *app) {
     app_format(app, SKIFF_TEXT_QUEUE_COUNT, count_args, 1, text);
     set_status(app, text);
     const skiff_job *job = &queue->jobs[app->queue_list.selected];
-    if (job->state == SKIFF_JOB_ACTIVE && job->id == queue->progress_job) {
-        progress_lines(app);
+    if (job->state == SKIFF_JOB_ACTIVE) {
+        if (job->id == queue->progress_job) {
+            progress_lines(app);
+        } else {
+            /* No bytes yet (RomM may be converting it): an empty bar, under what holds it up. */
+            view->has_progress = 1;
+            view->percent = 0;
+        }
         if (queue->has_recovery && queue->recovery.job_id == job->id) {
             recovery_line(app);
         }

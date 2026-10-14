@@ -77,7 +77,9 @@ void app_queue_event(skiff_app *app, const skiff_jobs_event *event) {
         break;
     case SKIFF_JOBS_EVENT_PROGRESS:
         if (event->job_id != queue->progress_job) {
+            /* Its first bytes: whatever held it up before them (RomM converting it) is over. */
             queue->progress_job = event->job_id;
+            queue->has_recovery = 0;
             skiff_ui_progress_start(&queue->progress, event->done, event->total, now);
         } else {
             if (event->done > queue->progress.done) {

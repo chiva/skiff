@@ -454,11 +454,7 @@ skiff_err jobs_save_staged(skiff_jobs *jobs) {
 
 void jobs_publish(skiff_jobs *jobs) { jobs->table = jobs->staged; }
 
-void jobs_push_event(skiff_jobs *jobs, const skiff_jobs_event *event) {
-    if (event->kind == SKIFF_JOBS_EVENT_STATE && jobs->has_progress &&
-        jobs->progress.job_id == event->job_id) {
-        jobs->has_progress = 0;
-    }
+static void enqueue_event(skiff_jobs *jobs, const skiff_jobs_event *event) {
     if (jobs->event_count == SKIFF_JOBS_EVENTS_MAX) {
         /* The UI fell behind: the oldest goes, since newer events supersede it. */
         jobs->event_head = (jobs->event_head + 1) % SKIFF_JOBS_EVENTS_MAX;
@@ -466,6 +462,18 @@ void jobs_push_event(skiff_jobs *jobs, const skiff_jobs_event *event) {
     }
     jobs->events[(jobs->event_head + jobs->event_count) % SKIFF_JOBS_EVENTS_MAX] = *event;
     jobs->event_count++;
+}
+
+void jobs_push_event(skiff_jobs *jobs, const skiff_jobs_event *event) {
+    if (jobs->has_progress && jobs->progress.job_id == event->job_id) {
+        /* A state supersedes the job's pending progress; a recovery goes after it, so the UI never
+         * takes progress from before the recovery as news after it. */
+        if (event->kind == SKIFF_JOBS_EVENT_RECOVERY) {
+            enqueue_event(jobs, &jobs->progress);
+        }
+        jobs->has_progress = 0;
+    }
+    enqueue_event(jobs, event);
 }
 
 void jobs_set_progress(skiff_jobs *jobs, const skiff_jobs_event *event) {

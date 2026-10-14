@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/chiva/skiff/compare/v0.6.0...v0.7.0) (2026-10-14)
+
+
+### Features
+
+* **install:** install PSP games stored as CHD through RomM's conversion ([#119](https://github.com/chiva/skiff/issues/119)) ([a6df4b3](https://github.com/chiva/skiff/commit/a6df4b3e6c942d7f02cf7d21752b7c98618479c9))
+* **jobs:** download files RomM converts ([#118](https://github.com/chiva/skiff/issues/118)) ([ef308a8](https://github.com/chiva/skiff/commit/ef308a88e7cd677f9789c7bd292d7f53e4a25886))
+* **romm:** read RomM's download conversion support ([#116](https://github.com/chiva/skiff/issues/116)) ([b2ccb0c](https://github.com/chiva/skiff/commit/b2ccb0cb98706996e2cf38019b5361cabbf4aa54))
+
+
+### Bug Fixes
+
+* **app:** show RomM converting a download before its first bytes ([#121](https://github.com/chiva/skiff/issues/121)) ([aa45994](https://github.com/chiva/skiff/commit/aa459945cf49227b18dffc2dc31e4a1a1997702e))
+
 ## [0.6.0](https://github.com/chiva/skiff/compare/v0.5.0...v0.6.0) (2026-10-13)
 
 

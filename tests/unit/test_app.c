@@ -2365,10 +2365,19 @@ static void test_the_downloads_screen_shows_romm_converting_before_any_bytes(voi
     app->dirty = 1;
     frame(0);
     print_view();
-    TEST_PRINTF("started, no bytes yet: an empty bar and no byte counts");
+    TEST_PRINTF("the stored file, no bytes yet: an empty bar and no byte counts");
     TEST_ASSERT_TRUE(view()->has_progress);
     TEST_ASSERT_EQUAL_UINT(0, view()->percent);
     TEST_ASSERT_EQUAL_size_t(0, view()->line_count);
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_CSO;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("a CSO RomM converts, before RomM answers: the conversion over the empty bar");
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_TRUE(view()->has_progress);
+    TEST_ASSERT_EQUAL_UINT(0, view()->percent);
+    TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
     skiff_jobs_event event = {.kind = SKIFF_JOBS_EVENT_RECOVERY,
                               .job_id = jobs[0].id,
                               .step = SKIFF_JOBS_CONVERTING,
@@ -2376,11 +2385,20 @@ static void test_the_downloads_screen_shows_romm_converting_before_any_bytes(voi
     app_queue_event(app, &event);
     frame(0);
     print_view();
-    TEST_PRINTF("RomM answered 202: what it waits for, over the empty bar");
-    TEST_ASSERT_TRUE(shows("RomM is converting it; asking again in 30 s"));
+    TEST_PRINTF("RomM answered 202: when Skiff asks again, where the speed goes");
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_TRUE(shows("Asking RomM again in 30 s"));
+    TEST_ASSERT_FALSE(shows("RomM is converting it; asking again in 30 s"));
     TEST_ASSERT_TRUE(view()->has_progress);
     TEST_ASSERT_EQUAL_UINT(0, view()->percent);
+    TEST_ASSERT_EQUAL_size_t(2, view()->line_count);
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_STORED;
+    app->dirty = 1;
+    frame(0);
+    TEST_PRINTF("without the line above, the wait says what RomM is doing itself");
+    TEST_ASSERT_TRUE(shows("RomM is converting it; asking again in 30 s"));
     TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_CSO;
     event = (skiff_jobs_event){.kind = SKIFF_JOBS_EVENT_PROGRESS,
                                .job_id = jobs[0].id,
                                .done = 0,
@@ -2389,8 +2407,9 @@ static void test_the_downloads_screen_shows_romm_converting_before_any_bytes(voi
     app->dirty = 1;
     frame(0);
     print_view();
-    TEST_PRINTF("the converted file's first bytes: the conversion line goes");
-    TEST_ASSERT_FALSE(shows("RomM is converting it; asking again in 30 s"));
+    TEST_PRINTF("the converted file's first bytes: its byte counts replace the conversion lines");
+    TEST_ASSERT_FALSE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_FALSE(shows("Asking RomM again in 30 s"));
     TEST_ASSERT_TRUE(shows("0 B of 4.0 MB (0%)"));
 }
 

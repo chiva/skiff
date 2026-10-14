@@ -756,10 +756,10 @@ network is back.
   is queued again on the next launch and resumes from its `.part` file; a damaged queue file is not
   used (the queue starts empty, and the log says so), and an unusable job in it is dropped alone.
   The same file of the same ROM is never queued twice. At most 64 jobs: finished ones make room.
-  While RomM converts a job's file it answers 202: the runner shows "RomM is converting it" and
-  asks again after `Retry-After` (kept within 5–60 s, 30 s without one), keeping the PSP awake;
+  While RomM converts a job's file it answers 202: the runner asks again after `Retry-After` (kept within 5–60 s, 30 s without one), keeping the PSP awake;
   these answers are not failed attempts. After 30 minutes of converting the job fails (222); a
-  406 fails it at once (221).
+  406 fails it at once (221). Until a job's first bytes, Downloads shows an empty bar under "RomM
+  is converting it to CSO" for a job with a format, and each 202's wait under that.
   Many downloads are queued with one save (`skiff_jobs_add_many()`): every request is checked
   before any is queued, and a batch that would pass 64 unfinished jobs queues only those that fit.
   When a download finishes, the runner hands the job to the app (`skiff_jobs_config.downloaded`,

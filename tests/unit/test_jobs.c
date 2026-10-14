@@ -995,6 +995,19 @@ static void test_with_the_switch_off_the_runner_waits_without_failing(void) {
     TEST_ASSERT_EQUAL_INT(1, count_events(SKIFF_JOBS_EVENT_RECOVERY, SKIFF_JOBS_WAITING_FOR_WIFI));
     TEST_ASSERT_EQUAL_INT(1, env_state.rejoins);
     TEST_ASSERT_EQUAL_INT(0, env_state.reloads);
+    size_t wait = 0;
+    while (wait < event_count && !(events[wait].kind == SKIFF_JOBS_EVENT_RECOVERY &&
+                                   events[wait].step == SKIFF_JOBS_WAITING_FOR_WIFI)) {
+        wait++;
+    }
+    TEST_PRINTF("event %zu of %zu is the wait for the Wi-Fi; the one before it is the progress the "
+                "switch cut: %s",
+                wait, event_count,
+                wait > 0 && events[wait - 1].kind == SKIFF_JOBS_EVENT_PROGRESS ? "yes" : "no");
+    TEST_ASSERT_TRUE(wait > 0 && wait < event_count);
+    TEST_ASSERT_EQUAL_INT(SKIFF_JOBS_EVENT_PROGRESS, events[wait - 1].kind);
+    TEST_ASSERT_EQUAL_UINT32(id, events[wait - 1].job_id);
+    TEST_ASSERT_TRUE(events[wait - 1].done > 0);
     assert_complete();
 }
 

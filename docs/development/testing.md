@@ -921,7 +921,7 @@ launch-disc romm-lan` and `scripts/memstick.sh install`.
 | C1.2 | Download it | it downloads as `ISO/Skiff Launch Check CHD.cso`; the log has `RomM converted it to cso, <n> bytes`; the row says Installed |
 | C1.3 | XMB → Game → Memory Stick → launch it | `SKIFF LAUNCH CHECK OK`, also in `result.txt` in Skiff's folder: ARK reads the whole CSO |
 | C1.4 | Quit, launch Skiff, open the library | the launch check CHD still says Installed, not Changed in RomM |
-| C1.5 | Download Skiff Convert Slow; watch Downloads | about 15 s after it starts, "RomM is converting it; asking again in 30 s"; the next ask brings the CSO; the screen stays lit or dims as for any download, the PSP does not sleep |
+| C1.5 | Download Skiff Convert Slow; watch Downloads | from the start, "RomM is converting it to CSO" over an empty bar; about 15 s later "Asking RomM again in 30 s" under it; the next ask brings the CSO and its byte counts; the screen stays lit or dims as for any download, the PSP does not sleep |
 | C1.6 | Empty RomM's conversion cache (`scripts/dev.sh romm-check` does), delete the slow CSO, download Skiff Convert Slow again and cancel it on the "converting" line | cancelled at once; no `.part` file left in `ISO/` |
 | C1.7 | Again with the cache emptied: start Skiff Convert Slow, sleep the PSP on the "converting" line, wake after 10 s | the log has `rejoin` before the next ask; the CSO arrives |
 | C1.8 | Read back | `jobs:` lines (`RomM is converting it to cso`, `RomM converted it to cso`), no error screens; `scripts/memstick.sh results` |

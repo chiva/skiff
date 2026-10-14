@@ -2352,6 +2352,79 @@ static void test_the_downloads_screen_follows_the_worker(void) {
     TEST_ASSERT_TRUE(shows(english(SKIFF_TEXT_QUEUE_WAITING_WIFI)));
 }
 
+static void test_the_downloads_screen_shows_romm_converting_before_any_bytes(void) {
+    open_paired_library(2);
+    open_details(1);
+    frame(SKIFF_UI_ACTION_CONFIRM);
+    run_until(SKIFF_APP_SCREEN_LIBRARY);
+    frame(SKIFF_UI_ACTION_EXTRA);
+    run_until(SKIFF_APP_SCREEN_QUEUE);
+    skiff_job jobs[SKIFF_JOBS_MAX];
+    list_jobs(jobs);
+    app->queue.jobs[0].state = SKIFF_JOB_ACTIVE;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("the stored file, no bytes yet: an empty bar and no byte counts");
+    TEST_ASSERT_TRUE(view()->has_progress);
+    TEST_ASSERT_EQUAL_UINT(0, view()->percent);
+    TEST_ASSERT_EQUAL_size_t(0, view()->line_count);
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_CSO;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("a CSO RomM converts, before RomM answers: the conversion over the empty bar");
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_TRUE(view()->has_progress);
+    TEST_ASSERT_EQUAL_UINT(0, view()->percent);
+    TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
+    skiff_jobs_event event = {.kind = SKIFF_JOBS_EVENT_RECOVERY,
+                              .job_id = jobs[0].id,
+                              .step = SKIFF_JOBS_CONVERTING,
+                              .retry_in_ms = 30000};
+    app_queue_event(app, &event);
+    frame(0);
+    print_view();
+    TEST_PRINTF("RomM answered 202: when Skiff asks again, where the speed goes");
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_TRUE(shows("Asking RomM again in 30 s"));
+    TEST_ASSERT_FALSE(shows("RomM is converting it; asking again in 30 s"));
+    TEST_ASSERT_TRUE(view()->has_progress);
+    TEST_ASSERT_EQUAL_UINT(0, view()->percent);
+    TEST_ASSERT_EQUAL_size_t(2, view()->line_count);
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_STORED;
+    app->dirty = 1;
+    frame(0);
+    TEST_PRINTF("without the line above, the wait says what RomM is doing itself");
+    TEST_ASSERT_TRUE(shows("RomM is converting it; asking again in 30 s"));
+    TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
+    skiff_jobs_event stopped = {
+        .kind = SKIFF_JOBS_EVENT_STATE, .job_id = jobs[0].id, .state = SKIFF_JOB_CANCELLED};
+    app_queue_event(app, &stopped);
+    app->queue.jobs[0].state = SKIFF_JOB_ACTIVE;
+    app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_CSO;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("cancelled while RomM converted, then retried: the old wait is gone");
+    TEST_ASSERT_FALSE(app->queue.has_recovery);
+    TEST_ASSERT_FALSE(shows("Asking RomM again in 30 s"));
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
+    event = (skiff_jobs_event){.kind = SKIFF_JOBS_EVENT_PROGRESS,
+                               .job_id = jobs[0].id,
+                               .done = 0,
+                               .total = (uint64_t)4 * 1024 * 1024};
+    app_queue_event(app, &event);
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("the converted file's first bytes: its byte counts replace the conversion lines");
+    TEST_ASSERT_FALSE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_FALSE(shows("Asking RomM again in 30 s"));
+    TEST_ASSERT_TRUE(shows("0 B of 4.0 MB (0%)"));
+}
+
 static void test_the_downloads_list_stays_put_as_the_details_come_and_go(void) {
     open_paired_library(2);
     for (unsigned id = 1; id <= 2; id++) {
@@ -7633,6 +7706,7 @@ int main(void) {
     RUN_TEST(test_a_full_queue_shows_its_hint);
     RUN_TEST(test_a_full_installed_list_shows_its_hint);
     RUN_TEST(test_the_downloads_screen_follows_the_worker);
+    RUN_TEST(test_the_downloads_screen_shows_romm_converting_before_any_bytes);
     RUN_TEST(test_the_downloads_list_stays_put_as_the_details_come_and_go);
     RUN_TEST(test_every_error_fits_under_the_downloads_list);
     RUN_TEST(test_cancel_retry_and_clear_from_the_downloads_screen);

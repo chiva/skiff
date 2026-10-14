@@ -978,18 +978,26 @@ _Static_assert(SKIFF_APP_BLOCK_GAP + APP_DETAILS_NAME_LINES * SKIFF_APP_HEADING_
                    SKIFF_APP_BODY_HEIGHT,
                "the name, the file name, the facts, the state and the free space fit the body");
 
-/* "Downloads as CSO: RomM converts it first" for a game RomM converts; 0 for one it does not. */
-static int conversion_line(const skiff_app *app, char *out) {
-    const char *name = skiff_romm_format_name(app_details_format(app));
+/* A format as players read it ("CSO"); 0 for the stored file, which is no conversion. */
+static int format_label(skiff_romm_format format, char *out, size_t size) {
+    const char *name = skiff_romm_format_name(format);
     if (name == NULL) {
         return 0;
     }
-    char upper[8];
     size_t i = 0;
-    for (; name[i] != '\0' && i + 1 < sizeof upper; i++) {
-        upper[i] = (char)(name[i] >= 'a' && name[i] <= 'z' ? name[i] - 'a' + 'A' : name[i]);
+    for (; name[i] != '\0' && i + 1 < size; i++) {
+        out[i] = (char)(name[i] >= 'a' && name[i] <= 'z' ? name[i] - 'a' + 'A' : name[i]);
     }
-    upper[i] = '\0';
+    out[i] = '\0';
+    return 1;
+}
+
+/* "Downloads as CSO: RomM converts it first" for a game RomM converts; 0 for one it does not. */
+static int conversion_line(const skiff_app *app, char *out) {
+    char upper[8];
+    if (!format_label(app_details_format(app), upper, sizeof upper)) {
+        return 0;
+    }
     const char *args[] = {upper};
     app_format(app, SKIFF_TEXT_DETAILS_CONVERTED, args, 1, out);
     return 1;
@@ -1095,7 +1103,9 @@ static void progress_lines(skiff_app *app) {
     }
 }
 
-static void recovery_line(skiff_app *app) {
+/* converting_shown: a line above already says RomM is converting the file, so its wait only says
+ * when Skiff asks again. */
+static void recovery_line(skiff_app *app, int converting_shown) {
     const skiff_jobs_event *recovery = &app->queue.recovery;
     switch (recovery->step) {
     case SKIFF_JOBS_WAITING_FOR_WIFI:
@@ -1113,10 +1123,11 @@ static void recovery_line(skiff_app *app) {
             in[0] = '\0';
         }
         const char *args[] = {in};
-        add_formatted(app,
-                      recovery->step == SKIFF_JOBS_CONVERTING ? SKIFF_TEXT_QUEUE_CONVERTING
-                                                              : SKIFF_TEXT_QUEUE_RETRYING,
-                      args, 1);
+        skiff_text_id text = SKIFF_TEXT_QUEUE_RETRYING;
+        if (recovery->step == SKIFF_JOBS_CONVERTING) {
+            text = converting_shown ? SKIFF_TEXT_QUEUE_ASKING_AGAIN : SKIFF_TEXT_QUEUE_CONVERTING;
+        }
+        add_formatted(app, text, args, 1);
         break;
     }
     }
@@ -1138,10 +1149,24 @@ static void queue_view(skiff_app *app) {
     app_format(app, SKIFF_TEXT_QUEUE_COUNT, count_args, 1, text);
     set_status(app, text);
     const skiff_job *job = &queue->jobs[app->queue_list.selected];
-    if (job->state == SKIFF_JOB_ACTIVE && job->id == queue->progress_job) {
-        progress_lines(app);
+    if (job->state == SKIFF_JOB_ACTIVE) {
+        int converting_shown = 0;
+        if (job->id == queue->progress_job) {
+            progress_lines(app);
+        } else {
+            /* No bytes yet: an empty bar, under RomM converting the file in place of the byte
+             * counts (the converted file's size comes with its first bytes). */
+            char upper[8];
+            if (format_label(job->format, upper, sizeof upper)) {
+                const char *args[] = {upper};
+                add_formatted(app, SKIFF_TEXT_QUEUE_CONVERTING_TO, args, 1);
+                converting_shown = 1;
+            }
+            view->has_progress = 1;
+            view->percent = 0;
+        }
         if (queue->has_recovery && queue->recovery.job_id == job->id) {
-            recovery_line(app);
+            recovery_line(app, converting_shown);
         }
     } else if (job->state == SKIFF_JOB_FAILED) {
         add_error(app, job->error);

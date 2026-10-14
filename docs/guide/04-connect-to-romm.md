@@ -137,8 +137,8 @@ Then:
 - A CHD game's details say **Downloads as CSO: RomM converts it first**. Skiff asks for a CSO, the
   smallest download over the PSP's Wi-Fi, or a ZSO or ISO when RomM offers only those. Where RomM
   does not convert downloads, the details say so instead, and the game cannot be downloaded.
-- **Downloads** shows **RomM is converting it; asking again in 30 s** while RomM converts the game:
-  a whole UMD takes RomM a few minutes, during which the PSP stays awake. You can cancel it as any
+- **Downloads** shows **RomM is converting it to CSO** over an empty bar while RomM converts the
+  game, and when Skiff asks RomM again (every 30 s or so): a whole UMD takes RomM a few minutes, during which the PSP stays awake. You can cancel it as any
   download. RomM keeps the converted copy for a while (a day by default), so downloading it again
   soon starts at once.
 - The game goes to `ISO/` as a `.cso` with the CHD's name, and shows as installed; when RomM gets a

@@ -68,9 +68,14 @@ void app_queue_event(skiff_app *app, const skiff_jobs_event *event) {
     const uint64_t now = (uint64_t)app_now(app);
     switch (event->kind) {
     case SKIFF_JOBS_EVENT_STATE:
-        if (event->job_id == queue->progress_job && event->state != SKIFF_JOB_ACTIVE) {
-            queue->progress_job = 0;
-            queue->has_recovery = 0;
+        /* A job that stops leaves its progress and its recovery behind, even one without bytes. */
+        if (event->state != SKIFF_JOB_ACTIVE) {
+            if (event->job_id == queue->progress_job) {
+                queue->progress_job = 0;
+            }
+            if (queue->has_recovery && queue->recovery.job_id == event->job_id) {
+                queue->has_recovery = 0;
+            }
         }
         app_queue_refresh(app);
         app_library_refresh_markers(app);

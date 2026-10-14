@@ -2398,7 +2398,19 @@ static void test_the_downloads_screen_shows_romm_converting_before_any_bytes(voi
     TEST_PRINTF("without the line above, the wait says what RomM is doing itself");
     TEST_ASSERT_TRUE(shows("RomM is converting it; asking again in 30 s"));
     TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
+    skiff_jobs_event stopped = {
+        .kind = SKIFF_JOBS_EVENT_STATE, .job_id = jobs[0].id, .state = SKIFF_JOB_CANCELLED};
+    app_queue_event(app, &stopped);
+    app->queue.jobs[0].state = SKIFF_JOB_ACTIVE;
     app->queue.jobs[0].format = SKIFF_ROMM_FORMAT_CSO;
+    app->dirty = 1;
+    frame(0);
+    print_view();
+    TEST_PRINTF("cancelled while RomM converted, then retried: the old wait is gone");
+    TEST_ASSERT_FALSE(app->queue.has_recovery);
+    TEST_ASSERT_FALSE(shows("Asking RomM again in 30 s"));
+    TEST_ASSERT_TRUE(shows("RomM is converting it to CSO"));
+    TEST_ASSERT_EQUAL_size_t(1, view()->line_count);
     event = (skiff_jobs_event){.kind = SKIFF_JOBS_EVENT_PROGRESS,
                                .job_id = jobs[0].id,
                                .done = 0,

@@ -981,7 +981,10 @@ deflate is the obvious choice for time and simplicity.
   Form 1 sector the user data starts at byte 24; the root directory record is at byte 156 of the
   descriptor. Find `SYSTEM.CNF;1` in the root directory and read it.
 - Parse the `BOOT` line, for example `BOOT=cdrom:\SLUS_999.99;1`. Spacing and case vary between
-  discs; take the file name and expect four letters, three digits, a dot and two digits.
+  discs; take the file name and expect four letters, three digits, a dot and two digits. Some
+  discs put no separator after the device: a USA first-party disc boots `cdrom:SCUS_943.01;1`
+  (measured on a dump that matches its [Redump entry](http://redump.org/disc/2772/) on every
+  track), so split on `:` as well as `\` and `/`.
 - Write it as `SLUS99999` in `PARAM.SFO` and as `_SLUS_99999` in PSISOIMG and PSTITLEIMG.
 - A disc without `SYSTEM.CNF` boots `PSX.EXE` and has no ID; what fallback ID POPS accepts is an
   [open question](#open-questions).

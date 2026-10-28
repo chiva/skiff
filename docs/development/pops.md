@@ -1009,9 +1009,10 @@ is to keep the audio tracks as raw sectors in the image:
 - ARK's PopCorn re-enables raw CD audio, which later firmware had turned off; with raw audio,
   playback continues into the next track, which ATRAC3 does not do (documented).
 
-Raw audio tracks play on hardware under ARK (XA). Without ARK's patch, POPS after 4.01 refuses raw
-CD audio in EBOOTs it did not sign (documented). Write the lead-out at sectors + 150, or the end of
-the disc's last audio track is cut off (XB1, XB2).
+Raw audio tracks play on hardware under ARK (XA). Without ARK's patch, POPS after 4.01 plays
+silence in place of raw CD audio in homemade EBOOTs; Sony's own releases, which store it in their
+own format, are unaffected (documented). Write the lead-out at sectors + 150, or the end of the
+disc's last audio track is cut off (XB1, XB2).
 
 ### Size and limits
 
@@ -1183,7 +1184,7 @@ numbers come from the same console; the general ones are in
 | Models ARK supports | ARK-4 [README](https://github.com/PSP-Archive/ARK-4/blob/7c03c3735503dc3fad999f4687b890fefef6467d/README.md) | 2025 |
 | Adrenaline's equivalent patches | Adrenaline, [`cef/popcorn/main.c`](https://github.com/TheOfficialFloW/Adrenaline/blob/7d382b7837d9d211d830017ba7aee982fa49a8c6/cef/popcorn/main.c#L36-L43) | — |
 | Raw CD audio, index marker 0 | pop-fe issue 59 (tested on PSP by its maintainer) | 2023-10 |
-| Raw CD audio refused for unsigned EBOOTs after POPS 4.01 | cdda_enabler, [README](https://github.com/ticky/cdda_enabler/blob/297cf3840703e1e3ea28f09bbddb7792a9d22ffc/README.md) | 2019 |
+| Raw CD audio silenced in homemade EBOOTs after POPS 4.01 | cdda_enabler, [`readme.txt`](https://github.com/ticky/cdda_enabler/blob/297cf3840703e1e3ea28f09bbddb7792a9d22ffc/readme.txt) | 2019 |
 | Multi-disc "Main Game ID" names the save folder | PSX2PSP compatibility list, [help text](https://docs.google.com/spreadsheets/d/13TRadnKyoOjzpxzMeVrO8adzbRNWccr5/edit) | — |
 | DATA.PSP's role and interface | Dark_AleX's reimplementation, [`datapsp/main.c`](https://github.com/Yoti/psp-packer/blob/d520b59ffcbc1d0f255cb5f1016a5e099a0af4e2/popstuff_oe-m33/popstation_303c/src/datapsp/main.c), [`Readme.txt`](https://github.com/Yoti/psp-packer/blob/d520b59ffcbc1d0f255cb5f1016a5e099a0af4e2/popstuff_oe-m33/popstation_303c/Readme.txt) | 2007 |
 | NID names | pspdev psplibdoc, [`popsman.csv`](https://github.com/pspdev/psplibdoc/blob/5e15a3cff6c3642f3217b93aeb2f6b759cee1b02/PSPLibDoc/kd/popsman.csv) | — |

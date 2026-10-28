@@ -191,7 +191,7 @@ place later.
 |---|---|---|---|---|---|
 | BOOTABLE | u32 | 4 | 0x100 | 1 | |
 | CATEGORY | string | 4 | 0x104 | `ME` | marks a PS1 game |
-| DISC_ID | string | 16 | 0x108 | `SLUS99999` | no `_`, `-` or `.`; does **not** name the save folder (PSISOIMG 0x400 does, G4) |
+| DISC_ID | string | 16 | 0x108 | `SLUS99999` | no `_`, `-` or `.`; does **not** name the save folder (PSISOIMG 0x400 does for one disc, G4; PSTITLEIMG 0x264 for several, X3) |
 | DISC_VERSION | string | 8 | 0x118 | `1.00` | |
 | LICENSE | string | 512 | 0x120 | `Skiff` | other tools copy Sony's copyright line; neutral text works (measured) |
 | PARENTAL_LEVEL | u32 | 4 | 0x320 | 3 | |
@@ -258,7 +258,7 @@ flowchart TB
 |---|---|---|---|
 | 0x000 | 12 | `PSISOIMG0000` | |
 | 0x00C | 4 | offset of `STARTDAT` = end of the last stored block, rounded up to 16 | measured in the reference file; ours the same |
-| 0x400 | 32 | disc ID as `_SLUS_99999` | ARK reads it here; POPS names the save folder after it (G4, G5) |
+| 0x400 | 32 | disc ID as `_SLUS_99999` | ARK reads it here; in a one-disc file POPS names the save folder after it (G4, G5) |
 | 0x420 | up to 0x3E0 | per-game POPS configuration | the reference tool writes 217 non-zero default bytes; all zero works (measured) |
 | 0x800 | up to 0x3FC | table of contents, 10 bytes per entry | see [TOC](#table-of-contents) |
 | 0xBFC | 4 | `0x00100000`, where the disc data starts | always this value |
@@ -386,7 +386,7 @@ complete PSISOIMG per disc, each aligned to 0x8000. Offsets below are relative t
 | 0x010 | 4 | offset of STARTDAT, after the last disc | measured (M1K) |
 | 0x200 | 5 × 4 | offsets of each disc's PSISOIMG, zero after the last | POPS takes the number of discs from it (analysed) |
 | 0x214 | 0x30 | opaque bytes in the reference file | zero works (Z1, Z4, M1K) |
-| 0x264 | 32 | disc ID of disc 1, `_SLUS_99999` | |
+| 0x264 | 32 | disc ID of disc 1, `_SLUS_99999` | names the save folder of every disc in the file (X3, measured); POPS reads the game ID here (analysed) |
 | 0x284 | 4 | the 0x1220 counterpart: STARTDAT offset + 0x2D31 in the reference | the end of STARTDAT works (M1K) |
 | 0x28C | 0x80 | **the multi-disc table**: bytes 0x00–0x3F are read, 0x40–0x7F never | **required** for two discs; see [The multi-disc table](#the-multi-disc-table) |
 | 0x30C | 128 | title | |
@@ -604,8 +604,8 @@ blocks that do not shrink, and the table for two discs. Same console, 2026-10-27
 |---|---|---|---|
 | X1 | F1, stored deflate | sectors + 1 | **runs**; the boot image shows |
 | X2 | F1, deflate | sectors + 1 | **runs** |
-| X3 | F1D1 + F1D2, PSTITLEIMG with the table | sectors + 1 | **runs**; "Switch Discs" works, with the warning above |
-| XG1 | a real two-disc game, NTSC, converted from CHD | sectors + 1, then + 150 | **plays**; a save loads after a restart |
+| X3 | F1D1 + F1D2, PSTITLEIMG with the table | sectors + 1 | **runs**; "Switch Discs" works, with the warning above; disc 2 keeps disc 1's save folder |
+| XG1 | a real two-disc game, NTSC, converted from CHD | sectors + 1, then + 150 | **plays**; a save loads after a restart; after a switch, disc 2 lists the save made on disc 1 |
 | XG2 | the same game's PAL release, from `.cue`/`.bin` | sectors + 1, then + 150 | **plays** |
 | XA | a real game with one data track and eight CD audio tracks | sectors + 1, then + 150 | **plays, with music** (raw audio, under ARK) |
 | XB1 | XA's data track, its eight audio tracks replaced by 12-second beep patterns that end on the disc's last sector | sectors + 1 | the last track loses its last 8 of 20 beeps (149 frames) |
@@ -680,8 +680,16 @@ therefore fixes where the game's saves live.
 This is what makes one EBOOT per disc usable: write disc 1's ID at PSISOIMG+0x400 **and** in the
 SFO of every disc's EBOOT, and all of them share one folder, so one memory card. S4 created no new
 folder, and G5, the real game's disc 2 built this way, found the save data written on disc 1. The
-disc itself is unchanged: its `SYSTEM.CNF` still names disc 2. Which folders a two-disc file
-creates, before and after a switch, was not checked.
+disc itself is unchanged: its `SYSTEM.CNF` still names disc 2.
+
+**A multi-disc file keeps one folder, named after PSTITLEIMG+0x264** (disc 1's ID), whichever
+disc is running, even though each PSISOIMG carries its own disc's ID. In X3 (round 12) disc 2's
+PSISOIMG ID was also a single-disc fixture's: after switching to disc 2, POPS kept writing to
+disc 1's folder and left that one untouched, its title still the fixture's (measured); in XG1,
+a real game, disc 2 listed the save made on disc 1 after a switch (measured). POPS's
+disc-init code reads the game ID from that field (analysed), and a converter's help text says
+the multi-disc "Main Game ID" names the save folder (documented). Saves made on disc 2 are
+therefore on the same memory card when the file next boots disc 1.
 
 ## The multi-disc table
 
@@ -739,7 +747,7 @@ Sony-derived data**, and invented tables freeze, as ten of them did.
 
 | Option | Disc switching | Sony-derived data in the converter | Saves |
 |---|---|---|---|
-| One EBOOT, PSTITLEIMG, with the table | from the HOME menu, inside the game (M1K, GK) | yes: the 64-byte table | which folders it creates was not checked |
+| One EBOOT, PSTITLEIMG, with the table | from the HOME menu, inside the game (M1K, GK) | yes: the 64-byte table | one save folder, named after PSTITLEIMG+0x264 (X3) |
 | One EBOOT, PSTITLEIMG, without the table | none | none | does not boot |
 | One EBOOT per disc, disc 1's ID at PSISOIMG+0x400 and in the SFO | only through a save: save, quit to the XMB, start the other disc's EBOOT and load; games with no save point at the swap cannot continue | none | one shared folder and memory card (S4, G5) |
 
@@ -1038,8 +1046,9 @@ A PSP-1000 has 32 MB of RAM, of which about 24 MB is available to an application
       or one EBOOT per disc. A PSTITLEIMG with two or more discs and no valid table never boots.
 - [ ] In a PSTITLEIMG, give each disc's 0x00C the end of its own data and write one STARTDAT,
       after the last disc.
-- [ ] Remember that PSISOIMG+0x400 names the save folder; for one EBOOT per disc, write disc 1's
-      ID there and in the SFO of every disc's EBOOT.
+- [ ] Remember what names the save folder: PSISOIMG+0x400 in a one-disc file, PSTITLEIMG+0x264 in
+      a multi-disc one. For one EBOOT per disc, write disc 1's ID at PSISOIMG+0x400 and in the SFO
+      of every disc's EBOOT; in a PSTITLEIMG, disc 1's ID at +0x264 already covers every disc.
 - [ ] Write the lead-out at sectors + 150 frames, not the reference tool's sectors + 1, which cuts
       off the end of the last audio track.
 - [ ] Read the result back with an independent reader and compare it with the source.
@@ -1111,7 +1120,6 @@ reader and pcsx_rearmed, is a different matter: nothing of them ships.
 | The meaning of `0x07FF` at 0x1228 and of the configuration block at 0x420 | fields written blind | variants with them zeroed |
 | Table block 1 (bytes 16–31) | analysis predicts it decodes the disc-switch dialog strings; B1 and R1 showed nothing, but no dialog was opened in that run | B1 or R1 again, opening the switch dialog from the HOME menu |
 | What official titles hold in table bytes 0x40–0x7F | POPS never reads them, yet tools copy all 128 bytes; if official titles differ there, the copied bytes come from one title | compare the field across several official multi-disc titles |
-| Which save folders a two-disc file creates, before and after a switch | each PSISOIMG's ID names a save folder (G4); if a switch moves the game to disc 2's folder, a save made on disc 2 is missing when the file next boots disc 1 | in a two-disc file whose discs carry their own IDs, switch to disc 2 and save; check `PSP/SAVEDATA` for a folder named after disc 2's ID, then restart and look for that save |
 
 ## Glossary
 
@@ -1173,6 +1181,7 @@ numbers come from the same console; the general ones are in
 | Adrenaline's equivalent patches | Adrenaline, [`cef/popcorn/main.c`](https://github.com/TheOfficialFloW/Adrenaline/blob/7d382b7837d9d211d830017ba7aee982fa49a8c6/cef/popcorn/main.c#L36-L43) | — |
 | Raw CD audio, index marker 0 | pop-fe issue 59 (tested on PSP by its maintainer) | 2023-10 |
 | Raw CD audio refused for unsigned EBOOTs after POPS 4.01 | cdda_enabler, [README](https://github.com/ticky/cdda_enabler/blob/297cf3840703e1e3ea28f09bbddb7792a9d22ffc/README.md) | 2019 |
+| Multi-disc "Main Game ID" names the save folder | PSX2PSP compatibility list, [help text](https://docs.google.com/spreadsheets/d/13TRadnKyoOjzpxzMeVrO8adzbRNWccr5/edit) | — |
 | DATA.PSP's role and interface | Dark_AleX's reimplementation, [`datapsp/main.c`](https://github.com/Yoti/psp-packer/blob/d520b59ffcbc1d0f255cb5f1016a5e099a0af4e2/popstuff_oe-m33/popstation_303c/src/datapsp/main.c), [`Readme.txt`](https://github.com/Yoti/psp-packer/blob/d520b59ffcbc1d0f255cb5f1016a5e099a0af4e2/popstuff_oe-m33/popstation_303c/Readme.txt) | 2007 |
 | NID names | pspdev psplibdoc, [`popsman.csv`](https://github.com/pspdev/psplibdoc/blob/5e15a3cff6c3642f3217b93aeb2f6b759cee1b02/PSPLibDoc/kd/popsman.csv) | — |
 | POPS mode loads DATA.PSP | uOFW, [`init.c` L552–L555](https://github.com/uofw/uofw/blob/28306bb5bd4fcdcc0c1d469bf1f3bdb885dde3e9/src/kd/init/init.c#L552-L555); ARK menu, [`executePOPS`](https://github.com/PSP-Archive/ARK-4/blob/7c03c3735503dc3fad999f4687b890fefef6467d/extras/menus/arkMenu/src/eboot.cpp#L294-L305) | — |

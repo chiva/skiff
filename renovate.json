@@ -1,22 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:best-practices"
+    "local>chiva/renovate-config"
   ],
   "enabledManagers": [
     "github-actions",
     "dockerfile",
-    "docker-compose",
     "pre-commit",
     "custom.regex"
   ],
-  "pre-commit": {
-    "enabled": true
-  },
-  "schedule": [
-    "before 6am on monday"
-  ],
-  "minimumReleaseAge": "3 days",
   "customManagers": [
     {
       "description": "Mbed TLS, built by docker/toolchain/build-tls.sh for the toolchain and host images. The PR fails the sha256sum check until a maintainer verifies the new archive and updates MBEDTLS_SHA256 (docs/development/toolchain.md).",
@@ -82,23 +74,15 @@
   ],
   "packageRules": [
     {
-      "description": "Group all non-major bumps into one PR.",
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "digest"
-      ],
-      "groupName": "non-major dependencies"
-    },
-    {
-      "description": "Toolchain bumps get their own PR: a new GCC or newlib can change codegen on real hardware, so the hardware test tier (docs/development/testing.md) must be run before merging.",
+      "description": "Toolchain bumps get their own PR and never automerge: a new GCC or newlib can change codegen on real hardware, so the hardware test tier (docs/development/testing.md) must run before merging.",
       "matchPackageNames": [
         "pspdev/pspdev"
       ],
-      "groupName": "pspdev toolchain"
+      "groupName": "pspdev toolchain",
+      "automerge": false
     },
     {
-      "description": "TLS library bumps get their own PR, stay on the Mbed TLS 4.1 LTS line (supported until March 2029), and need a manual checksum update after verifying the archive.",
+      "description": "TLS library bumps get their own PR and need a manual checksum update after verifying the archive, so CI stays red until a maintainer does it.",
       "matchPackageNames": [
         "Mbed-TLS/mbedtls",
         "curlimages/curl"
@@ -106,17 +90,11 @@
       "groupName": "TLS libraries"
     },
     {
+      "description": "Stay on the Mbed TLS 4.1 LTS line (supported until March 2029).",
       "matchPackageNames": [
         "Mbed-TLS/mbedtls"
       ],
       "allowedVersions": "<4.2.0"
-    },
-    {
-      "description": "RomM bumps get their own PR: the integration server (tests/integration/) pins the RomM version Skiff is tested against, and its API can change between releases.",
-      "matchPackageNames": [
-        "rommapp/romm"
-      ],
-      "groupName": "test RomM"
     },
     {
       "description": "PPSSPP bumps get their own PR: a rebuilt emulator can change self-test behaviour independently of our code, and the 15-minute image rebuild should be attributable.",

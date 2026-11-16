@@ -15,8 +15,7 @@ jobs:
   release-please:
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     outputs:
       # "true" only on the push that actually publishes a release; gates the package job.
       release_created: ${{ steps.release.outputs.release_created }}
@@ -24,17 +23,24 @@ jobs:
     steps:
       # Config and manifest files rather than inline inputs, so version bumps of extra files
       # (CMakeLists.txt) are declared in one reviewed place: release-please-config.json.
-      # RELEASE_PLEASE_TOKEN is an optional PAT: release PRs opened with the default GITHUB_TOKEN do
-      # not trigger CI, so without it the release PR must be re-run manually before merging.
+      # A GitHub App token, not GITHUB_TOKEN: GitHub starts no workflows for events made with
+      # GITHUB_TOKEN, so the release PR it opened never got its required checks.
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Builds the release zip in the SAME run: events from the default GITHUB_TOKEN cannot trigger a
-  # separate release-triggered workflow, but this token can upload assets to the release it created.
+  # Builds the release zip in the SAME run, gated on release_created, so the asset is attached by
+  # the run that created the release.
   # Building and publishing are separate jobs so the toolchain image, which gets a writable mount of
   # the checkout, never shares a job with the release-write and signing credentials.
   package:
